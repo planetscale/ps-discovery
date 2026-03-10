@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+discovery_output/
+*.log
+.DS_Store
+*.tar.gz

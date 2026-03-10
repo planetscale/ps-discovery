@@ -1,0 +1,21 @@
+# Database Discovery Only Configuration
+# For discovering PostgreSQL database environments
+
+database:
+  host: localhost
+  port: 5432
+  database: your_database_name
+  username: your_username
+  password: your_password
+  ssl_mode: prefer
+  connection_timeout: 30
+
+# Discovery modules to run
+modules:
+  - database
+
+output:
+  output_dir: ./discovery_output
+  mask_sensitive_data: true
+
+log_level: INFO

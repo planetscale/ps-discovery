@@ -1,0 +1,64 @@
+# Cloud Discovery Only Configuration
+# For discovering cloud database infrastructure
+
+providers:
+  aws:
+    enabled: true
+    regions:
+      - us-west-2
+      - us-east-1
+    credentials:
+      # Option 1: Use AWS profile
+      profile: migration-discovery
+
+      # Option 2: Direct credentials (not recommended for production)
+      # access_key_id: your_access_key
+      # secret_access_key: your_secret_key
+
+      # Option 3: Cross-account role assumption
+      # role_arn: arn:aws:iam::123456789012:role/PlanetScaleMigrationRole
+      # external_id: unique-external-id
+
+    resources:
+      # Specific resources to analyze (optional)
+      rds_instances:
+        - db-prod-1
+        - db-staging-1
+      aurora_clusters:
+        - aurora-prod-cluster
+
+    # Set to true to discover all resources
+    discover_all: true
+
+  gcp:
+    enabled: true
+    project_id: your-project-123
+    regions:
+      - us-central1
+      - us-west1
+    credentials:
+      # Option 1: Service account key file
+      service_account_key: path/to/service-account-key.json
+
+      # Option 2: Use Application Default Credentials
+      # application_default: true
+
+    resources:
+      cloud_sql_instances:
+        - prod-db-instance
+      alloydb_clusters:
+        - prod-alloydb-cluster
+
+    discover_all: true
+
+# Discovery modules to run
+modules:
+  - cloud
+
+output:
+  output_dir: ./discovery_output
+  include_costs: true
+  mask_sensitive_data: true
+  generate_diagrams: false
+
+log_level: INFO

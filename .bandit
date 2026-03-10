@@ -1,0 +1,23 @@
+# Bandit configuration for PlanetScale Discovery Tools
+# https://bandit.readthedocs.io/en/latest/config.html
+
+# Exclude test files and vendored code
+exclude_dirs:
+  - /tests/
+  - /venv/
+  - /.venv/
+  - /env/
+
+# Skip specific checks that produce false positives
+skips:
+  # B608: Hardcoded SQL - We're querying PostgreSQL system catalogs, not user data
+  # These queries are safe and necessary for database introspection
+  - B608
+
+# Set confidence level (LOW, MEDIUM, HIGH)
+# Only report issues with MEDIUM or HIGH confidence
+confidence: MEDIUM
+
+# Set severity level (LOW, MEDIUM, HIGH)
+# Only report issues with MEDIUM or HIGH severity
+level: MEDIUM

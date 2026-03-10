@@ -1,0 +1,15 @@
+# Development and test dependencies
+# Source file for pip-compile. Output: ../requirements-dev-lock.txt
+#
+# To regenerate:
+#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes
+#
+-c ../requirements-lock.txt
+pytest>=9.0.2
+pytest-cov>=7.0.0
+pytest-mock>=3.15.1
+moto>=5.1.21
+responses>=0.25.8
+black>=26.1.0
+flake8>=7.3.0
+mypy>=1.19.1

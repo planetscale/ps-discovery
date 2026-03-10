@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# PlanetScale Discovery Tools - Wrapper Script
+# This script runs the discovery tool using the virtual environment
+# without requiring manual activation.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ ! -d "$SCRIPT_DIR/venv" ]; then
+    echo "Error: Virtual environment not found."
+    echo "Please run ./setup.sh first to set up the environment."
+    exit 1
+fi
+
+if [ ! -f "$SCRIPT_DIR/venv/bin/python3" ]; then
+    echo "Error: Python not found in virtual environment."
+    echo "The virtual environment may be corrupted. Please run:"
+    echo "  rm -rf venv && ./setup.sh"
+    exit 1
+fi
+
+exec "$SCRIPT_DIR/venv/bin/python3" -m planetscale_discovery "$@"

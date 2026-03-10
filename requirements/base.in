@@ -1,0 +1,10 @@
+# Core runtime dependencies
+# Source file for pip-compile. Output: ../requirements-lock.txt
+#
+# To regenerate:
+#   pip-compile requirements/base.in -o requirements-lock.txt --generate-hashes
+#
+psycopg2-binary>=2.9.11
+pyyaml>=6.0.3
+boto3>=1.42.52
+botocore>=1.42.52
