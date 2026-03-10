@@ -1,0 +1,19 @@
+# Include documentation
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+
+# Include all Python modules
+include *.py
+
+# Include configuration files
+include *.yml
+include *.yaml
+include *.json
+
+# Exclude test results and output directories
+recursive-exclude *_results *
+recursive-exclude *_output *
+exclude final_test_results/
+exclude final_momaarts_results/

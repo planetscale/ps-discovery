@@ -1,0 +1,31 @@
+# PlanetScale Discovery Tools - Dependencies
+#
+# This file lists unpinned (>=) dependencies for quick installs.
+# For reproducible builds, use the pinned lock files in requirements/:
+#
+#   pip install -r requirements-lock.txt         # runtime deps
+#   pip install -r requirements-dev-lock.txt     # dev/test deps
+#
+# To regenerate lock files after updating versions:
+#   pip-compile requirements/base.in -o requirements-lock.txt --generate-hashes
+#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes
+
+# Core dependencies (required)
+psycopg2-binary>=2.9.11   # PostgreSQL database connectivity
+pyyaml>=6.0.3             # Configuration file parsing
+
+# AWS cloud discovery dependencies (required for AWS analysis)
+boto3>=1.42.52            # AWS SDK for Python
+botocore>=1.42.52         # Core AWS library
+
+# GCP cloud discovery dependencies (required for GCP analysis)
+google-cloud-resource-manager>=1.16.0
+google-cloud-compute>=1.43.0
+google-cloud-monitoring>=2.29.1
+google-cloud-alloydb>=0.7.0
+google-auth>=2.48.0
+google-api-python-client>=2.190.0
+
+# Supabase cloud discovery dependencies (optional - only if Supabase analysis needed)
+# Uncomment the following line if you plan to analyze Supabase managed PostgreSQL:
+# requests>=2.32.5

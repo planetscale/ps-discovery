@@ -1,0 +1,52 @@
+version: 2
+updates:
+  # Python dependencies (discovers requirements/*.txt lock files, setup.py, etc.)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # Group all patch-level bumps into a single PR
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # Group dev/test tooling updates
+      dev-tooling:
+        patterns:
+          - "pytest*"
+          - "black"
+          - "flake8"
+          - "mypy"
+          - "moto"
+          - "responses"
+          - "coverage"
+        update-types:
+          - "minor"
+    allow:
+      - dependency-type: "all"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"

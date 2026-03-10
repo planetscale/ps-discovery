@@ -1,0 +1,45 @@
+# Complete Discovery Configuration
+# For both database and cloud infrastructure discovery
+
+database:
+  host: localhost
+  port: 5432
+  database: your_database_name
+  username: your_username
+  password: your_password
+  ssl_mode: prefer
+  connection_timeout: 30
+
+providers:
+  aws:
+    enabled: true
+    regions:
+      - us-west-2
+      - us-east-1
+    credentials:
+      profile: migration-discovery
+    discover_all: true
+
+  gcp:
+    enabled: true
+    project_id: your-project-123
+    regions:
+      - us-central1
+      - us-west1
+    credentials:
+      service_account_key: path/to/service-account-key.json
+    discover_all: true
+
+# Discovery modules to run
+modules:
+  - database
+  - cloud
+
+output:
+  output_dir: ./discovery_output
+  include_costs: true
+  mask_sensitive_data: true
+  generate_diagrams: false
+
+log_level: INFO
+log_file: discovery.log

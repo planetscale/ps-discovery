@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v1.0.0
+
+permissions:
+  contents: write  # Required to create releases and upload assets
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.11"
+
+    - name: Extract version from tag
+      id: get_version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Building release for version: ${VERSION}"
+
+    - name: Verify VERSION file matches tag
+      run: |
+        FILE_VERSION=$(cat VERSION | tr -d '\n')
+        TAG_VERSION="${{ steps.get_version.outputs.version }}"
+        if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
+          echo "❌ Error: VERSION file ($FILE_VERSION) does not match tag ($TAG_VERSION)"
+          exit 1
+        fi
+        echo "✅ Version verified: $TAG_VERSION"
+
+    - name: Build release zip
+      run: |
+        chmod +x build_release.sh
+        ./build_release.sh ${{ steps.get_version.outputs.version }}
+
+    - name: Verify release artifacts
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        cd dist
+        ls -lh
+        sha256sum -c "ps-discovery-${VERSION}.zip.sha256"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: PlanetScale Discovery Tools v${{ steps.get_version.outputs.version }}
+        body_path: dist/ps-discovery-${{ steps.get_version.outputs.version }}/RELEASE_NOTES.txt
+        files: |
+          dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip
+          dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip.sha256
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

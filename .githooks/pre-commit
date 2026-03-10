@@ -1,0 +1,57 @@
+#!/bin/bash
+#
+# Pre-commit hook to run tests and linting before allowing commit
+# This prevents breaking the CI/CD pipeline
+#
+# To install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Check if we're in a virtualenv, if not try to activate one
+if [ -z "$VIRTUAL_ENV" ]; then
+    if [ -d ".venv" ]; then
+        echo "📦 Activating virtual environment..."
+        source .venv/bin/activate
+    elif [ -d "venv" ]; then
+        echo "📦 Activating virtual environment..."
+        source venv/bin/activate
+    else
+        echo "⚠️  Warning: No virtual environment found. Install dependencies first with:"
+        echo "   python3 -m venv .venv && source .venv/bin/activate && pip install -e ."
+        exit 1
+    fi
+fi
+
+# Run black formatting check
+echo "🎨 Checking code formatting with black..."
+if ! python -m black --check planetscale_discovery tests 2>/dev/null; then
+    echo "❌ Code formatting failed. Run: black planetscale_discovery tests"
+    exit 1
+fi
+
+# Run flake8 linting
+echo "🔎 Running flake8 linting..."
+if ! python -m flake8 planetscale_discovery tests --count --select=E9,F63,F7,F82 --show-source --statistics 2>/dev/null; then
+    echo "❌ Linting failed."
+    exit 1
+fi
+
+# Run mypy type checking
+echo "🔬 Running mypy type checking..."
+if ! python -m mypy planetscale_discovery 2>/dev/null; then
+    echo "❌ Type checking failed."
+    exit 1
+fi
+
+# Run unit tests
+echo "🧪 Running unit tests..."
+if ! python -m pytest tests/unit -x --tb=short -q 2>/dev/null; then
+    echo "❌ Unit tests failed."
+    exit 1
+fi
+
+echo "✅ All pre-commit checks passed!"
+exit 0
