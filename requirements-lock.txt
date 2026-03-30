@@ -1,10 +1,10 @@
-boto3==1.42.68 \
-    --hash=sha256:3f349f967ab38c23425626d130962bcb363e75f042734fe856ea8c5a00eef03c \
-    --hash=sha256:dbff353eb7dc93cbddd7926ed24793e0174c04adbe88860dfa639568442e4962
+boto3==1.42.78 \
+    --hash=sha256:480a34a077484a5ca60124dfd150ba3ea6517fc89963a679e45b30c6db614d26 \
+    --hash=sha256:cef2ebdb9be5c0e96822f8d3941ac4b816c90a5737a7ffb901d664c808964b63
     # via -r requirements/base.in
-botocore==1.42.68 \
-    --hash=sha256:3951c69e12ac871dda245f48dac5c7dd88ea1bfdd74a8879ec356cf2874b806a \
-    --hash=sha256:9df7da26374601f890e2f115bfa573d65bf15b25fe136bb3aac809f6145f52ab
+botocore==1.42.78 \
+    --hash=sha256:038ab63c7f898e8b5db58cb6a45e4da56c31dd984e7e995839a3540c735564ea \
+    --hash=sha256:61cbd49728e23f68cfd945406ab40044d49abed143362f7ffa4a4f4bd4311791
     # via
     #   -r requirements/base.in
     #   boto3
