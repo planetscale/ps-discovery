@@ -50,7 +50,7 @@ jobs:
         sha256sum -c "ps-discovery-${VERSION}.zip.sha256"
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         name: PlanetScale Discovery Tools v${{ steps.get_version.outputs.version }}
         body_path: dist/ps-discovery-${{ steps.get_version.outputs.version }}/RELEASE_NOTES.txt
