@@ -160,16 +160,57 @@ if ! $PIP_CMD install --upgrade pip 2>&1; then
     cleanup_on_error
 fi
 
-# Install core dependencies
+# Install core dependencies (needed regardless of engine selection)
 echo "Installing core dependencies..."
-if ! $PIP_CMD install "pyyaml>=6.0.3" "psycopg2-binary>=2.9.11" 2>&1; then
-    echo "❌ Error: Failed to install core dependencies (pyyaml, psycopg2-binary)"
-    echo "This may be due to:"
-    echo "  - Network connectivity issues"
-    echo "  - Package version not available"
-    echo "  - Compilation errors (for psycopg2-binary)"
+if ! $PIP_CMD install "pyyaml>=6.0.3" 2>&1; then
+    echo "❌ Error: Failed to install core dependencies (pyyaml)"
     cleanup_on_error
 fi
+
+INSTALLED_ENGINES=""
+
+# Database engine selection
+echo ""
+echo "📋 Database Engine Setup"
+echo "━━━━━━━━━━━━━━━━━━━━━━━"
+
+echo ""
+read -p "Do you need PostgreSQL database discovery? (Y/n): " install_postgres
+if [[ ! $install_postgres =~ ^[Nn]$ ]]; then
+    echo "Installing PostgreSQL dependencies..."
+    if ! $PIP_CMD install "psycopg2-binary>=2.9.11" 2>&1; then
+        echo "❌ Error: Failed to install PostgreSQL dependencies (psycopg2-binary)"
+        cleanup_on_error
+    fi
+    echo "✅ PostgreSQL dependencies installed"
+    INSTALLED_ENGINES="postgres"
+else
+    echo "⏭️  Skipping PostgreSQL dependencies"
+fi
+
+echo ""
+read -p "Do you need MySQL database discovery? (y/N): " install_mysql
+if [[ $install_mysql =~ ^[Yy]$ ]]; then
+    echo "Installing MySQL dependencies..."
+    if ! $PIP_CMD install "PyMySQL>=1.1.0" 2>&1; then
+        echo "❌ Error: Failed to install MySQL dependencies (PyMySQL)"
+        cleanup_on_error
+    fi
+    echo "✅ MySQL dependencies installed"
+    INSTALLED_ENGINES="$INSTALLED_ENGINES mysql"
+else
+    echo "⏭️  Skipping MySQL dependencies"
+fi
+
+if [ -z "$INSTALLED_ENGINES" ]; then
+    echo ""
+    echo "❌ Error: You must select at least one database engine (PostgreSQL or MySQL)"
+    cleanup_on_error
+fi
+
+echo ""
+echo "📋 Cloud Provider Setup"
+echo "━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Track which cloud providers were installed
 INSTALLED_PROVIDERS=""
@@ -318,15 +359,19 @@ fi
 # Generate customized configuration based on installed providers
 echo "📝 Generating customized configuration..."
 
-# Build the config-template command with providers if any were installed
-if [ -n "$INSTALLED_PROVIDERS" ]; then
-    # Convert space-separated list to comma-separated
-    PROVIDERS_CSV=$(echo "$INSTALLED_PROVIDERS" | tr ' ' ',' | sed 's/^,//')
-    config_output=$(./ps-discovery config-template --output sample-config.yaml --providers "$PROVIDERS_CSV" 2>&1)
-else
-    # No cloud providers, generate database-only config
-    config_output=$(./ps-discovery config-template --output sample-config.yaml 2>&1)
+# Build the config-template command with providers and engines
+ENGINES_CSV=$(echo "$INSTALLED_ENGINES" | tr ' ' ',' | sed 's/^,//')
+# Default to postgres if no engines selected
+if [ -z "$ENGINES_CSV" ]; then
+    ENGINES_CSV="postgres"
 fi
+
+CMD="./ps-discovery config-template --output sample-config.yaml --engines $ENGINES_CSV"
+if [ -n "$INSTALLED_PROVIDERS" ]; then
+    PROVIDERS_CSV=$(echo "$INSTALLED_PROVIDERS" | tr ' ' ',' | sed 's/^,//')
+    CMD="$CMD --providers $PROVIDERS_CSV"
+fi
+config_output=$($CMD 2>&1)
 
 if [ $? -eq 0 ]; then
     echo "✅ Sample configuration saved to: sample-config.yaml"
@@ -351,9 +396,18 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "1️⃣  Edit sample-config.yaml with your credentials:"
 echo ""
-echo "   Required (database section):"
-echo "     • host, port, database name"
-echo "     • username and password"
+if [[ $INSTALLED_ENGINES == *"postgres"* ]]; then
+    echo "   PostgreSQL (database section):"
+    echo "     • host, port, database name, username, and password"
+fi
+if [[ $INSTALLED_ENGINES == *"mysql"* ]]; then
+    if [[ $INSTALLED_ENGINES == *"postgres"* ]]; then
+        echo ""
+    fi
+    echo "   MySQL (mysql section):"
+    echo "     • host, port, username, and password"
+    echo "     • Leave database empty to discover all databases"
+fi
 echo ""
 
 if [ -n "$INSTALLED_PROVIDERS" ]; then
@@ -370,6 +424,9 @@ if [ -n "$INSTALLED_PROVIDERS" ]; then
     if [[ $INSTALLED_PROVIDERS == *"heroku"* ]]; then
         echo "     • Heroku: Set your API key or HEROKU_API_KEY env var"
     fi
+    if [[ $INSTALLED_PROVIDERS == *"neon"* ]]; then
+        echo "     • Neon: Set your API key or NEON_API_KEY env var"
+    fi
     echo ""
 fi
 
@@ -377,11 +434,23 @@ echo "2️⃣  Run discovery:"
 echo ""
 
 if [ -z "$INSTALLED_PROVIDERS" ]; then
-    echo "   # Database discovery only"
-    echo "   ./ps-discovery database --config sample-config.yaml"
+    CMD_VERB="database"
+    CMD_LABEL_SUFFIX="database discovery"
 else
-    echo "   # Database and cloud discovery"
-    echo "   ./ps-discovery both --config sample-config.yaml"
+    CMD_VERB="both"
+    CMD_LABEL_SUFFIX="database and cloud discovery"
+fi
+
+if [[ $INSTALLED_ENGINES == *"postgres"* ]]; then
+    echo "   # PostgreSQL $CMD_LABEL_SUFFIX"
+    echo "   ./ps-discovery $CMD_VERB --config sample-config.yaml"
+fi
+if [[ $INSTALLED_ENGINES == *"mysql"* ]]; then
+    if [[ $INSTALLED_ENGINES == *"postgres"* ]]; then
+        echo ""
+    fi
+    echo "   # MySQL $CMD_LABEL_SUFFIX"
+    echo "   ./ps-discovery $CMD_VERB --engine mysql --config sample-config.yaml"
 fi
 
 echo ""

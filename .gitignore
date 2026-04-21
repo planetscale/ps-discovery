@@ -66,4 +66,5 @@ htmlcov/
 
 # Logs
 *.log
-logs/
+logs/rds-test-config.yaml
+discovery_output/

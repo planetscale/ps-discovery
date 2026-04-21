@@ -26,14 +26,18 @@ def create_main_parser() -> argparse.ArgumentParser:
         ),
         epilog="""
 Examples:
-  # Database discovery only
+  # PostgreSQL database discovery (default engine)
   ps-discovery database --host localhost -d mydb -u postgres
+
+  # MySQL database discovery
+  ps-discovery database --engine mysql --host localhost -u root -W
 
   # Cloud discovery only
   ps-discovery cloud --config cloud-config.yaml
 
   # Both database and cloud discovery
   ps-discovery both --config full-config.yaml
+  ps-discovery both --engine mysql --host localhost -u root -W --providers aws
 
   # Generate configuration template
   ps-discovery config-template --output discovery-config.yaml
@@ -45,8 +49,16 @@ Examples:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Database discovery subcommand
-    db_parser = subparsers.add_parser("database", help="PostgreSQL database discovery")
+    db_parser = subparsers.add_parser(
+        "database", help="Database discovery (use --engine to select postgres or mysql)"
+    )
     add_common_args(db_parser)
+    db_parser.add_argument(
+        "--engine",
+        choices=["postgres", "mysql"],
+        default=None,
+        help="Database engine to discover (overrides engine from config; defaults to postgres if unset)",
+    )
     add_database_args(db_parser)
 
     # Cloud discovery subcommand
@@ -59,6 +71,12 @@ Examples:
         "both", help="Combined database and cloud discovery"
     )
     add_common_args(both_parser)
+    both_parser.add_argument(
+        "--engine",
+        choices=["postgres", "mysql"],
+        default=None,
+        help="Database engine to discover (overrides engine from config; defaults to postgres if unset)",
+    )
     add_database_args(both_parser)
     add_cloud_args(both_parser)
 
@@ -80,6 +98,11 @@ Examples:
         help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku). If not specified, only database and output sections are generated.",
         default=None,
     )
+    config_parser.add_argument(
+        "--engines",
+        help="Comma-separated list of database engines to include (postgres,mysql). Default: postgres.",
+        default=None,
+    )
 
     return parser
 
@@ -95,8 +118,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     common_group.add_argument(
         "--output-dir",
         "-o",
-        help="Output directory for reports",
-        default="./discovery_output",
+        help="Output directory for reports (overrides output.output_dir from config)",
+        default=None,
         type=str,
     )
 
@@ -118,18 +141,16 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_database_args(parser: argparse.ArgumentParser) -> None:
-    """Add database-specific arguments."""
+    """Add common database connection arguments (shared by postgres and mysql)."""
     db_group = parser.add_argument_group("Database Discovery Options")
 
-    db_group.add_argument("--host", help="PostgreSQL server host")
+    db_group.add_argument("--host", help="Database server host")
 
-    db_group.add_argument("--port", "-p", help="PostgreSQL server port", type=int)
+    db_group.add_argument("--port", "-p", help="Database server port", type=int)
 
-    db_group.add_argument(
-        "--database", "-d", help="PostgreSQL database name", required=False
-    )
+    db_group.add_argument("--database", "-d", help="Database name", required=False)
 
-    db_group.add_argument("--username", "-u", help="PostgreSQL username")
+    db_group.add_argument("--username", "-u", help="Database username")
 
     db_group.add_argument(
         "--password", "-W", action="store_true", help="Prompt for password"
@@ -137,11 +158,14 @@ def add_database_args(parser: argparse.ArgumentParser) -> None:
 
     db_group.add_argument(
         "--analyzers",
-        help=(
-            "Comma-separated list of database analyzers to run "
-            "(config,schema,performance,security,features)"
-        ),
-        default="config,schema,performance,security,features",
+        help="Comma-separated list of analyzers to run",
+        default=None,
+    )
+
+    db_group.add_argument(
+        "--ssl-mode",
+        help="SSL mode (MySQL only: disabled, preferred, required, verify-ca, verify-identity)",
+        default=None,
     )
 
 
@@ -195,6 +219,15 @@ VALID_DATABASE_ANALYZERS = [
     "data_size",
 ]
 
+VALID_MYSQL_ANALYZERS = [
+    "config",
+    "schema",
+    "performance",
+    "replication",
+    "security",
+    "features",
+]
+
 
 def run_database_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]:
     """Run database discovery."""
@@ -224,6 +257,29 @@ def run_database_discovery(config: Any, args: argparse.Namespace) -> Dict[str, A
     # Run database discovery
     db_tool = DatabaseDiscoveryTool(config)
     return db_tool.discover()
+
+
+def run_mysql_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]:
+    """Run MySQL discovery."""
+    from .database.mysql_discovery import MySQLDiscoveryTool
+
+    # Override analyzer modules from CLI --analyzers flag
+    if args.analyzers:
+        requested = args.analyzers.split(",")
+        invalid = [a for a in requested if a not in VALID_MYSQL_ANALYZERS]
+        if invalid:
+            valid_list = ", ".join(VALID_MYSQL_ANALYZERS)
+            print(
+                f"Error: Invalid MySQL analyzer(s): {', '.join(invalid)}\n"
+                f"Valid analyzers are: {valid_list}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        config.mysql_analyzers = requested
+
+    # Run MySQL discovery
+    mysql_tool = MySQLDiscoveryTool(config)
+    return mysql_tool.discover()
 
 
 def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]:
@@ -268,6 +324,157 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
     return cloud_tool.discover()
 
 
+def _db_summary_lines_postgres(analysis: Dict, conn_info: Dict) -> List[str]:
+    """Generate markdown lines for PostgreSQL database summary."""
+    lines = ["## Database", ""]
+
+    config_results = analysis.get("config", {})
+    if "version_info" in config_results:
+        version_info = config_results["version_info"]
+        major = version_info.get("major_version", "Unknown")
+        lines.append(f"- **PostgreSQL Version:** {major}")
+
+    if conn_info.get("current_database"):
+        lines.append(f"- **Database:** {conn_info['current_database']}")
+
+    schema_results = analysis.get("schema", {})
+    if "database_catalog" in schema_results:
+        db_count = len(schema_results["database_catalog"])
+        lines.append(f"- **Databases:** {db_count}")
+
+    if "table_analysis" in schema_results:
+        table_count = len(schema_results["table_analysis"])
+        total_size = sum(
+            t.get("total_size_bytes", 0) for t in schema_results["table_analysis"]
+        )
+        lines.append(f"- **Tables:** {table_count}")
+        if total_size > 0:
+            lines.append(f"- **Total Size:** {_format_bytes(total_size)}")
+
+    features_results = analysis.get("features", {})
+    if "extensions_analysis" in features_results:
+        extensions = features_results["extensions_analysis"].get(
+            "installed_extensions", []
+        )
+        if extensions:
+            ext_names = [e.get("extname", "") for e in extensions]
+            lines.append(
+                f"- **Extensions ({len(extensions)}):** {', '.join(ext_names)}"
+            )
+
+    security_results = analysis.get("security", {})
+    if "user_role_analysis" in security_results:
+        user_analysis = security_results["user_role_analysis"]
+        if "summary" in user_analysis:
+            summary = user_analysis["summary"]
+            user_count = summary.get("user_count", 0)
+            role_count = summary.get("role_count", 0)
+            lines.append(f"- **Users:** {user_count}, **Roles:** {role_count}")
+
+    perf_results = analysis.get("performance", {})
+    if "connection_analysis" in perf_results:
+        conn = perf_results["connection_analysis"]
+        if "connection_summary" in conn:
+            conn_summary = conn["connection_summary"]
+            lines.append(
+                f"- **Connections:** {conn_summary.get('total_connections', 0)} total, "
+                f"{conn_summary.get('active_connections', 0)} active"
+            )
+
+    if (
+        "replication_lag" in perf_results
+        and "error" not in perf_results["replication_lag"]
+    ):
+        repl_info = perf_results["replication_lag"]
+        is_standby = repl_info.get("is_standby", False)
+        if is_standby:
+            lines.append("- **Replication:** Standby (replica)")
+        else:
+            replica_count = repl_info.get("replication_summary", {}).get(
+                "total_replicas", 0
+            )
+            if replica_count > 0:
+                lines.append(
+                    f"- **Replication:** Primary with {replica_count} replica(s)"
+                )
+            else:
+                lines.append("- **Replication:** Primary (no active replicas)")
+
+    lines.append("")
+    return lines
+
+
+def _db_summary_lines_mysql(analysis: Dict, conn_info: Dict) -> List[str]:
+    """Generate markdown lines for MySQL database summary."""
+    lines = ["## MySQL Database", ""]
+
+    config_results = analysis.get("config", {})
+    if "version_info" in config_results:
+        version_info = config_results["version_info"]
+        lines.append(
+            f"- **MySQL Version:** {version_info.get('version_string', 'Unknown')} "
+            f"({version_info.get('distribution', 'MySQL')})"
+        )
+
+    # Source platform
+    cloud_platform = config_results.get("cloud_platform", {})
+    platform = cloud_platform.get("platform", "")
+    platform_labels = {
+        "aws_rds": "Amazon RDS for MySQL",
+        "aws_aurora": "Amazon Aurora MySQL",
+        "gcp_cloudsql": "Google Cloud SQL for MySQL",
+        "azure": "Azure Database for MySQL",
+        "planetscale": "PlanetScale (Vitess)",
+    }
+    if platform in platform_labels:
+        detail = cloud_platform.get("details", {}).get("aurora_version", "")
+        label = f"Aurora {detail}" if detail else platform_labels[platform]
+        lines.append(f"- **Source:** {label}")
+
+    if conn_info.get("current_user"):
+        lines.append(f"- **User:** {conn_info['current_user']}")
+
+    schema_results = analysis.get("schema", {})
+    db_list = schema_results.get("database_catalog", [])
+    if db_list:
+        lines.append(
+            f"- **Databases:** {len(db_list)} ({', '.join(db_list[:10])}{'...' if len(db_list) > 10 else ''})"
+        )
+
+    tables = schema_results.get("table_analysis", [])
+    if tables:
+        total_size = sum(t.get("total_size_bytes", 0) for t in tables)
+        lines.append(f"- **Tables:** {len(tables)}")
+        if total_size > 0:
+            lines.append(f"- **Total Size:** {_format_bytes(total_size)}")
+
+    features = analysis.get("features", {})
+    tech = features.get("technologies_detected", {})
+    detected = [k for k, v in tech.items() if v is True]
+    if detected:
+        lines.append(f"- **Technologies:** {', '.join(detected)}")
+
+    security = analysis.get("security", {})
+    user_summary = security.get("user_summary", {})
+    if "total_users" in user_summary:
+        lines.append(f"- **Users:** {user_summary['total_users']}")
+
+    replication = analysis.get("replication", {})
+    if replication.get("binlog_format"):
+        lines.append(f"- **Binlog Format:** {replication['binlog_format']}")
+
+    retention = replication.get("binlog_retention", {})
+    ret_hours = retention.get("retention_hours", 0)
+    if ret_hours > 0:
+        lines.append(f"- **Binlog Retention:** {ret_hours}h")
+
+    if replication.get("replica_status"):
+        lines.append("- **Replication:** Replica")
+
+    lines.append("")
+    return lines
+
+
 def generate_summary_markdown(
     combined_results: Dict[str, Any], output_path: Path
 ) -> None:
@@ -304,91 +511,14 @@ def generate_summary_markdown(
     # Database section
     db_results = combined_results.get("database_results")
     if db_results:
-        lines.extend(["## Database", ""])
         analysis = db_results.get("analysis_results", {})
         conn_info = db_results.get("connection_info", {})
+        engine = db_results.get("engine", "postgres")
 
-        # PG version
-        config_results = analysis.get("config", {})
-        if "version_info" in config_results:
-            version_info = config_results["version_info"]
-            major = version_info.get("major_version", "Unknown")
-            lines.append(f"- **PostgreSQL Version:** {major}")
-
-        # Database name
-        if conn_info.get("current_database"):
-            lines.append(f"- **Database:** {conn_info['current_database']}")
-
-        # Database count
-        schema_results = analysis.get("schema", {})
-        if "database_catalog" in schema_results:
-            db_count = len(schema_results["database_catalog"])
-            lines.append(f"- **Databases:** {db_count}")
-
-        # Table count
-        if "table_analysis" in schema_results:
-            table_count = len(schema_results["table_analysis"])
-            total_size = sum(
-                t.get("total_size_bytes", 0) for t in schema_results["table_analysis"]
-            )
-            lines.append(f"- **Tables:** {table_count}")
-            if total_size > 0:
-                lines.append(f"- **Total Size:** {_format_bytes(total_size)}")
-
-        # Extensions
-        features_results = analysis.get("features", {})
-        if "extensions_analysis" in features_results:
-            extensions = features_results["extensions_analysis"].get(
-                "installed_extensions", []
-            )
-            if extensions:
-                ext_names = [e.get("extname", "") for e in extensions]
-                lines.append(
-                    f"- **Extensions ({len(extensions)}):** {', '.join(ext_names)}"
-                )
-
-        # Users/roles
-        security_results = analysis.get("security", {})
-        if "user_role_analysis" in security_results:
-            user_analysis = security_results["user_role_analysis"]
-            if "summary" in user_analysis:
-                summary = user_analysis["summary"]
-                user_count = summary.get("user_count", 0)
-                role_count = summary.get("role_count", 0)
-                lines.append(f"- **Users:** {user_count}, **Roles:** {role_count}")
-
-        # Connection stats
-        perf_results = analysis.get("performance", {})
-        if "connection_analysis" in perf_results:
-            conn = perf_results["connection_analysis"]
-            if "connection_summary" in conn:
-                conn_summary = conn["connection_summary"]
-                lines.append(
-                    f"- **Connections:** {conn_summary.get('total_connections', 0)} total, "
-                    f"{conn_summary.get('active_connections', 0)} active"
-                )
-
-        # Replication status
-        if (
-            "replication_lag" in perf_results
-            and "error" not in perf_results["replication_lag"]
-        ):
-            repl_info = perf_results["replication_lag"]
-            is_standby = repl_info.get("is_standby", False)
-            if is_standby:
-                lines.append("- **Replication:** Standby (replica)")
-            else:
-                replica_count = repl_info.get("replication_summary", {}).get(
-                    "total_replicas", 0
-                )
-                if replica_count > 0:
-                    lines.append(
-                        f"- **Replication:** Primary with {replica_count} replica(s)"
-                    )
-                else:
-                    lines.append("- **Replication:** Primary (no active replicas)")
-
-        lines.append("")
+        if engine == "mysql":
+            lines.extend(_db_summary_lines_mysql(analysis, conn_info))
+        else:
+            lines.extend(_db_summary_lines_postgres(analysis, conn_info))
 
     # Cloud section
     cloud_results = combined_results.get("cloud_results")
@@ -583,24 +713,28 @@ def _format_bytes(bytes_value: int) -> str:
     return f"{size:.1f} {units[unit_index]}"
 
 
-def _handle_database_error(e: Exception, logger: Any) -> None:
+def _handle_database_error(e: Exception, logger: Any, engine: str = "postgres") -> None:
     """Print user-friendly database connection error messages."""
     error_str = str(e)
 
-    # Check for common psycopg2 connection errors
-    if "could not connect to server" in error_str or "Connection refused" in error_str:
+    if any(
+        s in error_str
+        for s in ["could not connect to server", "Connection refused", "Can't connect"]
+    ):
         logger.error(
             f"Could not connect to the database server.\n"
             f"  Check that the host and port are correct and the server is running.\n"
             f"  Details: {e}"
         )
-    elif "password authentication failed" in error_str:
+    elif any(
+        s in error_str for s in ["password authentication failed", "Access denied"]
+    ):
         logger.error(
             f"Authentication failed.\n"
             f"  Check your username and password.\n"
             f"  Details: {e}"
         )
-    elif "does not exist" in error_str and "database" in error_str:
+    elif "does not exist" in error_str or "Unknown database" in error_str:
         logger.error(
             f"Database not found.\n"
             f"  Verify the database name is correct.\n"
@@ -610,6 +744,14 @@ def _handle_database_error(e: Exception, logger: Any) -> None:
         logger.error(
             f"Connection timed out.\n"
             f"  Check network connectivity and firewall rules.\n"
+            f"  Details: {e}"
+        )
+    elif engine == "mysql" and (
+        "pymysql" in error_str.lower() or "No module named" in error_str
+    ):
+        logger.error(
+            f"PyMySQL is not installed.\n"
+            f"  Install with: pip install 'planetscale-discovery-tools[mysql]'\n"
             f"  Details: {e}"
         )
     else:
@@ -626,7 +768,7 @@ def main() -> None:
             "Usage: ps-discovery <command> [options]\n"
             "\n"
             "Commands:\n"
-            "  database         PostgreSQL database discovery\n"
+            "  database         Database discovery (--engine postgres|mysql)\n"
             "  cloud            Cloud infrastructure discovery\n"
             "  both             Combined database and cloud discovery\n"
             "  config-template  Generate configuration template\n"
@@ -640,7 +782,10 @@ def main() -> None:
         if args.command == "config-template":
             config_manager = ConfigManager()
             providers = args.providers.split(",") if args.providers else []
-            config_manager.save_config_template(args.output, providers=providers)
+            engines = args.engines.split(",") if args.engines else ["postgres"]
+            config_manager.save_config_template(
+                args.output, providers=providers, engines=engines
+            )
             print(f"Configuration template saved to {args.output}")
             return
 
@@ -655,19 +800,28 @@ def main() -> None:
         if args.log_file:
             config.log_file = args.log_file
 
-        # Apply database CLI args early for validation
-        if hasattr(args, "host") and args.host:
-            config.database.host = args.host
-        if hasattr(args, "port") and args.port:
-            config.database.port = args.port
-        if hasattr(args, "database") and args.database:
-            config.database.database = args.database
-        if hasattr(args, "username") and args.username:
-            config.database.username = args.username
-        if hasattr(args, "password") and args.password:
-            import getpass
+        # Resolve effective engine: explicit --engine flag wins, otherwise keep config value
+        engine_flag = getattr(args, "engine", None)
+        if engine_flag:
+            config.engine = engine_flag
 
-            config.database.password = getpass.getpass("PostgreSQL Password: ")
+        # Apply database CLI args to the appropriate engine config
+        if hasattr(args, "engine"):
+            db_cfg = config.mysql if config.engine == "mysql" else config.database
+            if hasattr(args, "host") and args.host:
+                db_cfg.host = args.host
+            if hasattr(args, "port") and args.port:
+                db_cfg.port = args.port
+            if hasattr(args, "database") and args.database:
+                db_cfg.database = args.database
+            if hasattr(args, "username") and args.username:
+                db_cfg.username = args.username
+            if hasattr(args, "password") and args.password:
+                import getpass
+
+                db_cfg.password = getpass.getpass(f"{config.engine.title()} Password: ")
+            if hasattr(args, "ssl_mode") and args.ssl_mode:
+                db_cfg.ssl_mode = args.ssl_mode
 
         # Set up logging
         logger = setup_logging(config.log_level, config.log_file)
@@ -700,16 +854,20 @@ def main() -> None:
         # Validate configuration after setting modules
         config_manager.validate_config()
 
-        # Run discovery based on command
+        # Run discovery based on command and engine
         if args.command in ["database", "both"]:
-            logger.info("Starting database discovery...")
+            engine_label = "MySQL" if config.engine == "mysql" else "PostgreSQL"
+            logger.info(f"Starting {engine_label} discovery...")
             try:
-                db_results = run_database_discovery(config, args)
+                if config.engine == "mysql":
+                    db_results = run_mysql_discovery(config, args)
+                else:
+                    db_results = run_database_discovery(config, args)
                 combined_results["database_results"] = db_results
-                logger.info("Database discovery completed successfully")
+                logger.info(f"{engine_label} discovery completed successfully")
             except Exception as e:
-                _handle_database_error(e, logger)
-                if args.command == "database":
+                _handle_database_error(e, logger, config.engine)
+                if args.command != "both":
                     sys.exit(1)
 
         if args.command in ["cloud", "both"]:
@@ -732,7 +890,8 @@ def main() -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save JSON results (always generated)
-        json_path = output_dir / "planetscale_discovery_results.json"
+        ts = str(combined_results["timestamp"]).replace(":", "").replace("-", "")[:15]
+        json_path = output_dir / f"planetscale_discovery_results_{ts}.json"
         with open(json_path, "w") as f:
             json.dump(combined_results, f, indent=2, default=str)
         os.chmod(json_path, 0o600)
@@ -740,7 +899,7 @@ def main() -> None:
 
         # Generate local summary markdown (debugging only)
         if args.local_summary:
-            md_path = output_dir / "discovery_summary.md"
+            md_path = output_dir / f"ps_discovery_{ts}.md"
             generate_summary_markdown(combined_results, md_path)
             os.chmod(md_path, 0o600)
             logger.info(f"Summary report saved to {md_path}")
@@ -768,29 +927,46 @@ def generate_combined_summary(results: Dict[str, Any]) -> Dict[str, Any]:
     if results.get("database_results"):
         db_results = results["database_results"]
         if "analysis_results" in db_results:
-            # Count analysis gaps
             analysis_gaps = db_results.get("analysis_gaps", [])
+            analysis = db_results["analysis_results"]
+            engine = db_results.get("engine", "postgres")
 
-            summary["database_summary"] = {
-                "tables_analyzed": len(
-                    db_results["analysis_results"]
-                    .get("schema", {})
-                    .get("table_analysis", [])
-                ),
-                "extensions_found": len(
-                    db_results["analysis_results"]
-                    .get("features", {})
-                    .get("extensions_analysis", {})
-                    .get("installed_extensions", [])
-                ),
-                "users_analyzed": len(
-                    db_results["analysis_results"]
-                    .get("security", {})
-                    .get("user_role_analysis", {})
-                    .get("users", [])
-                ),
-                "analysis_gaps": len(analysis_gaps),
-            }
+            if engine == "mysql":
+                summary["database_summary"] = {
+                    "engine": "mysql",
+                    "tables_analyzed": len(
+                        analysis.get("schema", {}).get("table_analysis", [])
+                    ),
+                    "databases_found": len(
+                        analysis.get("schema", {}).get("database_catalog", [])
+                    ),
+                    "technologies_detected": sum(
+                        1
+                        for v in analysis.get("features", {})
+                        .get("technologies_detected", {})
+                        .values()
+                        if v is True
+                    ),
+                    "analysis_gaps": len(analysis_gaps),
+                }
+            else:
+                summary["database_summary"] = {
+                    "engine": "postgres",
+                    "tables_analyzed": len(
+                        analysis.get("schema", {}).get("table_analysis", [])
+                    ),
+                    "extensions_found": len(
+                        analysis.get("features", {})
+                        .get("extensions_analysis", {})
+                        .get("installed_extensions", [])
+                    ),
+                    "users_analyzed": len(
+                        analysis.get("security", {})
+                        .get("user_role_analysis", {})
+                        .get("users", [])
+                    ),
+                    "analysis_gaps": len(analysis_gaps),
+                }
 
     # Extract cloud summary
     if results.get("cloud_results"):
@@ -814,12 +990,21 @@ def print_discovery_summary(summary: Dict[str, Any], command: str) -> None:
 
     if command in ["database", "both"] and summary.get("database_summary"):
         db_summary = summary["database_summary"]
-        print("\nDATABASE ANALYSIS:")
-        print(f"   Tables Analyzed: {db_summary.get('tables_analyzed', 0)}")
-        print(f"   Extensions Found: {db_summary.get('extensions_found', 0)}")
-        print(f"   Users Analyzed: {db_summary.get('users_analyzed', 0)}")
+        engine = db_summary.get("engine", "postgres")
 
-        # Show analysis gaps if any exist
+        if engine == "mysql":
+            print("\nMYSQL ANALYSIS:")
+            print(f"   Tables Analyzed: {db_summary.get('tables_analyzed', 0)}")
+            print(f"   Databases Found: {db_summary.get('databases_found', 0)}")
+            print(
+                f"   Technologies Detected: {db_summary.get('technologies_detected', 0)}"
+            )
+        else:
+            print("\nDATABASE ANALYSIS:")
+            print(f"   Tables Analyzed: {db_summary.get('tables_analyzed', 0)}")
+            print(f"   Extensions Found: {db_summary.get('extensions_found', 0)}")
+            print(f"   Users Analyzed: {db_summary.get('users_analyzed', 0)}")
+
         gap_count = db_summary.get("analysis_gaps", 0)
         if gap_count > 0:
             print(f"\n   Information Gaps: {gap_count}")

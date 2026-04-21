@@ -31,6 +31,12 @@ setup(
     ],
     # Optional dependencies
     extras_require={
+        "postgres": [
+            "psycopg2-binary>=2.9",
+        ],
+        "mysql": [
+            "PyMySQL>=1.1.0",
+        ],
         "aws": [
             "boto3>=1.42.52",
             "botocore>=1.42.52",
@@ -50,6 +56,7 @@ setup(
             "requests>=2.32.5",
         ],
         "all": [
+            "PyMySQL>=1.1.0",
             "boto3>=1.42.52",
             "botocore>=1.42.52",
             "google-cloud-resource-manager>=1.16.0",
@@ -83,7 +90,7 @@ setup(
         "Programming Language :: Python :: 3.13",
     ],
     # Additional metadata
-    keywords="postgresql database discovery cloud aws gcp supabase heroku",
+    keywords="postgresql mysql database discovery cloud aws gcp supabase heroku",
     project_urls={
         "Documentation": "https://docs.planetscale.com",
         "Source": "https://github.com/planetscale/pg-discovery-tool",

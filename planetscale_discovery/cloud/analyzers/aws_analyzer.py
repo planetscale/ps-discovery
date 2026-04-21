@@ -259,15 +259,130 @@ class AWSAnalyzer(CloudAnalyzer):
         """Legacy method name - calls _analyze_rds_instances"""
         return self._analyze_rds_instances(region)
 
+    def _expand_aurora_cluster_members(
+        self, rds_client, region: str, cluster_name: str
+    ) -> List[str]:
+        """Return the DBInstanceIdentifiers of members in a given Aurora cluster."""
+        try:
+            response = rds_client.describe_db_clusters(DBClusterIdentifier=cluster_name)
+            members: List[str] = []
+            for cluster in response.get("DBClusters", []):
+                for m in cluster.get("DBClusterMembers", []):
+                    mid = m.get("DBInstanceIdentifier")
+                    if mid:
+                        members.append(mid)
+            return members
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "DBClusterNotFoundFault":
+                self.logger.debug(
+                    f"Aurora cluster '{cluster_name}' not found in {region} "
+                    f"during member expansion"
+                )
+            else:
+                self.add_warning(
+                    f"Failed to expand Aurora cluster '{cluster_name}' members "
+                    f"in {region}: {e}"
+                )
+            return []
+
+    def _fetch_rds_db_instances(self, rds_client, region: str) -> List[Dict[str, Any]]:
+        """Fetch RDS DBInstances honoring discover_all and resources config.
+
+        If resources.rds_instances is populated, only those are fetched. When
+        resources.aurora_clusters is also populated, each cluster's member
+        instances are auto-included so users don't have to list them twice.
+        Otherwise, discover_all controls whether all instances are listed or
+        discovery is skipped.
+        """
+        discover_all = self.config.get("discover_all", True)
+        resources = self.config.get("resources") or {}
+        names = list(resources.get("rds_instances") or [])
+
+        for cluster_name in resources.get("aurora_clusters") or []:
+            for mid in self._expand_aurora_cluster_members(
+                rds_client, region, cluster_name
+            ):
+                if mid not in names:
+                    names.append(mid)
+
+        if names:
+            db_instances: List[Dict[str, Any]] = []
+            for name in names:
+                try:
+                    response = rds_client.describe_db_instances(
+                        DBInstanceIdentifier=name
+                    )
+                    db_instances.extend(response.get("DBInstances", []))
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "DBInstanceNotFound":
+                        self.logger.debug(
+                            f"RDS instance '{name}' not found in {region}"
+                        )
+                    else:
+                        self.add_warning(
+                            f"Failed to describe RDS instance '{name}' in {region}: {e}"
+                        )
+            return db_instances
+
+        if not discover_all:
+            self.add_warning(
+                f"discover_all=false and no resources.rds_instances configured; "
+                f"skipping RDS instance discovery in {region}"
+            )
+            return []
+
+        response = rds_client.describe_db_instances()
+        return response.get("DBInstances", [])
+
+    def _fetch_aurora_db_clusters(
+        self, rds_client, region: str
+    ) -> List[Dict[str, Any]]:
+        """Fetch Aurora DBClusters honoring discover_all and resources config.
+
+        If resources.aurora_clusters is populated, only those are fetched
+        (narrowing scope regardless of discover_all). Otherwise, discover_all
+        controls whether all clusters are listed or discovery is skipped.
+        """
+        discover_all = self.config.get("discover_all", True)
+        resources = self.config.get("resources") or {}
+        names = resources.get("aurora_clusters") or []
+
+        if names:
+            db_clusters: List[Dict[str, Any]] = []
+            for name in names:
+                try:
+                    response = rds_client.describe_db_clusters(DBClusterIdentifier=name)
+                    db_clusters.extend(response.get("DBClusters", []))
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "DBClusterNotFoundFault":
+                        self.logger.debug(
+                            f"Aurora cluster '{name}' not found in {region}"
+                        )
+                    else:
+                        self.add_warning(
+                            f"Failed to describe Aurora cluster '{name}' in {region}: {e}"
+                        )
+            return db_clusters
+
+        if not discover_all:
+            self.add_warning(
+                f"discover_all=false and no resources.aurora_clusters configured; "
+                f"skipping Aurora cluster discovery in {region}"
+            )
+            return []
+
+        response = rds_client.describe_db_clusters()
+        return response.get("DBClusters", [])
+
     def _analyze_rds_instances(self, region: str) -> List[Dict[str, Any]]:
         """Analyze RDS instances in a region."""
         instances = []
 
         try:
             rds_client = self.session.client("rds", region_name=region)
-            response = rds_client.describe_db_instances()
+            db_instances = self._fetch_rds_db_instances(rds_client, region)
 
-            for db_instance in response.get("DBInstances", []):
+            for db_instance in db_instances:
                 instance_analysis = {
                     "db_instance_identifier": db_instance["DBInstanceIdentifier"],
                     "engine": db_instance["Engine"],
@@ -347,9 +462,9 @@ class AWSAnalyzer(CloudAnalyzer):
 
         try:
             rds_client = self.session.client("rds", region_name=region)
-            response = rds_client.describe_db_clusters()
+            db_clusters = self._fetch_aurora_db_clusters(rds_client, region)
 
-            for db_cluster in response.get("DBClusters", []):
+            for db_cluster in db_clusters:
                 cluster_analysis = {
                     "identifier": db_cluster["DBClusterIdentifier"],
                     "engine": db_cluster["Engine"],
