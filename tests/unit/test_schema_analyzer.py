@@ -34,6 +34,7 @@ class TestSchemaAnalyzer:
         with (
             patch.object(analyzer, "_get_database_catalog", return_value=[]),
             patch.object(analyzer, "_get_schema_inventory", return_value=[]),
+            patch.object(analyzer, "_get_temp_schema_counts", return_value={}),
             patch.object(analyzer, "_get_table_analysis", return_value=[]),
             patch.object(analyzer, "_get_index_analysis", return_value=[]),
             patch.object(analyzer, "_get_constraint_analysis", return_value=[]),
@@ -49,6 +50,7 @@ class TestSchemaAnalyzer:
         expected_keys = {
             "database_catalog",
             "schema_inventory",
+            "temp_schema_counts",
             "table_analysis",
             "index_analysis",
             "constraint_analysis",
@@ -66,6 +68,7 @@ class TestSchemaAnalyzer:
         methods = [
             "_get_database_catalog",
             "_get_schema_inventory",
+            "_get_temp_schema_counts",
             "_get_table_analysis",
             "_get_index_analysis",
             "_get_constraint_analysis",
@@ -92,9 +95,10 @@ class TestSchemaAnalyzer:
             patches[methods[8]] as p8,
             patches[methods[9]] as p9,
             patches[methods[10]] as p10,
+            patches[methods[11]] as p11,
         ):
             analyzer.analyze()
-            for p in [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10]:
+            for p in [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11]:
                 p.assert_called_once()
 
     # ---------------------------------------------------------------
@@ -359,6 +363,87 @@ class TestSchemaAnalyzer:
 
         result = analyzer._get_schema_inventory()
         assert result == []
+
+    def test_get_schema_inventory_excludes_temp_namespaces(self, mock_connection):
+        """Test that pg_temp_% and pg_toast_temp_% are filtered out via SQL"""
+        connection, _ = mock_connection
+
+        main_cursor = MagicMock()
+        main_cursor.fetchall.return_value = []
+
+        def cursor_factory():
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=main_cursor)
+            ctx.__exit__ = MagicMock(return_value=None)
+            return ctx
+
+        connection.cursor.side_effect = cursor_factory
+
+        analyzer = SchemaAnalyzer(connection)
+        analyzer._get_schema_inventory()
+
+        sql = main_cursor.execute.call_args[0][0]
+        assert "pg_temp_%" in sql
+        assert "pg_toast_temp_%" in sql
+
+    def test_get_schema_inventory_aborts_on_runaway_catalog(self, mock_connection):
+        """Test that >10000 schemas after filtering causes a safe abort"""
+        connection, _ = mock_connection
+
+        # Simulate 10001 non-temp schemas — would explode the N+1 loop
+        rows = [
+            {
+                "schema_name": f"s{i}",
+                "owner": "x",
+                "schema_oid": i,
+                "description": None,
+                "is_system_schema": False,
+            }
+            for i in range(10001)
+        ]
+
+        main_cursor = MagicMock()
+        main_cursor.fetchall.return_value = rows
+
+        def cursor_factory():
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=main_cursor)
+            ctx.__exit__ = MagicMock(return_value=None)
+            return ctx
+
+        connection.cursor.side_effect = cursor_factory
+
+        analyzer = SchemaAnalyzer(connection)
+        result = analyzer._get_schema_inventory()
+
+        assert result == []
+        # And critically, the per-schema sub-queries were never run
+        assert main_cursor.execute.call_count == 1
+
+    # ---------------------------------------------------------------
+    # _get_temp_schema_counts()
+    # ---------------------------------------------------------------
+
+    def test_get_temp_schema_counts_returns_counts(self, mock_connection):
+        """Test temp schema count query returns dict with both counts"""
+        connection, cursor_mock = mock_connection
+        cursor_mock.fetchone.return_value = {
+            "pg_temp_count": 50000,
+            "pg_toast_temp_count": 50000,
+        }
+
+        analyzer = SchemaAnalyzer(connection)
+        result = analyzer._get_temp_schema_counts()
+
+        assert result == {"pg_temp_count": 50000, "pg_toast_temp_count": 50000}
+
+    def test_get_temp_schema_counts_handles_error(self, analyzer, mock_connection):
+        """Test temp schema count returns zeros on query failure"""
+        _, cursor_mock = mock_connection
+        cursor_mock.execute.side_effect = Exception("permission denied")
+
+        result = analyzer._get_temp_schema_counts()
+        assert result == {"pg_temp_count": 0, "pg_toast_temp_count": 0}
 
     # ---------------------------------------------------------------
     # _get_table_analysis()

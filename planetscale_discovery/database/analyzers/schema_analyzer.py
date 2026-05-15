@@ -32,6 +32,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         results = {
             "database_catalog": self._get_database_catalog(),
             "schema_inventory": self._get_schema_inventory(),
+            "temp_schema_counts": self._get_temp_schema_counts(),
             "table_analysis": self._get_table_analysis(),
             "index_analysis": self._get_index_analysis(),
             "constraint_analysis": self._get_constraint_analysis(),
@@ -44,6 +45,27 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         }
 
         return results
+
+    def _get_temp_schema_counts(self) -> Dict[str, int]:
+        """Count per-backend temp namespaces. Not migration-relevant; surfaced
+        only as a workload signal (high counts indicate unpooled connection
+        churn with temp-table usage)."""
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE nspname LIKE 'pg_temp_%') AS pg_temp_count,
+                        COUNT(*) FILTER (WHERE nspname LIKE 'pg_toast_temp_%') AS pg_toast_temp_count
+                    FROM pg_namespace
+                """)
+                row = cursor.fetchone()
+            return {
+                "pg_temp_count": int(row["pg_temp_count"]),
+                "pg_toast_temp_count": int(row["pg_toast_temp_count"]),
+            }
+        except Exception as e:
+            self.logger.warning(f"Could not count temp schemas: {e}")
+            return {"pg_temp_count": 0, "pg_toast_temp_count": 0}
 
     def _get_database_catalog(self) -> List[Dict[str, Any]]:
         """Get information about all databases."""
@@ -116,6 +138,10 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get information about all schemas."""
         try:
             with self.connection.cursor() as cursor:
+                # Exclude per-backend temp namespaces (pg_temp_N / pg_toast_temp_N).
+                # They have no migration value and can number in the tens of
+                # thousands on databases with high max_connections + unpooled
+                # workloads — see _get_temp_schema_counts for a count signal.
                 cursor.execute("""
                     SELECT
                         n.nspname as schema_name,
@@ -126,13 +152,33 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                              THEN true ELSE false END as is_system_schema
                     FROM pg_namespace n
                     JOIN pg_roles r ON n.nspowner = r.oid
+                    WHERE n.nspname NOT LIKE 'pg_temp_%'
+                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
                     ORDER BY is_system_schema, n.nspname
                 """)
 
                 rows = list(cursor.fetchall())
 
+            # Pre-flight: the per-schema loop below does 2 sub-queries per row.
+            # Bail out instead of running for hours on a pathologically large
+            # catalog.
+            schema_count = len(rows)
+            if schema_count > 10000:
+                self.logger.error(
+                    f"Aborting schema inventory: {schema_count} non-temp schemas "
+                    "exceeds safe limit (10000). Investigate catalog bloat."
+                )
+                return []
+            if schema_count > 1000:
+                self.logger.warning(
+                    f"Schema inventory will iterate {schema_count} schemas — "
+                    "this may take several minutes."
+                )
+
             schemas = []
-            for row in rows:
+            for idx, row in enumerate(rows):
+                if schema_count > 100 and idx > 0 and idx % 100 == 0:
+                    self.logger.info(f"Schema inventory progress: {idx}/{schema_count}")
                 schema_info = dict(row)
 
                 # Get schema privileges - use alternative method if information_schema.schema_privileges doesn't exist

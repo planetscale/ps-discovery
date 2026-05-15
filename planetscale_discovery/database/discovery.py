@@ -5,6 +5,7 @@ Main entry point for comprehensive PostgreSQL environment analysis.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any
 
@@ -180,6 +181,7 @@ class PostgreSQLDiscovery:
 
                 try:
                     self.logger.info(f"Running {module_name} analysis...")
+                    module_start = time.monotonic()
 
                     # Pass configuration to analyzers that need it
                     if module_name == "schema":
@@ -210,7 +212,10 @@ class PostgreSQLDiscovery:
                     # Extract gaps from module results
                     self._extract_analysis_gaps(module_name, module_results)
 
-                    self.logger.info(f"Completed {module_name} analysis")
+                    elapsed = time.monotonic() - module_start
+                    self.logger.info(
+                        f"Completed {module_name} analysis in {elapsed:.1f}s"
+                    )
 
                 except Exception as e:
                     self.logger.error(f"Failed to run {module_name} analysis: {e}")

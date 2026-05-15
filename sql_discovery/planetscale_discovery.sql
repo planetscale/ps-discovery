@@ -123,6 +123,15 @@ SELECT current_database() AS current_database;
 \echo '=================================================================================='
 \echo ''
 
+\echo '--- Temp Namespace Counts ---'
+\echo 'Per-backend pg_temp_N / pg_toast_temp_N slots. High counts indicate'
+\echo 'unpooled connection churn with temp-table usage; excluded from inventory below.'
+SELECT
+    COUNT(*) FILTER (WHERE nspname LIKE 'pg_temp_%') AS pg_temp_count,
+    COUNT(*) FILTER (WHERE nspname LIKE 'pg_toast_temp_%') AS pg_toast_temp_count
+FROM pg_namespace;
+
+\echo ''
 \echo '--- Schema Inventory ---'
 SELECT
     n.nspname AS schema_name,
@@ -139,6 +148,8 @@ SELECT
 FROM pg_namespace n
 JOIN pg_roles r ON n.nspowner = r.oid
 LEFT JOIN pg_class c ON c.relnamespace = n.oid
+WHERE n.nspname NOT LIKE 'pg_temp_%'
+  AND n.nspname NOT LIKE 'pg_toast_temp_%'
 GROUP BY n.nspname, r.rolname
 ORDER BY schema_type, n.nspname;
 
@@ -163,7 +174,7 @@ ORDER BY SUM(pg_total_relation_size(schemaname||'.'||tablename)) DESC;
 \echo '=================================================================================='
 \echo ''
 
-\echo '--- Table Inventory (Top 50 by size) ---'
+\echo '--- Table Inventory (Top 500 by size) ---'
 SELECT
     n.nspname AS schema_name,
     c.relname AS table_name,
@@ -183,12 +194,13 @@ JOIN pg_namespace n ON c.relnamespace = n.oid
 JOIN pg_roles r ON c.relowner = r.oid
 WHERE c.relkind IN ('r', 'p')
 AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+AND n.nspname NOT LIKE 'pg_temp_%'
+AND n.nspname NOT LIKE 'pg_toast_temp_%'
 ORDER BY pg_total_relation_size(c.oid) DESC
-LIMIT 50;
+LIMIT 500;
 
 \echo ''
-\echo '--- Column Details for User Tables (Sample) ---'
-\echo 'Note: Showing details for largest tables only to reduce output size'
+\echo '--- Column Details for User Tables (Top 500 by size) ---'
 SELECT
     n.nspname AS schema_name,
     c.relname AS table_name,
@@ -206,13 +218,17 @@ WHERE a.attnum > 0
 AND NOT a.attisdropped
 AND c.relkind = 'r'
 AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+AND n.nspname NOT LIKE 'pg_temp_%'
+AND n.nspname NOT LIKE 'pg_toast_temp_%'
 AND c.oid IN (
     SELECT c2.oid FROM pg_class c2
     JOIN pg_namespace n2 ON c2.relnamespace = n2.oid
     WHERE c2.relkind = 'r'
     AND n2.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+    AND n2.nspname NOT LIKE 'pg_temp_%'
+    AND n2.nspname NOT LIKE 'pg_toast_temp_%'
     ORDER BY pg_total_relation_size(c2.oid) DESC
-    LIMIT 20
+    LIMIT 500
 )
 ORDER BY n.nspname, c.relname, a.attnum;
 
