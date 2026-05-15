@@ -40,6 +40,7 @@ class DatabaseConfig:
     ssl_mode: str = "prefer"
     connection_timeout: int = 30
     data_size: DataSizeConfig = field(default_factory=DataSizeConfig)
+    excluded_databases: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -193,6 +194,9 @@ class ConfigManager:
             db_config.ssl_mode = db_data.get("ssl_mode", db_config.ssl_mode)
             db_config.connection_timeout = db_data.get(
                 "connection_timeout", db_config.connection_timeout
+            )
+            db_config.excluded_databases = db_data.get(
+                "excluded_databases", db_config.excluded_databases
             )
 
             # Parse data_size config
@@ -499,6 +503,8 @@ database:
   username: your_username
   password: your_password
   ssl_mode: prefer  # Options: disable, allow, prefer, require, verify-ca, verify-full
+  # excluded_databases:  # Additional databases to skip (rdsadmin is always excluded)
+  #   - some_internal_db
 """
 
             if "mysql" in engines:

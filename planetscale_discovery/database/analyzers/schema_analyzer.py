@@ -48,8 +48,13 @@ class SchemaAnalyzer(DatabaseAnalyzer):
     def _get_database_catalog(self) -> List[Dict[str, Any]]:
         """Get information about all databases."""
         try:
+            # Always exclude internal system databases; users can add more via config.
+            excluded = ["template0", "template1", "rdsadmin"] + list(
+                self.config.get("excluded_databases", [])
+            )
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT
                         d.datname as database_name,
                         pg_encoding_to_char(d.encoding) as encoding,
@@ -65,9 +70,11 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     FROM pg_database d
                     JOIN pg_roles r ON d.datdba = r.oid
                     LEFT JOIN pg_tablespace t ON d.dattablespace = t.oid
-                    WHERE d.datname NOT IN ('template0', 'template1')
+                    WHERE NOT (d.datname = ANY(%s))
                     ORDER BY d.datname
-                """)
+                    """,
+                    (excluded,),
+                )
 
                 rows = list(cursor.fetchall())
 

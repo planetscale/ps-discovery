@@ -42,7 +42,9 @@ class DatabaseDiscoveryTool:
         }
 
         discovery = PostgreSQLDiscovery(
-            config_dict, data_size_config=self.config.database.data_size
+            config_dict,
+            data_size_config=self.config.database.data_size,
+            excluded_databases=self.config.database.excluded_databases,
         )
         if not discovery.connect():
             raise ConnectionError("Failed to connect to PostgreSQL database")
@@ -67,9 +69,15 @@ class DatabaseDiscoveryTool:
 class PostgreSQLDiscovery:
     """Main PostgreSQL environment discovery coordinator."""
 
-    def __init__(self, connection_params: Dict[str, Any], data_size_config=None):
+    def __init__(
+        self,
+        connection_params: Dict[str, Any],
+        data_size_config=None,
+        excluded_databases=None,
+    ):
         self.connection_params = connection_params
         self.data_size_config = data_size_config
+        self.excluded_databases = excluded_databases or []
         self.connection = None
         self.results = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -173,8 +181,14 @@ class PostgreSQLDiscovery:
                 try:
                     self.logger.info(f"Running {module_name} analysis...")
 
-                    # Pass configuration to data_size analyzer
-                    if module_name == "data_size" and self.data_size_config:
+                    # Pass configuration to analyzers that need it
+                    if module_name == "schema":
+                        analyzer = available_modules[module_name](
+                            analyzer_connection,
+                            config={"excluded_databases": self.excluded_databases},
+                        )
+                    elif module_name == "data_size" and self.data_size_config:
+                        # Pass configuration to data_size analyzer
                         analyzer = available_modules[module_name](
                             analyzer_connection,
                             config={
