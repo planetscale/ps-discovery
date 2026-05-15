@@ -287,6 +287,24 @@ else
     echo "⏭️  Skipping Heroku dependencies"
 fi
 
+# Optional: Install Neon dependencies
+echo ""
+read -p "Do you need Neon serverless Postgres discovery? (y/N): " install_neon
+if [[ $install_neon =~ ^[Yy]$ ]]; then
+    echo "Installing Neon dependencies..."
+    if ! $PIP_CMD install "requests>=2.32.5" 2>&1; then
+        echo "❌ Error: Failed to install Neon dependencies (requests)"
+        echo "This may be due to:"
+        echo "  - Network connectivity issues"
+        echo "  - Package version not available"
+        cleanup_on_error
+    fi
+    echo "✅ Neon dependencies installed"
+    INSTALLED_PROVIDERS="$INSTALLED_PROVIDERS neon"
+else
+    echo "⏭️  Skipping Neon dependencies"
+fi
+
 # Create main module entry point
 echo "🔧 Setting up package structure..."
 if [ ! -f "planetscale_discovery/__main__.py" ]; then

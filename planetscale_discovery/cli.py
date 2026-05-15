@@ -194,7 +194,7 @@ def add_cloud_args(parser: argparse.ArgumentParser) -> None:
     cloud_group.add_argument(
         "--providers",
         help=(
-            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku). "
+            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon). "
             "If not specified, uses config file settings."
         ),
         default=None,
@@ -225,6 +225,21 @@ def add_cloud_args(parser: argparse.ArgumentParser) -> None:
     cloud_group.add_argument(
         "--heroku-target-app",
         help="Target specific Heroku app for focused analysis",
+    )
+
+    cloud_group.add_argument(
+        "--neon-api-key",
+        help="Neon API key for authentication",
+    )
+
+    cloud_group.add_argument(
+        "--neon-target-project",
+        help="Target specific Neon project for focused analysis",
+    )
+
+    cloud_group.add_argument(
+        "--neon-org-id",
+        help="Filter Neon projects to a specific organization",
     )
 
 
@@ -309,6 +324,7 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
         config.gcp.enabled = "gcp" in providers
         config.supabase.enabled = "supabase" in providers
         config.heroku.enabled = "heroku" in providers
+        config.neon.enabled = "neon" in providers
 
     if args.regions:
         regions = args.regions.split(",")
@@ -336,6 +352,16 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
 
     if hasattr(args, "heroku_target_app") and args.heroku_target_app:
         config.heroku.target_app = args.heroku_target_app
+
+    # Neon-specific overrides
+    if hasattr(args, "neon_api_key") and args.neon_api_key:
+        config.neon.api_key = args.neon_api_key
+
+    if hasattr(args, "neon_target_project") and args.neon_target_project:
+        config.neon.target_project = args.neon_target_project
+
+    if hasattr(args, "neon_org_id") and args.neon_org_id:
+        config.neon.org_id = args.neon_org_id
 
     # Run cloud discovery
     cloud_tool = CloudDiscoveryTool(config)
@@ -875,6 +901,7 @@ def main() -> None:
             config.gcp.enabled = "gcp" in providers
             config.supabase.enabled = "supabase" in providers
             config.heroku.enabled = "heroku" in providers
+            config.neon.enabled = "neon" in providers
 
         # Validate configuration after setting modules
         config_manager.validate_config()

@@ -110,6 +110,17 @@ class HerokuConfig:
 
 
 @dataclass
+class NeonConfig:
+    """Neon provider configuration."""
+
+    enabled: bool = False
+    api_key: Optional[str] = None
+    target_project: Optional[str] = None
+    org_id: Optional[str] = None
+    discover_all: bool = True
+
+
+@dataclass
 class OutputConfig:
     """Output configuration."""
 
@@ -127,6 +138,7 @@ class DiscoveryConfig:
     gcp: GCPConfig = field(default_factory=GCPConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     heroku: HerokuConfig = field(default_factory=HerokuConfig)
+    neon: NeonConfig = field(default_factory=NeonConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     modules: List[str] = field(default_factory=lambda: ["database", "cloud"])
     log_level: str = "INFO"
@@ -170,7 +182,8 @@ class ConfigManager:
                     f"  AWS:      {docs_base}/docs/providers/aws.md\n"
                     f"  GCP:      {docs_base}/docs/providers/gcp.md\n"
                     f"  Supabase: {docs_base}/docs/providers/supabase.md\n"
-                    f"  Heroku:   {docs_base}/docs/providers/heroku.md"
+                    f"  Heroku:   {docs_base}/docs/providers/heroku.md\n"
+                    f"  Neon:     {docs_base}/docs/providers/neon.md"
                 ) from e
         else:
             # Load from environment or use defaults
@@ -309,6 +322,18 @@ class ConfigManager:
                 "discover_all", heroku_config.discover_all
             )
 
+        # Parse Neon config
+        neon_config = NeonConfig()
+        if "providers" in config_data and "neon" in (config_data["providers"] or {}):
+            neon_data = config_data["providers"]["neon"] or {}
+            neon_config.enabled = neon_data.get("enabled", neon_config.enabled)
+            neon_config.api_key = neon_data.get("api_key")
+            neon_config.target_project = neon_data.get("target_project")
+            neon_config.org_id = neon_data.get("org_id")
+            neon_config.discover_all = neon_data.get(
+                "discover_all", neon_config.discover_all
+            )
+
         # Parse output config
         output_config = OutputConfig()
         if "output" in config_data:
@@ -325,6 +350,7 @@ class ConfigManager:
             gcp=gcp_config,
             supabase=supabase_config,
             heroku=heroku_config,
+            neon=neon_config,
             output=output_config,
             modules=config_data.get("modules", ["database", "cloud"]),
             log_level=config_data.get("log_level", "INFO"),
@@ -399,6 +425,14 @@ class ConfigManager:
             target_app=os.getenv("HEROKU_TARGET_APP"),
         )
 
+        # Neon configuration
+        neon_config = NeonConfig(
+            enabled=os.getenv("NEON_ENABLED", "false").lower() == "true",
+            api_key=os.getenv("NEON_API_KEY"),
+            target_project=os.getenv("NEON_TARGET_PROJECT"),
+            org_id=os.getenv("NEON_ORG_ID"),
+        )
+
         # Output configuration
         output_config = OutputConfig(
             output_dir=os.getenv("DISCOVERY_OUTPUT_DIR", "./discovery_output"),
@@ -412,6 +446,7 @@ class ConfigManager:
             gcp=gcp_config,
             supabase=supabase_config,
             heroku=heroku_config,
+            neon=neon_config,
             output=output_config,
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_file=os.getenv("LOG_FILE"),
@@ -451,12 +486,13 @@ class ConfigManager:
                 or self.config.gcp.enabled
                 or self.config.supabase.enabled
                 or self.config.heroku.enabled
+                or self.config.neon.enabled
             ):
                 errors.append(
                     "At least one cloud provider must be enabled for cloud discovery.\n"
                     "  Enable a provider in your config file (e.g. providers.aws.enabled: true)\n"
                     "  or pass --providers on the command line (e.g. --providers heroku).\n"
-                    "  Supported providers: aws, gcp, supabase, heroku"
+                    "  Supported providers: aws, gcp, supabase, heroku, neon"
                 )
 
         if errors:
@@ -469,7 +505,7 @@ class ConfigManager:
 
         Args:
             output_path: Path where the template should be saved
-            providers: List of cloud providers to include (aws, gcp, supabase, heroku).
+            providers: List of cloud providers to include (aws, gcp, supabase, heroku, neon).
                       If None or empty, no cloud provider sections are generated.
             engines: List of database engines to include (postgres, mysql).
                     Defaults to ["postgres"].
@@ -593,6 +629,20 @@ mysql:
 
 """
 
+                if "neon" in providers:
+                    template_yaml += """  neon:
+    enabled: true
+    # Get your API key from: https://console.neon.tech/app/settings/api-keys
+    # Or set NEON_API_KEY environment variable
+    api_key: your_neon_api_key
+    # Optional: analyze a specific project only
+    # target_project: project-id-here
+    # Optional: filter to a specific organization
+    # org_id: your-org-id
+    discover_all: true  # Discover all Neon projects
+
+"""
+
             # Add output and logging settings
             template_yaml += """# Output settings
 output:
@@ -655,6 +705,13 @@ log_level: INFO  # Options: DEBUG, INFO, WARNING, ERROR
                     template["providers"]["heroku"] = {
                         "enabled": True,
                         "api_key": "your_heroku_api_key",
+                        "discover_all": True,
+                    }
+
+                if "neon" in providers:
+                    template["providers"]["neon"] = {
+                        "enabled": True,
+                        "api_key": "your_neon_api_key",
                         "discover_all": True,
                     }
 

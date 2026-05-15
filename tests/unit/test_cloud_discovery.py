@@ -286,6 +286,60 @@ class TestCloudDiscoveryTool:
         assert len(results["errors"]) > 0
         assert "Heroku" in results["errors"][0]["message"]
 
+    @patch("planetscale_discovery.cloud.analyzers.neon_analyzer.NeonAnalyzer")
+    def test_discover_neon(self, mock_neon_analyzer_class):
+        """Test Neon discovery"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = True
+        mock_analyzer.analyze.return_value = {
+            "projects": [{"name": "my-project", "branches": [], "endpoints": []}],
+            "summary": {"total_projects": 1},
+        }
+        mock_neon_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.neon.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "neon" in results["providers"]
+        assert len(results["providers"]["neon"]["projects"]) == 1
+        mock_analyzer.authenticate.assert_called_once()
+        mock_analyzer.analyze.assert_called_once()
+
+    @patch("planetscale_discovery.cloud.analyzers.neon_analyzer.NeonAnalyzer")
+    def test_discover_neon_authentication_failure(self, mock_neon_analyzer_class):
+        """Test Neon discovery with authentication failure"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = False
+        mock_neon_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.neon.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "neon" not in results["providers"]
+        mock_analyzer.analyze.assert_not_called()
+
+    @patch("planetscale_discovery.cloud.analyzers.neon_analyzer.NeonAnalyzer")
+    def test_discover_neon_exception(self, mock_neon_analyzer_class):
+        """Test Neon discovery handles exceptions gracefully"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.side_effect = Exception("Neon test exception")
+        mock_neon_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.neon.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert len(results["errors"]) > 0
+        assert "Neon" in results["errors"][0]["message"]
+
     @patch("planetscale_discovery.cloud.analyzers.aws_analyzer.AWSAnalyzer")
     @patch("planetscale_discovery.cloud.analyzers.gcp_analyzer.GCPAnalyzer")
     def test_discover_mixed_success_and_failure(
