@@ -52,6 +52,9 @@ class MySQLConfig:
     username: str = "root"
     password: str = ""
     ssl_mode: str = "disabled"
+    ssl_ca: Optional[str] = None
+    ssl_cert: Optional[str] = None
+    ssl_key: Optional[str] = None
     connection_timeout: int = 30
 
 
@@ -229,6 +232,9 @@ class ConfigManager:
             mysql_config.username = my_data.get("username", mysql_config.username)
             mysql_config.password = my_data.get("password", mysql_config.password)
             mysql_config.ssl_mode = my_data.get("ssl_mode", mysql_config.ssl_mode)
+            mysql_config.ssl_ca = my_data.get("ssl_ca", mysql_config.ssl_ca)
+            mysql_config.ssl_cert = my_data.get("ssl_cert", mysql_config.ssl_cert)
+            mysql_config.ssl_key = my_data.get("ssl_key", mysql_config.ssl_key)
             mysql_config.connection_timeout = my_data.get(
                 "connection_timeout", mysql_config.connection_timeout
             )
@@ -342,6 +348,9 @@ class ConfigManager:
             username=os.getenv("MYSQL_USER", "root"),
             password=os.getenv("MYSQL_PASSWORD", ""),
             ssl_mode=os.getenv("MYSQL_SSL_MODE", "disabled"),
+            ssl_ca=os.getenv("MYSQL_SSL_CA"),
+            ssl_cert=os.getenv("MYSQL_SSL_CERT"),
+            ssl_key=os.getenv("MYSQL_SSL_KEY"),
         )
 
         # AWS configuration
@@ -502,6 +511,10 @@ mysql:
   username: root
   password: your_password
   ssl_mode: disabled  # Options: disabled, preferred, required, verify-ca, verify-identity
+  # For verify-ca / verify-identity, ssl_ca is required.
+  # ssl_ca: /path/to/server-ca.pem
+  # ssl_cert: /path/to/client-cert.pem   # optional, for mutual TLS
+  # ssl_key: /path/to/client-key.pem     # optional, for mutual TLS
 """
 
             # Add cloud provider sections if any were specified

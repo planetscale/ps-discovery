@@ -168,6 +168,24 @@ def add_database_args(parser: argparse.ArgumentParser) -> None:
         default=None,
     )
 
+    db_group.add_argument(
+        "--mysql-ssl-ca",
+        help="Path to CA certificate (required for verify-ca / verify-identity)",
+        default=None,
+    )
+
+    db_group.add_argument(
+        "--mysql-ssl-cert",
+        help="Path to client certificate (optional, for mutual TLS)",
+        default=None,
+    )
+
+    db_group.add_argument(
+        "--mysql-ssl-key",
+        help="Path to client private key (optional, for mutual TLS)",
+        default=None,
+    )
+
 
 def add_cloud_args(parser: argparse.ArgumentParser) -> None:
     """Add cloud-specific arguments."""
@@ -822,6 +840,13 @@ def main() -> None:
                 db_cfg.password = getpass.getpass(f"{config.engine.title()} Password: ")
             if hasattr(args, "ssl_mode") and args.ssl_mode:
                 db_cfg.ssl_mode = args.ssl_mode
+            if config.engine == "mysql":
+                if getattr(args, "mysql_ssl_ca", None):
+                    config.mysql.ssl_ca = args.mysql_ssl_ca
+                if getattr(args, "mysql_ssl_cert", None):
+                    config.mysql.ssl_cert = args.mysql_ssl_cert
+                if getattr(args, "mysql_ssl_key", None):
+                    config.mysql.ssl_key = args.mysql_ssl_key
 
         # Set up logging
         logger = setup_logging(config.log_level, config.log_file)

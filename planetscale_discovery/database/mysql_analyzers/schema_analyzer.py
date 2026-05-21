@@ -74,7 +74,24 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
         return results
 
     def _analyze_per_database(self, database_list: List[str]) -> Dict[str, Any]:
-        """Iterate USE <db> for each database and merge results."""
+        """Iterate USE <db> for each database and merge results.
+
+        Captures the connection's default schema before iterating and
+        restores it in a finally block so downstream analyzers
+        (performance, replication, security, features) reusing this
+        connection don't inherit whichever database we happened to land on
+        last.
+        """
+        original_db = None
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT DATABASE()")
+            row = cursor.fetchone()
+            original_db = row[0] if row and row[0] else None
+            cursor.close()
+        except Exception as e:
+            self.logger.debug(f"Could not capture original schema: {e}")
+
         merged = {
             "database_catalog": database_list,
             "table_analysis": [],
@@ -93,32 +110,45 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             "db_column_types": [],
         }
 
-        for db in database_list:
-            try:
-                cursor = self.connection.cursor()
-                cursor.execute("USE " + _quote_identifier(db))
-                cursor.close()
-            except Exception as e:
-                self.logger.warning(f"Cannot USE `{db}`, skipping: {e}")
-                continue
+        try:
+            for db in database_list:
+                try:
+                    cursor = self.connection.cursor()
+                    cursor.execute("USE " + _quote_identifier(db))
+                    cursor.close()
+                except Exception as e:
+                    self.logger.warning(f"Cannot USE `{db}`, skipping: {e}")
+                    continue
 
-            self.logger.info(f"Analyzing database: {db}")
+                self.logger.info(f"Analyzing database: {db}")
 
-            merged["table_analysis"].extend(self._get_table_analysis())
-            merged["column_analysis"].extend(self._get_column_analysis())
-            merged["index_analysis"].extend(self._get_index_analysis())
-            merged["view_analysis"].extend(self._get_view_analysis())
-            routines = self._get_routine_analysis()
-            merged["routine_analysis"].extend(routines)
-            merged["function_analysis"].extend(routines)
-            merged["trigger_analysis"].extend(self._get_trigger_analysis())
-            merged["constraint_analysis"].extend(self._get_constraint_analysis())
-            merged["check_constraint_analysis"].extend(self._get_check_constraints())
-            merged["partition_analysis"].extend(self._get_partition_analysis())
-            merged["db_object_counts"].extend(self._get_db_object_counts())
-            merged["db_storage_engines"].extend(self._get_db_storage_engines())
-            merged["db_index_types"].extend(self._get_db_index_types())
-            merged["db_column_types"].extend(self._get_db_column_types())
+                merged["table_analysis"].extend(self._get_table_analysis())
+                merged["column_analysis"].extend(self._get_column_analysis())
+                merged["index_analysis"].extend(self._get_index_analysis())
+                merged["view_analysis"].extend(self._get_view_analysis())
+                routines = self._get_routine_analysis()
+                merged["routine_analysis"].extend(routines)
+                merged["function_analysis"].extend(routines)
+                merged["trigger_analysis"].extend(self._get_trigger_analysis())
+                merged["constraint_analysis"].extend(self._get_constraint_analysis())
+                merged["check_constraint_analysis"].extend(
+                    self._get_check_constraints()
+                )
+                merged["partition_analysis"].extend(self._get_partition_analysis())
+                merged["db_object_counts"].extend(self._get_db_object_counts())
+                merged["db_storage_engines"].extend(self._get_db_storage_engines())
+                merged["db_index_types"].extend(self._get_db_index_types())
+                merged["db_column_types"].extend(self._get_db_column_types())
+        finally:
+            if original_db:
+                try:
+                    cursor = self.connection.cursor()
+                    cursor.execute("USE " + _quote_identifier(original_db))
+                    cursor.close()
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to restore original schema {original_db}: {e}"
+                    )
 
         # Sort tables by size descending (they come pre-sorted per-db but not globally)
         merged["table_analysis"].sort(

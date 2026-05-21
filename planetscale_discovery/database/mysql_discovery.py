@@ -29,6 +29,9 @@ class MySQLDiscoveryTool:
             "password": self.config.mysql.password,
             "database": self.config.mysql.database,
             "ssl_mode": self.config.mysql.ssl_mode,
+            "ssl_ca": self.config.mysql.ssl_ca,
+            "ssl_cert": self.config.mysql.ssl_cert,
+            "ssl_key": self.config.mysql.ssl_key,
             "connect_timeout": self.config.mysql.connection_timeout,
         }
 
@@ -85,12 +88,41 @@ class MySQLDiscovery:
                 "autocommit": True,
             }
 
-            # Handle SSL — PyMySQL expects ssl= to be a dict, not a bool
+            # SSL handling — map MySQL-style ssl_mode to PyMySQL params.
+            #   disabled              -> ssl_disabled=True, no TLS
+            #   preferred / required  -> ssl={}, TLS on, no cert chain verification
+            #   verify-ca             -> ssl_ca required, verify chain only
+            #   verify-identity       -> ssl_ca required, verify chain + hostname
             ssl_mode = (self.connection_params.get("ssl_mode", "") or "").lower()
-            if ssl_mode and ssl_mode not in ("disabled",):
-                params["ssl"] = {
+            ssl_ca = self.connection_params.get("ssl_ca")
+            ssl_cert = self.connection_params.get("ssl_cert")
+            ssl_key = self.connection_params.get("ssl_key")
+
+            if ssl_mode in ("", "disabled"):
+                params["ssl_disabled"] = True
+            elif ssl_mode in ("preferred", "required"):
+                params["ssl"] = {}
+            elif ssl_mode in ("verify-ca", "verify-identity"):
+                if not ssl_ca:
+                    self.logger.error(
+                        f"ssl_mode={ssl_mode!r} requires ssl_ca to be set "
+                        "(--mysql-ssl-ca or MYSQL_SSL_CA)"
+                    )
+                    return False
+                ssl_dict: Dict[str, Any] = {
+                    "ca": ssl_ca,
                     "check_hostname": ssl_mode == "verify-identity",
                 }
+                if ssl_cert:
+                    ssl_dict["cert"] = ssl_cert
+                if ssl_key:
+                    ssl_dict["key"] = ssl_key
+                params["ssl"] = ssl_dict
+            else:
+                self.logger.warning(
+                    f"Unknown ssl_mode {ssl_mode!r}; treating as disabled"
+                )
+                params["ssl_disabled"] = True
 
             # Connect to specific database, or information_schema as fallback
             db = self.connection_params.get("database", "")
@@ -195,9 +227,9 @@ class MySQLDiscovery:
             return
         self._scan_for_errors(module_name, module_results, "")
 
-    def _scan_for_errors(self, module_name: str, data: dict, path: str):
+    def _scan_for_errors(self, module_name: str, data: Any, path: str):
         if isinstance(data, dict):
-            if "error" in data and "status" in data:
+            if "error" in data:
                 feature_name = path or "general"
                 self._add_analysis_gap(
                     module_name,
@@ -206,11 +238,13 @@ class MySQLDiscovery:
                     str(data["error"]),
                     "medium",
                 )
-            else:
-                for key, value in data.items():
-                    if isinstance(value, dict):
-                        new_path = f"{path}.{key}" if path else key
-                        self._scan_for_errors(module_name, value, new_path)
+                return  # don't recurse into an error subtree
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._scan_for_errors(module_name, value, new_path)
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                self._scan_for_errors(module_name, item, f"{path}[{i}]")
 
     def close(self):
         if self.connection:

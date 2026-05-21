@@ -267,3 +267,94 @@ class TestQuoteIdentifier:
         assert quoted == "`foo``; DROP TABLE x; --`"
         # The semicolon and DROP end up inside the identifier, not as separate SQL.
         assert quoted.startswith("`") and quoted.endswith("`")
+
+
+class TestPerDatabaseSchemaRestore:
+    """Verify _analyze_per_database restores the connection's default schema."""
+
+    def _make_analyzer(self, original_db, executed):
+        """Build an analyzer whose cursor records every executed statement
+        and reports `original_db` as the current default schema."""
+        connection = MagicMock()
+
+        def make_cursor():
+            cursor = MagicMock()
+
+            def execute(sql, *_args, **_kwargs):
+                executed.append(sql)
+
+            cursor.execute.side_effect = execute
+            cursor.fetchone.return_value = (original_db,) if original_db else (None,)
+            return cursor
+
+        connection.cursor.side_effect = make_cursor
+        return MySQLSchemaAnalyzer(connection)
+
+    def test_original_schema_restored_after_iteration(self):
+        executed = []
+        analyzer = self._make_analyzer("app_prod", executed)
+
+        with (
+            patch.object(analyzer, "_get_table_analysis", return_value=[]),
+            patch.object(analyzer, "_get_column_analysis", return_value=[]),
+            patch.object(analyzer, "_get_index_analysis", return_value=[]),
+            patch.object(analyzer, "_get_view_analysis", return_value=[]),
+            patch.object(analyzer, "_get_routine_analysis", return_value=[]),
+            patch.object(analyzer, "_get_trigger_analysis", return_value=[]),
+            patch.object(analyzer, "_get_constraint_analysis", return_value=[]),
+            patch.object(analyzer, "_get_check_constraints", return_value=[]),
+            patch.object(analyzer, "_get_partition_analysis", return_value=[]),
+            patch.object(analyzer, "_get_db_object_counts", return_value=[]),
+            patch.object(analyzer, "_get_db_storage_engines", return_value=[]),
+            patch.object(analyzer, "_get_db_index_types", return_value=[]),
+            patch.object(analyzer, "_get_db_column_types", return_value=[]),
+        ):
+            analyzer._analyze_per_database(["db_one", "db_two"])
+
+        # Last USE should restore the original default schema, not leave us on db_two.
+        use_statements = [s for s in executed if s.startswith("USE ")]
+        assert use_statements[-1] == "USE `app_prod`"
+        assert "USE `db_one`" in use_statements
+        assert "USE `db_two`" in use_statements
+
+    def test_no_restore_attempt_when_original_unknown(self):
+        executed = []
+        analyzer = self._make_analyzer(None, executed)
+
+        with (
+            patch.object(analyzer, "_get_table_analysis", return_value=[]),
+            patch.object(analyzer, "_get_column_analysis", return_value=[]),
+            patch.object(analyzer, "_get_index_analysis", return_value=[]),
+            patch.object(analyzer, "_get_view_analysis", return_value=[]),
+            patch.object(analyzer, "_get_routine_analysis", return_value=[]),
+            patch.object(analyzer, "_get_trigger_analysis", return_value=[]),
+            patch.object(analyzer, "_get_constraint_analysis", return_value=[]),
+            patch.object(analyzer, "_get_check_constraints", return_value=[]),
+            patch.object(analyzer, "_get_partition_analysis", return_value=[]),
+            patch.object(analyzer, "_get_db_object_counts", return_value=[]),
+            patch.object(analyzer, "_get_db_storage_engines", return_value=[]),
+            patch.object(analyzer, "_get_db_index_types", return_value=[]),
+            patch.object(analyzer, "_get_db_column_types", return_value=[]),
+        ):
+            analyzer._analyze_per_database(["db_one"])
+
+        use_statements = [s for s in executed if s.startswith("USE ")]
+        # We USE db_one to analyze it but should not attempt a restore.
+        assert use_statements == ["USE `db_one`"]
+
+    def test_original_schema_restored_even_if_iteration_raises(self):
+        executed = []
+        analyzer = self._make_analyzer("app_prod", executed)
+
+        with (
+            patch.object(
+                analyzer,
+                "_get_table_analysis",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            with pytest.raises(RuntimeError):
+                analyzer._analyze_per_database(["db_one"])
+
+        use_statements = [s for s in executed if s.startswith("USE ")]
+        assert use_statements[-1] == "USE `app_prod`"
