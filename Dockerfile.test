@@ -1,0 +1,23 @@
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends postgresql-client && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies first for layer caching
+COPY requirements.txt setup.py README.md ./
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir pytest pytest-cov pytest-mock moto responses black flake8 mypy bandit
+
+# Copy source code
+COPY . .
+
+# Install package in editable mode with all extras
+RUN pip install --no-cache-dir -e ".[all]"
+
+# Default: run all tests
+CMD ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
