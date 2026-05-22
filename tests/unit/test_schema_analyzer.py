@@ -225,6 +225,61 @@ class TestSchemaAnalyzer:
         result = analyzer._get_database_catalog()
         assert result == []
 
+    def test_get_database_catalog_excludes_rdsadmin_by_default(self, mock_connection):
+        """Test that rdsadmin is excluded from catalog queries even without config"""
+        connection, _ = mock_connection
+
+        main_cursor = MagicMock()
+        main_cursor.fetchall.return_value = []
+        cursor_calls = []
+
+        def cursor_factory():
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=main_cursor)
+            ctx.__exit__ = MagicMock(return_value=None)
+            cursor_calls.append(1)
+            return ctx
+
+        connection.cursor.side_effect = cursor_factory
+
+        analyzer = SchemaAnalyzer(connection)
+        analyzer._get_database_catalog()
+
+        call_args = main_cursor.execute.call_args
+        excluded_param = call_args[0][1][0]  # execute(sql, (excluded,)) -> unwrap tuple
+        assert "rdsadmin" in excluded_param
+        assert "template0" in excluded_param
+        assert "template1" in excluded_param
+
+    def test_get_database_catalog_respects_excluded_databases_config(
+        self, mock_connection
+    ):
+        """Test that user-configured excluded_databases are added to the exclusion list"""
+        connection, _ = mock_connection
+
+        main_cursor = MagicMock()
+        main_cursor.fetchall.return_value = []
+        cursor_calls = []
+
+        def cursor_factory():
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=main_cursor)
+            ctx.__exit__ = MagicMock(return_value=None)
+            cursor_calls.append(1)
+            return ctx
+
+        connection.cursor.side_effect = cursor_factory
+
+        analyzer = SchemaAnalyzer(
+            connection, config={"excluded_databases": ["myinternaldb"]}
+        )
+        analyzer._get_database_catalog()
+
+        call_args = main_cursor.execute.call_args
+        excluded_param = call_args[0][1][0]  # execute(sql, (excluded,)) -> unwrap tuple
+        assert "myinternaldb" in excluded_param
+        assert "rdsadmin" in excluded_param
+
     # ---------------------------------------------------------------
     # _get_schema_inventory()
     # ---------------------------------------------------------------
