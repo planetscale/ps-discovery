@@ -236,11 +236,12 @@ class NeonAnalyzer(CloudAnalyzer):
             # doesn't surface plan on the project response, so we need this
             # for the plan_tiers summary to be non-empty. One extra API call.
             orgs = self._list_user_organizations()
-            self._org_plans = {
-                org["id"]: org.get("plan")
-                for org in orgs
-                if org.get("id") and org.get("plan")
-            }
+            self._org_plans = {}
+            for org in orgs:
+                oid = org.get("id")
+                plan = org.get("plan")
+                if oid and plan:
+                    self._org_plans[oid] = plan
 
             if target_project:
                 project_data = self._analyze_project(target_project)
