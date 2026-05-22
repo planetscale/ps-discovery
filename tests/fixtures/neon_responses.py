@@ -1,6 +1,63 @@
 """
 Mock Neon API responses for testing.
+
+These fixtures mirror the shapes Neon's Platform API actually returns today
+(post-org-migration). Projects belong to organizations and identify their
+owner via `owner_id` (a string), not a nested `owner` object. Plan tiers
+live on the organization, not the project.
+
+To refresh from a live API:
+  curl -H "Authorization: Bearer $NEON_API_KEY" \\
+       https://console.neon.tech/api/v2/users/me/organizations
+  curl -H "Authorization: Bearer $NEON_API_KEY" \\
+       "https://console.neon.tech/api/v2/projects?org_id=<org-id>&limit=2"
 """
+
+NEON_USERS_ME_RESPONSE = {
+    "id": "user-test-id-12345",
+    "login": "testuser",
+    "email": "testuser@example.com",
+    "name": "Test",
+    "last_name": "User",
+    "plan": "free",
+    "projects_limit": 0,
+    "branches_limit": 0,
+}
+
+# /users/me/organizations — the source of truth for the plan tier
+NEON_ORGS_RESPONSE = {
+    "organizations": [
+        {
+            "id": "org-test-alpha",
+            "name": "Alpha Co",
+            "handle": "alpha-co-org",
+            "plan": "launch",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "managed_by": "console",
+            "require_mfa": False,
+        },
+        {
+            "id": "org-test-beta",
+            "name": "Beta Inc",
+            "handle": "beta-inc-org",
+            "plan": "free",
+            "created_at": "2026-02-01T00:00:00Z",
+            "updated_at": "2026-02-01T00:00:00Z",
+            "managed_by": "console",
+            "require_mfa": False,
+        },
+    ]
+}
+
+# /projects 400 when projects are org-scoped and no org_id is provided
+NEON_PROJECTS_ORG_REQUIRED_400 = {
+    "request_id": "test-request-id",
+    "code": "",
+    "message": (
+        "org_id is required, you can find it on your " "organization settings page"
+    ),
+}
 
 NEON_PROJECTS_RESPONSE = {
     "projects": [
@@ -11,9 +68,8 @@ NEON_PROJECTS_RESPONSE = {
             "pg_version": 16,
             "created_at": "2024-06-01T10:00:00Z",
             "updated_at": "2024-12-15T14:30:00Z",
-            "owner": {
-                "subscription_type": "scale",
-            },
+            "owner_id": "org-test-alpha",
+            "org_id": "org-test-alpha",
         },
         {
             "id": "project-def-456",
@@ -22,9 +78,8 @@ NEON_PROJECTS_RESPONSE = {
             "pg_version": 17,
             "created_at": "2025-01-10T08:00:00Z",
             "updated_at": "2025-03-20T12:00:00Z",
-            "owner": {
-                "subscription_type": "free",
-            },
+            "owner_id": "org-test-beta",
+            "org_id": "org-test-beta",
         },
     ],
     "pagination": {},
@@ -38,9 +93,8 @@ NEON_SINGLE_PROJECT_RESPONSE = {
         "pg_version": 16,
         "created_at": "2024-06-01T10:00:00Z",
         "updated_at": "2024-12-15T14:30:00Z",
-        "owner": {
-            "subscription_type": "scale",
-        },
+        "owner_id": "org-test-alpha",
+        "org_id": "org-test-alpha",
     }
 }
 
@@ -144,7 +198,8 @@ NEON_PROJECTS_PAGE_1 = {
             "pg_version": 16,
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-06-01T00:00:00Z",
-            "owner": {"subscription_type": "scale"},
+            "owner_id": "org-test-alpha",
+            "org_id": "org-test-alpha",
         },
     ],
     "pagination": {
@@ -161,7 +216,8 @@ NEON_PROJECTS_PAGE_2 = {
             "pg_version": 17,
             "created_at": "2025-01-01T00:00:00Z",
             "updated_at": "2025-03-01T00:00:00Z",
-            "owner": {"subscription_type": "free"},
+            "owner_id": "org-test-beta",
+            "org_id": "org-test-beta",
         },
     ],
     "pagination": {},

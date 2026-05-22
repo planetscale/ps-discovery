@@ -84,6 +84,9 @@ class NeonAnalyzer(CloudAnalyzer):
         self.api_key = None
         self.api_base_url = "https://console.neon.tech/api/v2"
         self.session = None
+        # owner_id (org_id) -> plan tier, populated during _discover_projects
+        # so per-project results can carry the org's plan.
+        self._org_plans: Dict[str, str] = {}
 
     def discover_resources(self) -> List[str]:
         """Discover available Neon projects."""
@@ -229,6 +232,16 @@ class NeonAnalyzer(CloudAnalyzer):
             target_project = getattr(self.config, "target_project", None)
             org_id = getattr(self.config, "org_id", None)
 
+            # Pre-fetch orgs to build owner_id -> plan map. Modern Neon API
+            # doesn't surface plan on the project response, so we need this
+            # for the plan_tiers summary to be non-empty. One extra API call.
+            orgs = self._list_user_organizations()
+            self._org_plans = {
+                org["id"]: org.get("plan")
+                for org in orgs
+                if org.get("id") and org.get("plan")
+            }
+
             if target_project:
                 project_data = self._analyze_project(target_project)
                 if project_data:
@@ -242,7 +255,6 @@ class NeonAnalyzer(CloudAnalyzer):
             # No org filter — try unscoped listing, fall back to per-org iteration
             unscoped, needs_org = self._list_projects_unscoped()
             if needs_org:
-                orgs = self._list_user_organizations()
                 if not orgs:
                     self.add_warning(
                         "Neon API requires an org_id but no organizations were "
@@ -367,6 +379,17 @@ class NeonAnalyzer(CloudAnalyzer):
                 data = response.json()
                 project_info = data.get("project", data)
 
+            # Plan tier lives on the organization, not the project. Modern
+            # API: look up via owner_id in the org map we built during
+            # discovery. Legacy API (pre-org-migration): some responses
+            # included a nested owner object with subscription_type.
+            owner_id = project_info.get("owner_id") or project_info.get("org_id")
+            plan = self._org_plans.get(owner_id) if owner_id else None
+            if not plan:
+                legacy_owner = project_info.get("owner")
+                if isinstance(legacy_owner, dict):
+                    plan = legacy_owner.get("subscription_type")
+
             project_data = {
                 "project_id": project_id,
                 "timestamp": generate_timestamp(),
@@ -375,11 +398,8 @@ class NeonAnalyzer(CloudAnalyzer):
                 "pg_version": project_info.get("pg_version"),
                 "created_at": project_info.get("created_at"),
                 "updated_at": project_info.get("updated_at"),
-                "plan": (
-                    project_info.get("owner", {}).get("subscription_type")
-                    if isinstance(project_info.get("owner"), dict)
-                    else None
-                ),
+                "owner_id": owner_id,
+                "plan": plan,
             }
 
             # Fetch branches
