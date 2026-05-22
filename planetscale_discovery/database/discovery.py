@@ -74,6 +74,7 @@ class PostgreSQLDiscovery:
         self.results = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "discovery_version": __version__,
+            "engine": "postgres",
             "connection_info": {},
             "analysis_results": {},
             "analysis_gaps": [],

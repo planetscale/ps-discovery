@@ -26,6 +26,8 @@ google-cloud-alloydb>=0.7.0
 google-auth>=2.48.0
 google-api-python-client>=2.190.0
 
-# Supabase cloud discovery dependencies (optional - only if Supabase analysis needed)
-# Uncomment the following line if you plan to analyze Supabase managed PostgreSQL:
-# requests>=2.32.5
+# HTTP-based cloud provider dependencies (Supabase, Heroku, Neon)
+requests>=2.32.5
+
+# MySQL database discovery dependencies
+PyMySQL>=1.1.0

@@ -223,6 +223,98 @@ class GCPAnalyzer(CloudAnalyzer):
 
         return region_analysis
 
+    def _fetch_cloud_sql_instances_raw(self, region: str) -> List[Dict[str, Any]]:
+        """Fetch Cloud SQL instance dicts honoring discover_all and resources config.
+
+        If resources.cloud_sql_instances is populated, only those are fetched
+        (narrowing scope regardless of discover_all). Otherwise, discover_all
+        controls whether all instances are listed or discovery is skipped.
+        """
+        discover_all = self.config.get("discover_all", True)
+        resources = self.config.get("resources") or {}
+        names = resources.get("cloud_sql_instances") or []
+
+        if names:
+            items: List[Dict[str, Any]] = []
+            for name in names:
+                try:
+                    instance = (
+                        self.sqladmin_service.instances()
+                        .get(project=self.project_id, instance=name)
+                        .execute()
+                    )
+                    items.append(instance)
+                except HttpError as e:
+                    if e.resp.status == 404:
+                        self.logger.debug(
+                            f"Cloud SQL instance '{name}' not found in project "
+                            f"{self.project_id}"
+                        )
+                    else:
+                        self.add_warning(
+                            f"Failed to describe Cloud SQL instance '{name}': {e}"
+                        )
+            return items
+
+        if not discover_all:
+            self.add_warning(
+                f"discover_all=false and no resources.cloud_sql_instances configured; "
+                f"skipping Cloud SQL instance discovery in {region}"
+            )
+            return []
+
+        request = self.sqladmin_service.instances().list(project=self.project_id)
+        response = request.execute()
+        return response.get("items", [])
+
+    def _fetch_alloydb_clusters_raw(self, region: str) -> List[Any]:
+        """Fetch AlloyDB cluster objects honoring discover_all and resources config.
+
+        If resources.alloydb_clusters is populated, only those are fetched
+        (narrowing scope regardless of discover_all). Otherwise, discover_all
+        controls whether all clusters are listed or discovery is skipped.
+        """
+        discover_all = self.config.get("discover_all", True)
+        resources = self.config.get("resources") or {}
+        names = resources.get("alloydb_clusters") or []
+
+        alloydb_client = alloydb_v1.AlloyDBAdminClient(credentials=self.credentials)
+        parent = f"projects/{self.project_id}/locations/{region}"
+
+        if names:
+            clusters = []
+            for name in names:
+                try:
+                    cluster = alloydb_client.get_cluster(
+                        request=alloydb_v1.GetClusterRequest(
+                            name=f"{parent}/clusters/{name}"
+                        )
+                    )
+                    clusters.append(cluster)
+                except Exception as e:
+                    status_code = getattr(
+                        getattr(e, "code", lambda: None)(), "value", None
+                    )
+                    if status_code == 5 or "not found" in str(e).lower():
+                        self.logger.debug(
+                            f"AlloyDB cluster '{name}' not found in {region}"
+                        )
+                    else:
+                        self.add_warning(
+                            f"Failed to describe AlloyDB cluster '{name}' in {region}: {e}"
+                        )
+            return clusters
+
+        if not discover_all:
+            self.add_warning(
+                f"discover_all=false and no resources.alloydb_clusters configured; "
+                f"skipping AlloyDB cluster discovery in {region}"
+            )
+            return []
+
+        request = alloydb_v1.ListClustersRequest(parent=parent)
+        return list(alloydb_client.list_clusters(request=request))
+
     def _analyze_cloud_sql_instances(self, region: str) -> List[Dict[str, Any]]:
         """Analyze Cloud SQL instances in a region."""
         instances = []
@@ -232,17 +324,15 @@ class GCPAnalyzer(CloudAnalyzer):
             return instances
 
         try:
-            # List all Cloud SQL instances in the project
-            request = self.sqladmin_service.instances().list(project=self.project_id)
-            response = request.execute()
+            items = self._fetch_cloud_sql_instances_raw(region)
 
-            if "items" not in response:
+            if not items:
                 self.logger.info(
                     f"No Cloud SQL instances found in project {self.project_id}"
                 )
                 return instances
 
-            for instance in response.get("items", []):
+            for instance in items:
                 # Skip instances not in this region
                 instance_region = instance.get("region", "")
                 if instance_region and instance_region != region:
@@ -356,11 +446,7 @@ class GCPAnalyzer(CloudAnalyzer):
         clusters = []
 
         try:
-            alloydb_client = alloydb_v1.AlloyDBAdminClient(credentials=self.credentials)
-            parent = f"projects/{self.project_id}/locations/{region}"
-            request = alloydb_v1.ListClustersRequest(parent=parent)
-
-            for cluster in alloydb_client.list_clusters(request=request):
+            for cluster in self._fetch_alloydb_clusters_raw(region):
                 cluster_analysis = {
                     "name": cluster.name.split("/")[-1],
                     "full_name": cluster.name,

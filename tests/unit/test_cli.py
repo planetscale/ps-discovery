@@ -85,10 +85,10 @@ class TestCommonArguments:
         assert args.output_dir == "/tmp/results"
 
     def test_output_dir_default(self):
-        """Test default output directory."""
+        """Test default output directory is unset at the CLI layer so config wins."""
         parser = create_main_parser()
         args = parser.parse_args(["cloud"])
-        assert args.output_dir == "./discovery_output"
+        assert args.output_dir is None
 
     def test_log_level_argument(self):
         """Test --log-level argument."""
@@ -152,7 +152,21 @@ class TestDatabaseArguments:
         """Test default analyzers."""
         parser = create_main_parser()
         args = parser.parse_args(["database"])
-        assert args.analyzers == "config,schema,performance,security,features"
+        assert args.analyzers is None
+
+    def test_engine_default_is_none(self):
+        """--engine unset should be None so a YAML `engine:` value wins."""
+        parser = create_main_parser()
+        args = parser.parse_args(["database"])
+        assert args.engine is None
+        args = parser.parse_args(["both"])
+        assert args.engine is None
+
+    def test_engine_flag_parses(self):
+        """--engine mysql should be picked up explicitly."""
+        parser = create_main_parser()
+        args = parser.parse_args(["database", "--engine", "mysql"])
+        assert args.engine == "mysql"
 
 
 class TestCloudArguments:
@@ -212,7 +226,7 @@ class TestConfigFileHandling:
                     pass
 
         mock_manager.save_config_template.assert_called_once_with(
-            "test.yaml", providers=[]
+            "test.yaml", providers=[], engines=["postgres"]
         )
 
     @patch("planetscale_discovery.cli.ConfigManager")

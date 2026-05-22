@@ -10,7 +10,7 @@ authors = [{name = "PlanetScale", email = "engineering@planetscale.com"}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
-keywords = ["postgresql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku"]
+keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: System Administrators",
@@ -24,11 +24,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "psycopg2-binary>=2.9.11",
+    "psycopg2-binary>=2.9",
     "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
+postgres = [
+    "psycopg2-binary>=2.9",
+]
+mysql = [
+    "PyMySQL>=1.1.0",
+]
 aws = [
     "boto3>=1.42.78",
     "botocore>=1.42.78",
@@ -48,6 +54,8 @@ heroku = [
     "requests>=2.32.5",
 ]
 all = [
+    "psycopg2-binary>=2.9",
+    "PyMySQL>=1.1.0",
     "boto3>=1.42.78",
     "botocore>=1.42.78",
     "google-cloud-resource-manager>=1.16.0",

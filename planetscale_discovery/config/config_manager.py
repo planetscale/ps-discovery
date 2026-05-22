@@ -43,6 +43,22 @@ class DatabaseConfig:
 
 
 @dataclass
+class MySQLConfig:
+    """MySQL connection configuration."""
+
+    host: str = "localhost"
+    port: int = 3306
+    database: str = ""
+    username: str = "root"
+    password: str = ""
+    ssl_mode: str = "disabled"
+    ssl_ca: Optional[str] = None
+    ssl_cert: Optional[str] = None
+    ssl_key: Optional[str] = None
+    connection_timeout: int = 30
+
+
+@dataclass
 class AWSConfig:
     """AWS provider configuration."""
 
@@ -103,7 +119,9 @@ class OutputConfig:
 class DiscoveryConfig:
     """Main discovery configuration."""
 
+    engine: str = "postgres"  # "postgres" or "mysql"
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    mysql: MySQLConfig = field(default_factory=MySQLConfig)
     aws: AWSConfig = field(default_factory=AWSConfig)
     gcp: GCPConfig = field(default_factory=GCPConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
@@ -204,6 +222,23 @@ class ConfigManager:
                 )
                 db_config.data_size = data_size_config
 
+        # Parse MySQL config
+        mysql_config = MySQLConfig()
+        if "mysql" in config_data:
+            my_data = config_data["mysql"] or {}
+            mysql_config.host = my_data.get("host", mysql_config.host)
+            mysql_config.port = my_data.get("port", mysql_config.port)
+            mysql_config.database = my_data.get("database", mysql_config.database)
+            mysql_config.username = my_data.get("username", mysql_config.username)
+            mysql_config.password = my_data.get("password", mysql_config.password)
+            mysql_config.ssl_mode = my_data.get("ssl_mode", mysql_config.ssl_mode)
+            mysql_config.ssl_ca = my_data.get("ssl_ca", mysql_config.ssl_ca)
+            mysql_config.ssl_cert = my_data.get("ssl_cert", mysql_config.ssl_cert)
+            mysql_config.ssl_key = my_data.get("ssl_key", mysql_config.ssl_key)
+            mysql_config.connection_timeout = my_data.get(
+                "connection_timeout", mysql_config.connection_timeout
+            )
+
         # Parse AWS config
         aws_config = AWSConfig()
         if "providers" in config_data and "aws" in (config_data["providers"] or {}):
@@ -279,7 +314,9 @@ class ConfigManager:
             )
 
         return DiscoveryConfig(
+            engine=config_data.get("engine", "postgres"),
             database=db_config,
+            mysql=mysql_config,
             aws=aws_config,
             gcp=gcp_config,
             supabase=supabase_config,
@@ -301,6 +338,19 @@ class ConfigManager:
             username=os.getenv("PGUSER", ""),
             password=os.getenv("PGPASSWORD", ""),
             ssl_mode=os.getenv("PGSSLMODE", "prefer"),
+        )
+
+        # MySQL configuration
+        mysql_config = MySQLConfig(
+            host=os.getenv("MYSQL_HOST", "localhost"),
+            port=int(os.getenv("MYSQL_PORT", "3306")),
+            database=os.getenv("MYSQL_DATABASE", ""),
+            username=os.getenv("MYSQL_USER", "root"),
+            password=os.getenv("MYSQL_PASSWORD", ""),
+            ssl_mode=os.getenv("MYSQL_SSL_MODE", "disabled"),
+            ssl_ca=os.getenv("MYSQL_SSL_CA"),
+            ssl_cert=os.getenv("MYSQL_SSL_CERT"),
+            ssl_key=os.getenv("MYSQL_SSL_KEY"),
         )
 
         # AWS configuration
@@ -351,7 +401,9 @@ class ConfigManager:
         )
 
         return DiscoveryConfig(
+            engine=os.getenv("DISCOVERY_ENGINE", "postgres"),
             database=db_config,
+            mysql=mysql_config,
             aws=aws_config,
             gcp=gcp_config,
             supabase=supabase_config,
@@ -369,6 +421,14 @@ class ConfigManager:
 
         errors = []
 
+        # Validate engine
+        valid_engines = {"postgres", "mysql"}
+        if self.config.engine not in valid_engines:
+            errors.append(
+                f"Invalid engine: {self.config.engine}. "
+                f"Valid engines are: {', '.join(sorted(valid_engines))}"
+            )
+
         # Validate modules
         valid_modules = {"database", "cloud"}
         for module in self.config.modules:
@@ -376,9 +436,9 @@ class ConfigManager:
                 errors.append(f"Invalid module: {module}")
 
         # Validate database config if database module enabled
-        if "database" in self.config.modules:
+        if "database" in self.config.modules and self.config.engine == "postgres":
             if not self.config.database.database:
-                errors.append("Database name is required for database discovery")
+                errors.append("Database name is required for PostgreSQL discovery")
 
         # Validate cloud providers if cloud module enabled
         if "cloud" in self.config.modules:
@@ -399,7 +459,7 @@ class ConfigManager:
             raise ValueError("Configuration validation failed:\n" + "\n".join(errors))
 
     def save_config_template(
-        self, output_path: str, providers: list[str] = None
+        self, output_path: str, providers: List[str] = None, engines: List[str] = None
     ) -> None:
         """Save a configuration template file.
 
@@ -407,22 +467,31 @@ class ConfigManager:
             output_path: Path where the template should be saved
             providers: List of cloud providers to include (aws, gcp, supabase, heroku).
                       If None or empty, no cloud provider sections are generated.
+            engines: List of database engines to include (postgres, mysql).
+                    Defaults to ["postgres"].
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if providers is None:
             providers = []
+        if engines is None:
+            engines = ["postgres"]
 
-        # Normalize provider names
+        # Normalize names
         providers = [p.strip().lower() for p in providers]
+        engines = [e.strip().lower() for e in engines]
 
         if output_path.suffix.lower() in [".yaml", ".yml"]:
-            # Start with base template
+            # Start with header
             template_yaml = """# PlanetScale Discovery Configuration
 # Generated for your selected providers
+"""
 
-# Database connection settings (required for database discovery)
+            # Add database engine sections
+            if "postgres" in engines:
+                template_yaml += """
+# PostgreSQL connection settings
 database:
   host: localhost
   port: 5432
@@ -430,6 +499,22 @@ database:
   username: your_username
   password: your_password
   ssl_mode: prefer  # Options: disable, allow, prefer, require, verify-ca, verify-full
+"""
+
+            if "mysql" in engines:
+                template_yaml += """
+# MySQL connection settings (use with --engine mysql)
+mysql:
+  host: localhost
+  port: 3306
+  database: ""  # Leave empty to discover all databases
+  username: root
+  password: your_password
+  ssl_mode: disabled  # Options: disabled, preferred, required, verify-ca, verify-identity
+  # For verify-ca / verify-identity, ssl_ca is required.
+  # ssl_ca: /path/to/server-ca.pem
+  # ssl_cert: /path/to/client-cert.pem   # optional, for mutual TLS
+  # ssl_key: /path/to/client-key.pem     # optional, for mutual TLS
 """
 
             # Add cloud provider sections if any were specified
