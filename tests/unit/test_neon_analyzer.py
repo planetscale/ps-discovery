@@ -67,7 +67,7 @@ class TestNeonAnalyzer:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"projects": [], "pagination": {}}
+        mock_response.json.return_value = {"id": "user-123", "login": "test"}
         mock_session.get.return_value = mock_response
 
         config = MagicMock()
@@ -77,6 +77,12 @@ class TestNeonAnalyzer:
         result = analyzer.authenticate()
         assert result is True
         assert analyzer.session is not None
+        # Auth must probe /users/me, NOT /projects — the latter returns HTTP 400
+        # "org_id is required" for accounts where projects live under an org.
+        probed_url = mock_session.get.call_args[0][0]
+        assert probed_url.endswith(
+            "/users/me"
+        ), f"auth probe must hit /users/me, got {probed_url}"
 
     @patch("requests.Session")
     def test_authenticate_with_env_var(self, mock_session_class):
@@ -335,6 +341,115 @@ class TestNeonAnalyzer:
             result = analyzer.analyze()
             assert isinstance(result, dict)
             assert "error" in result
+
+    def test_discover_projects_falls_back_to_org_iteration(self):
+        """When unscoped /projects returns the org_id-required 400, the analyzer
+        should auto-discover the user's orgs and list each one."""
+        config = MagicMock()
+        config.api_key = "test_key"
+        config.target_project = None
+        config.org_id = None
+        analyzer = NeonAnalyzer(config)
+        analyzer.session = MagicMock()
+
+        # Unscoped probe → 400 org_id required
+        probe_400 = MagicMock()
+        probe_400.status_code = 400
+        probe_400.json.return_value = {
+            "code": "",
+            "message": "org_id is required, you can find it on your organization settings page",
+        }
+        # /users/me/organizations → 200 with two orgs
+        orgs_resp = MagicMock()
+        orgs_resp.status_code = 200
+        orgs_resp.json.return_value = {
+            "organizations": [
+                {"id": "org-alpha", "name": "Alpha"},
+                {"id": "org-beta", "name": "Beta"},
+            ]
+        }
+        # Per-org /projects?org_id=... → one project each
+        alpha_projects = MagicMock()
+        alpha_projects.status_code = 200
+        alpha_projects.json.return_value = {
+            "projects": [{"id": "proj-alpha", "name": "Alpha Proj", "region_id": "us"}],
+            "pagination": {},
+        }
+        beta_projects = MagicMock()
+        beta_projects.status_code = 200
+        beta_projects.json.return_value = {
+            "projects": [{"id": "proj-beta", "name": "Beta Proj", "region_id": "eu"}],
+            "pagination": {},
+        }
+        analyzer.session.get.side_effect = [
+            probe_400,
+            orgs_resp,
+            alpha_projects,
+            beta_projects,
+        ]
+
+        with (
+            patch.object(analyzer, "_get_branches", return_value=[]),
+            patch.object(analyzer, "_get_endpoints", return_value=[]),
+            patch.object(analyzer, "_get_databases", return_value=[]),
+        ):
+            results = analyzer._discover_projects()
+
+        # Both org projects should be returned
+        ids = sorted(p["project_id"] for p in results)
+        assert ids == ["proj-alpha", "proj-beta"]
+
+    def test_discover_projects_skips_when_no_orgs(self):
+        """If unscoped listing requires org_id AND no orgs are discoverable,
+        emit a warning and return [] rather than crash."""
+        config = MagicMock()
+        config.api_key = "test_key"
+        config.target_project = None
+        config.org_id = None
+        analyzer = NeonAnalyzer(config)
+        analyzer.session = MagicMock()
+
+        probe_400 = MagicMock()
+        probe_400.status_code = 400
+        probe_400.json.return_value = {"message": "org_id is required"}
+        orgs_resp = MagicMock()
+        orgs_resp.status_code = 200
+        orgs_resp.json.return_value = {"organizations": []}
+        analyzer.session.get.side_effect = [probe_400, orgs_resp]
+
+        results = analyzer._discover_projects()
+        assert results == []
+        assert any("org_id" in w["message"] for w in analyzer.warnings)
+
+    def test_discover_projects_unscoped_path_still_works(self):
+        """Legacy accounts that allow listing without org_id should keep working."""
+        config = MagicMock()
+        config.api_key = "test_key"
+        config.target_project = None
+        config.org_id = None
+        analyzer = NeonAnalyzer(config)
+        analyzer.session = MagicMock()
+
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.json.return_value = {
+            "projects": [{"id": "proj-legacy", "name": "Legacy", "region_id": "us"}],
+            "pagination": {},
+        }
+        analyzer.session.get.return_value = ok
+
+        with (
+            patch.object(analyzer, "_get_branches", return_value=[]),
+            patch.object(analyzer, "_get_endpoints", return_value=[]),
+            patch.object(analyzer, "_get_databases", return_value=[]),
+        ):
+            results = analyzer._discover_projects()
+
+        # /users/me/organizations should NOT have been called when the
+        # unscoped listing succeeds.
+        called_urls = [c.args[0] for c in analyzer.session.get.call_args_list]
+        assert not any(u.endswith("/users/me/organizations") for u in called_urls)
+        assert [p["project_id"] for p in results] == ["proj-legacy"]
 
     def test_endpoint_enrichment_with_compute_specs(self):
         """Test that endpoints are enriched with compute specs"""

@@ -5,7 +5,7 @@ Analyzes Neon serverless PostgreSQL projects including branches, compute endpoin
 connection pooling, autoscaling configuration, and database metadata.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import logging
 
 try:
@@ -143,10 +143,11 @@ class NeonAnalyzer(CloudAnalyzer):
                 }
             )
 
-            # Test authentication by listing projects
-            response = self.session.get(
-                f"{self.api_base_url}/projects", params={"limit": 1}
-            )
+            # Probe with /users/me — works for both legacy accounts (projects under
+            # the personal namespace) and modern accounts (projects under an org).
+            # Listing /projects directly requires an org_id when the user's projects
+            # are org-scoped, which causes auth probes without one to return HTTP 400.
+            response = self.session.get(f"{self.api_base_url}/users/me")
 
             if response.status_code == 401:
                 self.add_error(
@@ -211,32 +212,52 @@ class NeonAnalyzer(CloudAnalyzer):
         """
         Discover all accessible Neon projects.
 
+        Resolution order:
+          1. If --neon-target-project set: fetch that one project.
+          2. If --neon-org-id set: list projects in that org only.
+          3. Otherwise: try the legacy unscoped /projects listing first
+             (still works for accounts with personal-namespace projects).
+             If Neon returns the "org_id is required" error, fall back to
+             listing the user's organizations and iterating over each.
+
         Returns:
             List of project details
         """
         projects = []
 
         try:
-            # Check if specific project is targeted
             target_project = getattr(self.config, "target_project", None)
+            org_id = getattr(self.config, "org_id", None)
 
             if target_project:
-                # Analyze specific project
                 project_data = self._analyze_project(target_project)
                 if project_data:
                     projects.append(project_data)
-            else:
-                # Discover all projects, optionally filtered by org
-                params = {}
-                org_id = getattr(self.config, "org_id", None)
-                if org_id:
-                    params["org_id"] = org_id
+                return projects
 
-                all_projects = self._paginated_get(
-                    f"{self.api_base_url}/projects", params=params
+            if org_id:
+                projects.extend(self._list_and_analyze_projects(org_id=org_id))
+                return projects
+
+            # No org filter — try unscoped listing, fall back to per-org iteration
+            unscoped, needs_org = self._list_projects_unscoped()
+            if needs_org:
+                orgs = self._list_user_organizations()
+                if not orgs:
+                    self.add_warning(
+                        "Neon API requires an org_id but no organizations were "
+                        "discoverable for this key. Pass --neon-org-id explicitly."
+                    )
+                    return projects
+                self.logger.info(
+                    f"Iterating {len(orgs)} Neon organization(s) for project discovery"
                 )
-
-                for project in all_projects:
+                for org in orgs:
+                    oid = org.get("id")
+                    if oid:
+                        projects.extend(self._list_and_analyze_projects(org_id=oid))
+            else:
+                for project in unscoped:
                     project_id = project.get("id")
                     if project_id:
                         project_data = self._analyze_project(
@@ -249,6 +270,77 @@ class NeonAnalyzer(CloudAnalyzer):
             self.add_error("Project discovery failed", e)
 
         return projects
+
+    def _list_projects_unscoped(self) -> Tuple[List[Dict[str, Any]], bool]:
+        """
+        Try listing projects without an org filter.
+
+        Returns:
+            (projects, needs_org) — `projects` is the list of project dicts
+            (empty if needs_org is True); `needs_org` is True iff Neon
+            responded that org_id is required.
+        """
+        try:
+            response = self.session.get(
+                f"{self.api_base_url}/projects", params={"limit": 400}
+            )
+
+            if response.status_code == 400:
+                try:
+                    body = response.json()
+                except ValueError:
+                    body = {}
+                msg = (body.get("message") or "").lower()
+                if "org_id" in msg:
+                    return [], True
+                self.add_warning(
+                    f"Neon API error listing projects: {body or 'HTTP 400'}"
+                )
+                return [], False
+
+            if response.status_code != 200:
+                self.add_warning(
+                    f"Neon API error listing projects: HTTP {response.status_code}"
+                )
+                return [], False
+
+            data = response.json()
+            return list(data.get("projects", [])), False
+
+        except Exception as e:
+            self.add_warning(f"Failed to list projects: {e}")
+            return [], False
+
+    def _list_user_organizations(self) -> List[Dict[str, Any]]:
+        """Return organizations the current API key has access to."""
+        try:
+            response = self.session.get(f"{self.api_base_url}/users/me/organizations")
+            if response.status_code != 200:
+                self.add_warning(
+                    f"Failed to list Neon organizations: HTTP {response.status_code}"
+                )
+                return []
+            return list(response.json().get("organizations", []))
+        except Exception as e:
+            self.add_warning(f"Failed to list Neon organizations: {e}")
+            return []
+
+    def _list_and_analyze_projects(
+        self, org_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List projects (optionally scoped to an org) and run per-project analysis."""
+        analyzed = []
+        params = {"org_id": org_id} if org_id else {}
+        for project in self._paginated_get(
+            f"{self.api_base_url}/projects", params=params
+        ):
+            project_id = project.get("id")
+            if not project_id:
+                continue
+            project_data = self._analyze_project(project_id, project_info=project)
+            if project_data:
+                analyzed.append(project_data)
+        return analyzed
 
     def _analyze_project(
         self, project_id: str, project_info: Optional[Dict[str, Any]] = None
