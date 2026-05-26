@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-26
+
+### Added
+
+- **MySQL and Vitess database discovery** alongside PostgreSQL, with engine selection via `--engine`. MySQL engine recognition in AWS and GCP cloud discovery (RDS MySQL, Aurora MySQL, Cloud SQL MySQL) ([guide](docs/mysql.md))
+- **Neon** cloud discovery provider for projects, branches, and compute endpoints ([guide](docs/providers/neon.md))
+
+### Fixed
+
+- AWS Aurora: exclude `rdsadmin` from the database catalog to avoid permission errors
+- Skip per-backend temporary schemas during schema analysis on clusters with very large `pg_namespace`
+
 ## [1.1.0] - 2026-03-09
 
 Initial public release of PlanetScale Discovery Tools — a comprehensive suite for analyzing PostgreSQL databases and cloud infrastructure environments to support migration planning.

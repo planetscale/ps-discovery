@@ -86,6 +86,27 @@ providers:
     discover_all: true
 ```
 
+### [Neon](neon.md)
+Neon serverless PostgreSQL project discovery.
+
+**Key Features:**
+- Project, branch, and compute endpoint inventory across all accessible orgs
+- Branch topology (default + child branches with `parent_id` lineage, logical_size, physical_size)
+- Compute endpoint details (type, autoscaling min/max CU, suspend timeout, current state)
+- Connection pooling configuration (`pooler_enabled` + `pooler_mode`)
+- Compute spec enrichment from CU size (vCPU, RAM, estimated max_connections)
+- Per-org plan tier classification (free, launch, scale, business)
+- Auto-discovers orgs when `--neon-org-id` is not supplied
+
+**Quick Start:**
+```yaml
+providers:
+  neon:
+    enabled: true
+    api_key: "your-neon-api-key"
+    discover_all: true
+```
+
 ## Common Setup Patterns
 
 ### Authentication
@@ -96,6 +117,7 @@ Each provider has different authentication methods:
 - **GCP**: Service account keys, application default credentials
 - **Supabase**: Personal access tokens, service role keys
 - **Heroku**: Platform API keys (from Dashboard or CLI)
+- **Neon**: Personal, organization, or project-scoped API keys (from the Neon console)
 
 See individual provider documentation for detailed authentication setup.
 
@@ -124,6 +146,10 @@ providers:
   heroku:
     enabled: true
     api_key: "your-heroku-api-key"
+
+  neon:
+    enabled: true
+    api_key: "your-neon-api-key"
 
 output:
   output_dir: ./multi_cloud_discovery
@@ -155,6 +181,13 @@ export SUPABASE_PROJECT_REF=abcdefghijklmnop
 ```bash
 export HEROKU_API_KEY=your-heroku-api-key
 export HEROKU_TARGET_APP=my-production-app  # Optional: target specific app
+```
+
+**Neon:**
+```bash
+export NEON_API_KEY=your-neon-api-key
+export NEON_TARGET_PROJECT=ep-broad-frost-12345    # Optional: target specific project
+export NEON_ORG_ID=org-xxxxxxxxxxxxxxxxx           # Optional: scope to a specific org
 ```
 
 ### Discovery Scope

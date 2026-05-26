@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-PlanetScale Discovery Tools analyze PostgreSQL databases and cloud infrastructure (AWS, GCP, Supabase, Heroku) to assess migration complexity to PlanetScale. The tool collects metadata only -- never actual customer data. It runs locally in customer environments with minimal permissions.
+PlanetScale Discovery Tools analyze PostgreSQL and MySQL databases and cloud infrastructure (AWS, GCP, Supabase, Heroku, Neon) to assess migration complexity to PlanetScale. The tool collects metadata only -- never actual customer data. It runs locally in customer environments with minimal permissions.
 
 ## Project Structure
 
@@ -34,6 +34,8 @@ planetscale_discovery/
       gcp_analyzer.py             # Cloud SQL, AlloyDB, VPC networks
       supabase_analyzer.py        # Supabase managed PostgreSQL
       heroku_analyzer.py          # Heroku Postgres add-ons
+      neon_analyzer.py            # Neon serverless Postgres projects, branches, endpoints
+  database/mysql_analyzers/       # MySQL/Vitess analyzers (config, schema, performance, replication, security, features)
 tests/
   conftest.py                     # Shared pytest fixtures
   fixtures/                       # Mock data (database_responses.py, aws_responses.py)

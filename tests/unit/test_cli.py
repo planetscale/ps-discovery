@@ -524,20 +524,20 @@ class TestGenerateSummaryMarkdown:
         """Test that header with timestamp and version is generated."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": None,
         }
         content = self._write_and_read(results)
         assert "# Discovery Summary" in content
-        assert "1.1.0" in content
+        assert "1.2.0" in content
         assert "2025-01-15" in content
 
     def test_database_section_with_full_data(self):
         """Test database section with realistic analysis data."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {
                     "current_database": "production_db",
@@ -594,7 +594,7 @@ class TestGenerateSummaryMarkdown:
         """Test cloud section with AWS provider data."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": {
                 "providers": {
@@ -667,7 +667,7 @@ class TestGenerateSummaryMarkdown:
         """Test cloud section with GCP provider data."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": {
                 "providers": {
@@ -721,7 +721,7 @@ class TestGenerateSummaryMarkdown:
         """Test cloud section with Heroku provider data."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": {
                 "providers": {
@@ -752,7 +752,7 @@ class TestGenerateSummaryMarkdown:
         """Test cloud section with Supabase provider data."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": {
                 "providers": {
@@ -777,7 +777,7 @@ class TestGenerateSummaryMarkdown:
         """Test that analysis gaps are included in the output."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {},
                 "analysis_results": {},
@@ -808,7 +808,7 @@ class TestGenerateSummaryMarkdown:
         """Test that cloud errors are included in the output."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": {
                 "providers": {},
@@ -828,7 +828,7 @@ class TestGenerateSummaryMarkdown:
         """Test report with both database and cloud results."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {"current_database": "mydb"},
                 "analysis_results": {
@@ -863,7 +863,7 @@ class TestGenerateSummaryMarkdown:
         """Test report generation with no database or cloud results."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": None,
             "cloud_results": None,
         }
@@ -877,7 +877,7 @@ class TestGenerateSummaryMarkdown:
         """Verify no migration-specific language in output."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {"current_database": "mydb"},
                 "analysis_results": {
@@ -917,7 +917,7 @@ class TestGenerateSummaryMarkdown:
         """Test replication status for primary with replicas."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {},
                 "analysis_results": {
@@ -939,7 +939,7 @@ class TestGenerateSummaryMarkdown:
         """Test replication status for standby."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {},
                 "analysis_results": {
@@ -960,7 +960,7 @@ class TestGenerateSummaryMarkdown:
         """Test the overview module status table."""
         results = {
             "timestamp": "2025-01-15T10:00:00Z",
-            "discovery_version": "1.1.0",
+            "discovery_version": "1.2.0",
             "database_results": {
                 "connection_info": {},
                 "analysis_results": {},

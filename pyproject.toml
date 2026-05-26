@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "planetscale-discovery-tools"
-version = "1.1.0"
+version = "1.2.0"
 description = "Comprehensive database and cloud infrastructure discovery tools"
 authors = [{name = "PlanetScale", email = "engineering@planetscale.com"}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
-keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku"]
+keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku", "neon"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: System Administrators",
@@ -51,6 +51,9 @@ supabase = [
     "requests>=2.32.5",
 ]
 heroku = [
+    "requests>=2.32.5",
+]
+neon = [
     "requests>=2.32.5",
 ]
 all = [
