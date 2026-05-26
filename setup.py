@@ -55,6 +55,9 @@ setup(
         "heroku": [
             "requests>=2.32.5",
         ],
+        "neon": [
+            "requests>=2.32.5",
+        ],
         "all": [
             "PyMySQL>=1.1.0",
             "boto3>=1.42.52",
@@ -90,7 +93,7 @@ setup(
         "Programming Language :: Python :: 3.13",
     ],
     # Additional metadata
-    keywords="postgresql mysql database discovery cloud aws gcp supabase heroku",
+    keywords="postgresql mysql database discovery cloud aws gcp supabase heroku neon",
     project_urls={
         "Documentation": "https://docs.planetscale.com",
         "Source": "https://github.com/planetscale/pg-discovery-tool",

@@ -58,6 +58,10 @@ class CloudDiscoveryTool:
             if self.config.heroku.enabled:
                 self._discover_heroku()
 
+            # Discover Neon resources
+            if self.config.neon.enabled:
+                self._discover_neon()
+
             # Generate summary
             self._generate_summary()
 
@@ -261,6 +265,51 @@ class CloudDiscoveryTool:
                 {
                     "timestamp": generate_timestamp(),
                     "message": f"Heroku discovery failed: {e}",
+                    "type": "PROVIDER_ERROR",
+                }
+            )
+
+    def _discover_neon(self) -> None:
+        """Discover Neon resources."""
+        self.logger.info("Starting Neon discovery")
+
+        try:
+            # Lazy import Neon analyzer only when needed
+            try:
+                from .analyzers.neon_analyzer import NeonAnalyzer
+            except ImportError:
+                self.logger.error(
+                    'Neon dependencies not installed. Install with: pip install "ps-discovery[neon]"'
+                )
+                self.results["errors"].append(
+                    {
+                        "timestamp": generate_timestamp(),
+                        "message": "Neon dependencies not installed",
+                        "type": "DEPENDENCY_ERROR",
+                    }
+                )
+                return
+
+            neon_analyzer = NeonAnalyzer(self.config.neon, self.logger)
+
+            if not neon_analyzer.authenticate():
+                for error in neon_analyzer.errors:
+                    self.results["errors"].append(error)
+                return
+
+            neon_results = neon_analyzer.analyze()
+            self.results["providers"]["neon"] = neon_results
+
+            self.logger.info(
+                f"Neon discovery completed. Found {len(neon_results.get('projects', []))} project(s)"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Neon discovery failed: {e}")
+            self.results["errors"].append(
+                {
+                    "timestamp": generate_timestamp(),
+                    "message": f"Neon discovery failed: {e}",
                     "type": "PROVIDER_ERROR",
                 }
             )
