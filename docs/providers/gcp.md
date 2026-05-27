@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PlanetScale Discovery CLI can analyze Google Cloud SQL instances, AlloyDB clusters, and related networking infrastructure.
+The PlanetScale Discovery CLI can analyze Google Cloud SQL instances (PostgreSQL and MySQL engines), AlloyDB clusters, and related networking infrastructure.
 
 ## Prerequisites
 

@@ -242,6 +242,9 @@ pipx install -e ".[heroku]"
 
 # All providers
 pipx install -e ".[all]"
+
+# Neon only
+pipx install -e ".[neon]"
 ```
 
 ## Output Format
@@ -255,7 +258,8 @@ All providers generate consistent output:
     "aws": { /* AWS discoveries */ },
     "gcp": { /* GCP discoveries */ },
     "supabase": { /* Supabase discoveries */ },
-    "heroku": { /* Heroku discoveries */ }
+    "heroku": { /* Heroku discoveries */ },
+    "neon": { /* Neon discoveries */ }
   },
   "summary": {
     "providers_discovered": ["aws", "gcp", "supabase", "heroku"],
@@ -324,17 +328,6 @@ All providers generate consistent output:
 2. Check if resources exist in specified regions
 3. Review logs for warnings about skipped resources
 4. Ensure API endpoints are accessible
-
-## Provider Comparison
-
-| Feature | AWS | GCP | Supabase | Heroku |
-|---------|-----|-----|----------|--------|
-| Database Types | RDS, Aurora | Cloud SQL, AlloyDB | PostgreSQL | PostgreSQL (add-ons) |
-| Authentication | IAM, Access Keys | Service Accounts | Access Tokens | API Keys |
-| Networking | VPC, Security Groups | VPC, Firewalls | SSL, IPv6 | Managed (no VPC config) |
-| Pricing Tiers | Multiple | Multiple | Free to Enterprise | Essential to Shield |
-| API Maturity | Mature | Mature | Growing | Mature |
-| Documentation | Extensive | Extensive | Good | Good |
 
 ## Getting Help
 

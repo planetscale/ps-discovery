@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PlanetScale Discovery CLI can analyze AWS RDS instances, Aurora clusters, and related networking infrastructure.
+The PlanetScale Discovery CLI can analyze AWS RDS instances, Aurora clusters (both PostgreSQL and MySQL engines), and related networking infrastructure.
 
 ## Prerequisites
 

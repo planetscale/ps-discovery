@@ -100,7 +100,7 @@ pip install psycopg2-binary
 
 ## Managed Database Environments
 
-When running against managed PostgreSQL services (AWS RDS, Google Cloud SQL, etc.):
+When running against managed PostgreSQL services (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, etc.):
 
 - **Expected Warnings**: You may see warnings about missing schema privileges or transaction errors for certain advanced features
 - **Graceful Degradation**: The tool is designed to continue analysis even when some features are restricted
