@@ -240,6 +240,9 @@ pipx install -e ".[supabase]"
 # Heroku only
 pipx install -e ".[heroku]"
 
+# Neon only
+pipx install -e ".[neon]"
+
 # All providers
 pipx install -e ".[all]"
 ```
@@ -255,10 +258,11 @@ All providers generate consistent output:
     "aws": { /* AWS discoveries */ },
     "gcp": { /* GCP discoveries */ },
     "supabase": { /* Supabase discoveries */ },
-    "heroku": { /* Heroku discoveries */ }
+    "heroku": { /* Heroku discoveries */ },
+    "neon": { /* Neon discoveries */ }
   },
   "summary": {
-    "providers_discovered": ["aws", "gcp", "supabase", "heroku"],
+    "providers_discovered": ["aws", "gcp", "supabase", "heroku", "neon"],
     "total_databases": 10,
     "total_clusters": 3,
     "total_regions": 5
@@ -327,14 +331,14 @@ All providers generate consistent output:
 
 ## Provider Comparison
 
-| Feature | AWS | GCP | Supabase | Heroku |
-|---------|-----|-----|----------|--------|
-| Database Types | RDS, Aurora | Cloud SQL, AlloyDB | PostgreSQL | PostgreSQL (add-ons) |
-| Authentication | IAM, Access Keys | Service Accounts | Access Tokens | API Keys |
-| Networking | VPC, Security Groups | VPC, Firewalls | SSL, IPv6 | Managed (no VPC config) |
-| Pricing Tiers | Multiple | Multiple | Free to Enterprise | Essential to Shield |
-| API Maturity | Mature | Mature | Growing | Mature |
-| Documentation | Extensive | Extensive | Good | Good |
+| Feature | AWS | GCP | Supabase | Heroku | Neon |
+|---------|-----|-----|----------|--------|------|
+| Database Types | RDS, Aurora | Cloud SQL, AlloyDB | PostgreSQL | PostgreSQL (add-ons) | Serverless PostgreSQL |
+| Authentication | IAM, Access Keys | Service Accounts | Access Tokens | API Keys | API Keys |
+| Networking | VPC, Security Groups | VPC, Firewalls | SSL, IPv6 | Managed (no VPC config) | Managed endpoints |
+| Pricing Tiers | Multiple | Multiple | Free to Enterprise | Essential to Shield | Free to Business |
+| API Maturity | Mature | Mature | Growing | Mature | Mature |
+| Documentation | Extensive | Extensive | Good | Good | Good |
 
 ## Getting Help
 
