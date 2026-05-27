@@ -95,7 +95,7 @@ Examples:
     )
     config_parser.add_argument(
         "--providers",
-        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku). If not specified, only database and output sections are generated.",
+        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon). If not specified, only database and output sections are generated.",
         default=None,
     )
     config_parser.add_argument(
