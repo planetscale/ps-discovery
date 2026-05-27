@@ -99,6 +99,24 @@ EOF
 
 # Create release notes template
 echo "📰 Creating RELEASE_NOTES.txt..."
+
+# Extract the latest version's section from CHANGELOG.md so release notes
+# stay in sync without manual edits. Falls back to a pointer at CHANGELOG.md
+# if no matching section is found (e.g. version mismatch or missing file).
+CHANGELOG_SECTION=""
+if [ -f CHANGELOG.md ]; then
+    CHANGELOG_SECTION=$(awk -v ver="${VERSION}" '
+        $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+        capture && /^## \[/ { exit }
+        capture { print }
+    ' CHANGELOG.md)
+fi
+
+if [ -z "${CHANGELOG_SECTION// }" ]; then
+    echo "⚠️  No CHANGELOG.md section found for v${VERSION}; using fallback notes"
+    CHANGELOG_SECTION="See CHANGELOG.md for changes in this release."
+fi
+
 cat > "${RELEASE_DIR}/RELEASE_NOTES.txt" << EOF
 PlanetScale Discovery Tools v${VERSION}
 Release Date: $(date +%Y-%m-%d)
@@ -124,10 +142,7 @@ Release Date: $(date +%Y-%m-%d)
 
 ## What's New in v${VERSION}
 
-- **CLI renamed**: Command is now \`ps-discovery\` (was \`planetscale-discovery\`)
-- **AlloyDB storage discovery**: Storage usage now collected via Cloud Monitoring API
-- **Streamlined data collection**: Reduced to only what is needed for migration scoping
-- Various bug fixes and reliability improvements
+${CHANGELOG_SECTION}
 
 For detailed usage instructions, see README.md
 For provider-specific setup, see docs/providers/
