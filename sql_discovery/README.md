@@ -59,7 +59,9 @@ This script works with managed PostgreSQL services:
 - **AWS RDS/Aurora PostgreSQL**: Works with standard RDS permissions
 - **GCP Cloud SQL/AlloyDB**: Works with standard CloudSQL permissions
 - **Azure Database for PostgreSQL**: Works with standard Azure permissions
+- **Supabase**: Works with the `postgres` superuser
 - **Heroku Postgres**: Works with standard Heroku permissions
+- **Neon**: Works with the project's default `neondb_owner` role
 - **Self-hosted PostgreSQL**: Works with any user that has database read access
 
 Some replication and advanced statistics views may not be accessible on managed services - the script handles this gracefully.

@@ -1,6 +1,6 @@
 # PlanetScale Discovery Tools
 
-Discovery tools for analyzing database environments and cloud infrastructure. These tools provide a complete picture of your source environment including database configuration, schema structure, performance characteristics, and cloud infrastructure topology.
+Discovery tools for analyzing PostgreSQL and MySQL/Vitess database environments and cloud infrastructure. These tools provide a complete picture of your source environment including database configuration, schema structure, performance characteristics, and cloud infrastructure topology.
 
 ## Overview
 

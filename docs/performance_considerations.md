@@ -247,7 +247,7 @@ database:
 
 ### Managed Database Environments
 
-When running against managed PostgreSQL services (AWS RDS, Cloud SQL, Supabase, etc.):
+When running against managed PostgreSQL services (AWS RDS, Cloud SQL, Supabase, Heroku Postgres, Neon, etc.):
 
 - **Default analyzers are safe** - they only read metadata
 - **Data size analyzer requires caution** - consult your cloud provider's best practices
