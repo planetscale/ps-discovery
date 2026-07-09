@@ -126,9 +126,6 @@ See individual provider documentation for detailed authentication setup.
 You can discover multiple cloud providers simultaneously:
 
 ```yaml
-modules:
-  - cloud
-
 providers:
   aws:
     enabled: true
@@ -286,7 +283,6 @@ All providers generate consistent output:
 - Use least-privilege access
 
 ### Report Handling
-- Enable `mask_sensitive_data: true` in output config
 - Store reports securely
 - Review reports before sharing
 - Sanitize before sending to third parties
@@ -332,7 +328,7 @@ All providers generate consistent output:
 ## Getting Help
 
 - [Main README](../../README.md)
-- [GitHub Issues](https://github.com/planetscale/ps-discovery/issues)
+- [GitHub Issues](https://github.com/planetscale/planetscale-discovery-cli-dev/issues)
 - Provider-specific documentation (see links above)
 
 ## Contributing

@@ -51,14 +51,7 @@ providers:
 
     discover_all: true
 
-# Discovery modules to run
-modules:
-  - cloud
-
 output:
   output_dir: ./discovery_output
-  include_costs: true
-  mask_sensitive_data: true
-  generate_diagrams: false
 
 log_level: INFO

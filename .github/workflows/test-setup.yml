@@ -27,17 +27,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Run setup script (database only)
         run: |
-          # Answer 'n' to all optional cloud providers
-          echo -e "n\nn\nn" | bash setup.sh
+          # Non-interactive: drive the selectors with environment variables
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=none bash setup.sh
 
       - name: Verify installation
         run: |
@@ -52,22 +52,22 @@ jobs:
 
       - name: Test with AWS dependencies
         run: |
-          rm -rf venv sample-config.yaml
-          echo -e "y\nn\nn" | bash setup.sh
+          rm -rf venv config.yaml
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=aws bash setup.sh
           source venv/bin/activate
           python3 -c "import boto3; print('AWS dependencies OK')"
 
       - name: Test with GCP dependencies
         run: |
-          rm -rf venv sample-config.yaml
-          echo -e "n\ny\nn" | bash setup.sh
+          rm -rf venv config.yaml
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=gcp bash setup.sh
           source venv/bin/activate
           python3 -c "from google.cloud import compute_v1; print('GCP dependencies OK')"
 
       - name: Test with Supabase dependencies
         run: |
-          rm -rf venv sample-config.yaml
-          echo -e "n\nn\ny" | bash setup.sh
+          rm -rf venv config.yaml
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=supabase bash setup.sh
           source venv/bin/activate
           python3 -c "import requests; print('Supabase dependencies OK')"
 
@@ -80,7 +80,8 @@ jobs:
         distro:
           - ubuntu:22.04
           - ubuntu:24.04
-          - debian:11
+          # debian:11 ships Python 3.9 (below the 3.10 minimum) and has no easy
+          # apt path to a newer interpreter, so it is no longer tested.
           - debian:12
           - amazonlinux:2023
           - rockylinux:9
@@ -88,23 +89,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Set up test environment
         run: |
-          # Determine package manager and install command
+          # Determine package manager and install command. Distros whose
+          # default python3 is older than 3.10 (Amazon Linux 2023, RHEL/Rocky 9
+          # ship 3.9) install Python 3.11 explicitly and point python3 at it.
           case "${{ matrix.distro }}" in
             ubuntu:*|debian:*)
+              # Ubuntu 22.04+ / Debian 12 ship Python >= 3.10 by default
               INSTALL_CMD="apt-get update && apt-get install -y python3 python3-pip python3-venv"
               ;;
-            amazonlinux:*|rockylinux:*|fedora:*)
-              if [[ "${{ matrix.distro }}" == "amazonlinux:*" ]]; then
-                INSTALL_CMD="yum install -y python3 python3-pip && python3 -m ensurepip --upgrade"
-              elif [[ "${{ matrix.distro }}" == "fedora:*" ]]; then
-                INSTALL_CMD="dnf install -y python3 python3-pip"
-              else
-                INSTALL_CMD="dnf install -y python3 python3-pip && python3 -m ensurepip --upgrade"
-              fi
+            amazonlinux:*|rockylinux:*)
+              INSTALL_CMD="dnf install -y python3.11 python3.11-pip && ln -sf /usr/bin/python3.11 /usr/local/bin/python3"
+              ;;
+            fedora:*)
+              # Fedora 39 ships Python >= 3.10 by default
+              INSTALL_CMD="dnf install -y python3 python3-pip"
               ;;
           esac
 
@@ -119,8 +121,8 @@ jobs:
           COPY . /app
           WORKDIR /app
 
-          # Run setup
-          RUN echo -e "n\nn\nn" | bash setup.sh || exit 1
+          # Run setup non-interactively via environment variables
+          RUN PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=none bash setup.sh || exit 1
 
           # Verify installation
           RUN bash -c "source venv/bin/activate && python3 -m planetscale_discovery --help" || exit 1
@@ -136,18 +138,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-      - name: Test with old Python (3.8 - should fail)
+      - name: Test with old Python (3.9 - should fail)
         run: |
-          docker run -v $(pwd):/app -w /app python:3.8-slim bash -c "
+          docker run -v $(pwd):/app -w /app python:3.9-slim bash -c "
             apt-get update && apt-get install -y python3-venv
             ./setup.sh 2>&1 | tee output.log
-            if grep -q 'Python 3.9 or higher is required' output.log; then
-              echo 'Correctly rejected Python 3.8'
+            if grep -q 'Python 3.10 or higher is required' output.log; then
+              echo 'Correctly rejected Python 3.9'
               exit 0
             else
-              echo 'Should have rejected Python 3.8'
+              echo 'Should have rejected Python 3.9'
               exit 1
             fi
           " || true
@@ -171,6 +173,6 @@ jobs:
           # Move it (breaks hardcoded paths)
           mv /tmp/test-venv ./venv
           # Run setup - should detect and recreate
-          echo -e "n\nn\nn" | bash setup.sh
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=none bash setup.sh
           source venv/bin/activate
           python3 -m planetscale_discovery --help

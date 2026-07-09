@@ -110,7 +110,7 @@ class AWSAnalyzer(CloudAnalyzer):
                 "Configure credentials via AWS CLI profile, environment variables "
                 "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), IAM role, or config file.\n"
                 "  Quick start: aws configure --profile discovery\n"
-                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/aws.md",
+                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/aws.md",
                 e,
             )
             return False
@@ -119,14 +119,14 @@ class AWSAnalyzer(CloudAnalyzer):
                 "AWS authentication failed - insufficient permissions. "
                 "The configured credentials could not call sts:GetCallerIdentity. "
                 "Verify the IAM user/role has the required permissions.\n"
-                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/aws.md",
+                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/aws.md",
                 e,
             )
             return False
         except Exception as e:
             self.add_error(
                 "AWS authentication failed.\n"
-                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/aws.md",
+                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/aws.md",
                 e,
             )
             return False

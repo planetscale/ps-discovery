@@ -79,7 +79,7 @@ PlanetScale Discovery Tools - Installation Instructions
 
 Quick Start:
 -----------
-1. Ensure Python 3.9 or higher is installed:
+1. Ensure Python 3.10 or higher is installed:
    python3 --version
 
 2. Run the setup script:
@@ -147,7 +147,7 @@ ${CHANGELOG_SECTION}
 For detailed usage instructions, see README.md
 For provider-specific setup, see docs/providers/
 
-Report issues: https://github.com/planetscale/ps-discovery/issues
+Report issues: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 EOF
 
 # Create zip file

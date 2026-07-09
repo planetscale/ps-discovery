@@ -46,7 +46,7 @@ def setup_logging(level: str = "INFO", log_file: str = None) -> logging.Logger:
 
 
 def load_config_file(config_path: Union[str, Path]) -> Dict[str, Any]:
-    """Load configuration from YAML or JSON file."""
+    """Load configuration from a YAML file."""
     config_path = Path(config_path)
 
     if not config_path.exists():
@@ -55,11 +55,10 @@ def load_config_file(config_path: Union[str, Path]) -> Dict[str, Any]:
     with open(config_path, "r") as f:
         if config_path.suffix.lower() in [".yaml", ".yml"]:
             return yaml.safe_load(f)
-        elif config_path.suffix.lower() == ".json":
-            return json.load(f)
         else:
             raise ValueError(
-                f"Unsupported configuration file format: {config_path.suffix}"
+                f"Unsupported configuration file format: {config_path.suffix}. "
+                "Use a .yaml or .yml file."
             )
 
 

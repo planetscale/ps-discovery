@@ -17,24 +17,20 @@ updates:
       prefix: "deps"
       include: "scope"
     groups:
-      # Group all patch-level bumps into a single PR
-      patch-updates:
-        patterns:
-          - "*"
-        update-types:
-          - "patch"
-      # Group dev/test tooling updates
-      dev-tooling:
-        patterns:
-          - "pytest*"
-          - "black"
-          - "flake8"
-          - "mypy"
-          - "moto"
-          - "responses"
-          - "coverage"
+      # One PR/week for all runtime (production) minor + patch bumps
+      production-dependencies:
+        dependency-type: "production"
         update-types:
           - "minor"
+          - "patch"
+      # One PR/week for all dev/test tooling minor + patch bumps
+      development-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+    # Major bumps are intentionally left ungrouped so each gets its own
+    # PR for individual review.
     allow:
       - dependency-type: "all"
 
@@ -47,10 +43,15 @@ updates:
       time: "09:00"
     cooldown:
       default-days: 14
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "github-actions"
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      # One PR/week for all GitHub Actions bumps
+      github-actions:
+        patterns:
+          - "*"

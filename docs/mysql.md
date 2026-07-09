@@ -18,11 +18,11 @@ The PlanetScale Discovery CLI can analyze MySQL and MySQL-compatible databases i
 # Install with MySQL support
 pip install "ps-discovery[mysql]"
 
-# Run discovery against a MySQL server
+# Run discovery against a MySQL server directly
 ps-discovery database --engine mysql --host db.example.com -u root -W
 
-# Run discovery with a config file
-ps-discovery database --engine mysql --config mysql-config.yaml
+# Or run with a config file
+ps-discovery --config mysql-config.yaml
 
 # Generate a MySQL configuration template
 ps-discovery config-template --output mysql-config.yaml --engines mysql
@@ -54,10 +54,10 @@ mysql:
   ssl_mode: disabled
 ```
 
-Then run:
+Then run (the engine and modules come from the config):
 
 ```bash
-ps-discovery database --engine mysql --config mysql-config.yaml
+ps-discovery --config mysql-config.yaml
 ```
 
 ### Option 3: Environment Variables
@@ -285,10 +285,10 @@ output:
   output_dir: ./mysql_discovery_output
 ```
 
-Run with:
+Run with (the engine and modules come from the config):
 
 ```bash
-ps-discovery both --engine mysql --config combined-config.yaml
+ps-discovery --config combined-config.yaml
 ```
 
 ### Select Specific Analyzers
@@ -359,7 +359,7 @@ pip install "ps-discovery[mysql]"
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - Documentation: See main [README.md](../README.md)
 
 For MySQL or PlanetScale-specific questions:

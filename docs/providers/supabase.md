@@ -93,9 +93,8 @@ Here's a complete configuration template you can copy and paste into your config
 ```yaml
 # PlanetScale Discovery - Supabase Provider Configuration Template
 
-# Modules to enable
-modules:
-  - cloud
+# Database engine (Supabase is PostgreSQL)
+engine: postgres
 
 # Provider configuration
 providers:
@@ -118,9 +117,6 @@ providers:
 # Output configuration
 output:
   output_dir: ./supabase_discovery_output
-  include_costs: true
-  mask_sensitive_data: true
-  generate_diagrams: false
 
 # Logging settings
 log_level: INFO
@@ -132,8 +128,7 @@ log_level: INFO
 Discover all projects accessible with your token:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   supabase:
@@ -150,8 +145,7 @@ output:
 Target a specific project by its reference ID:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   supabase:
@@ -182,8 +176,7 @@ providers:
 Combine Supabase with other cloud providers:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   aws:
@@ -241,14 +234,11 @@ The Supabase analyzer collects the following information:
 ### Command Line
 
 ```bash
-# Using configuration file
-ps-discovery cloud --config supabase-config.yaml
+# Run discovery using your configuration file
+ps-discovery --config supabase-config.yaml
 
-# With specific output directory
-ps-discovery cloud --config supabase-config.yaml --output-dir ./output
-
-# Combined with database discovery
-ps-discovery both --config full-config.yaml
+# Save reports to a specific directory
+ps-discovery --config supabase-config.yaml --output-dir ./output
 ```
 
 ### Expected Output
@@ -338,7 +328,6 @@ The tool generates two report files:
 
 ### Report Handling
 - Reports may contain sensitive project information
-- Use `mask_sensitive_data: true` to sanitize outputs
 - Store reports securely
 - Review reports before sharing
 
@@ -354,7 +343,7 @@ ps-discovery config-template --output supabase-config.yaml
 # 3. Edit the config file and add your Supabase token
 
 # 4. Run discovery
-ps-discovery cloud --config supabase-config.yaml
+ps-discovery --config supabase-config.yaml
 
 # 5. Review reports in output directory
 ls ./supabase_discovery_output/
@@ -387,7 +376,7 @@ ls ./supabase_discovery_output/
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - Documentation: See main [README.md](../../README.md)
 
 For Supabase-specific questions:

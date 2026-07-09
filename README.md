@@ -25,18 +25,18 @@ cd ps-discovery-1.2.0
 ```
 
 The setup script will:
-- Verify your Python version (3.9+ required)
+- Verify your Python version (3.10+ required)
 - Create a virtual environment
 - Install required dependencies (PostgreSQL support included by default)
 - Prompt you to optionally install MySQL and cloud provider dependencies
-- Generate a customized `sample-config.yaml` based on your selections
+- Generate a customized `config.yaml` based on your selections
 
 ### 2. Configure Your Credentials
 
-Edit `sample-config.yaml` with your database and cloud credentials:
+Edit `config.yaml` with your database and cloud credentials:
 
 ```bash
-nano sample-config.yaml
+nano config.yaml
 ```
 
 **PostgreSQL configuration:**
@@ -54,19 +54,14 @@ nano sample-config.yaml
 
 ### 3. Run Discovery
 
+`ps-discovery` reads everything it needs from your config file:
+
 ```bash
-# PostgreSQL database discovery (default)
-./ps-discovery database --config sample-config.yaml
+# Run using ./config.yaml in the current directory
+./ps-discovery
 
-# MySQL database discovery
-./ps-discovery database --engine mysql --config sample-config.yaml
-
-# Cloud discovery only
-./ps-discovery cloud --config sample-config.yaml
-
-# Both database and cloud discovery
-./ps-discovery both --config sample-config.yaml
-./ps-discovery both --engine mysql --config sample-config.yaml
+# Or point at a specific config file
+./ps-discovery --config config.yaml
 ```
 
 No virtual environment activation required — the wrapper script handles it automatically.
@@ -81,12 +76,12 @@ If you're working with the PlanetScale team, send the JSON report file to your p
 
 ## Database Engine Support
 
-The discovery tool supports two database engines. Use the `--engine` flag to select which engine to analyze.
+The discovery tool supports two database engines. Set the engine in your config file with the top-level `engine:` key (`postgres` or `mysql`). The `--engine` flag remains available as an explicit command-line override.
 
-| Engine | Flag | Analyzers | Documentation |
+| Engine | Config / Flag | Analyzers | Documentation |
 |--------|------|-----------|---------------|
-| **PostgreSQL** (default) | `--engine postgres` | config, schema, performance, security, features, data_size | See [PostgreSQL Privileges](#required-postgresql-privileges) below |
-| **MySQL/Vitess** | `--engine mysql` | config, schema, performance, replication, security, features | [MySQL Setup Guide](docs/mysql.md) |
+| **PostgreSQL** (default) | `engine: postgres` / `--engine postgres` | config, schema, performance, security, features, data_size | See [PostgreSQL Privileges](#required-postgresql-privileges) below |
+| **MySQL/Vitess** | `engine: mysql` / `--engine mysql` | config, schema, performance, replication, security, features | [MySQL Setup Guide](docs/mysql.md) |
 
 ### Quick Examples
 
@@ -172,6 +167,8 @@ For PlanetScale databases, your existing database credentials are sufficient —
 ### PostgreSQL Configuration
 
 ```yaml
+engine: postgres
+
 database:
   host: localhost
   port: 5432
@@ -204,6 +201,8 @@ output:
 ### Combined Configuration (Database + Cloud)
 
 ```yaml
+engine: postgres
+
 database:
   host: localhost
   port: 5432
@@ -229,7 +228,7 @@ output:
   output_dir: ./reports
 ```
 
-You can also generate a configuration template:
+You can also generate a configuration template. The generated file includes the `engine:` key and is ready to run with `./ps-discovery --config config.yaml`:
 
 ```bash
 # PostgreSQL config (default)
