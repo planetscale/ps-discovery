@@ -13,7 +13,7 @@ README = (pathlib.Path(__file__).parent / "README.md").read_text()
 
 setup(
     name="planetscale-discovery-tools",
-    version="1.2.0",
+    version="1.3.0",
     description="Comprehensive database and cloud infrastructure discovery tools",
     long_description=README,
     long_description_content_type="text/markdown",
