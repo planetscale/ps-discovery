@@ -117,13 +117,13 @@ Once the tag is pushed, GitHub Actions will **automatically**:
 
 **No local build required!** Just push the tag.
 
-Monitor the progress at: https://github.com/planetscale/ps-discovery/actions
+Monitor the progress at: https://github.com/planetscale/planetscale-discovery-cli-dev/actions
 
 ### 7. Verify Release
 
 After the GitHub Action completes:
 
-1. Go to: https://github.com/planetscale/ps-discovery/releases
+1. Go to: https://github.com/planetscale/planetscale-discovery-cli-dev/releases
 2. Verify the release is published with:
    - Release notes
    - `ps-discovery-X.Y.Z.tar.gz`
@@ -135,8 +135,8 @@ Download and test the release tarball:
 
 ```bash
 # Download the release
-wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz
-wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz.sha256
+wget https://github.com/planetscale/planetscale-discovery-cli-dev/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz
+wget https://github.com/planetscale/planetscale-discovery-cli-dev/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz.sha256
 
 # Verify checksum
 sha256sum -c ps-discovery-X.Y.Z.tar.gz.sha256
@@ -192,7 +192,7 @@ git push origin vX.Y.Z
 Ensure `VERSION` file and `setup.py` have the same version number and match the git tag.
 
 ### Release workflow fails
-Check GitHub Actions logs at: https://github.com/planetscale/ps-discovery/actions
+Check GitHub Actions logs at: https://github.com/planetscale/planetscale-discovery-cli-dev/actions
 
 Common issues:
 - VERSION file doesn't match tag

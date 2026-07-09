@@ -133,7 +133,7 @@ class NeonAnalyzer(CloudAnalyzer):
                     "Set it in your config file under providers.neon.api_key, "
                     "or set the NEON_API_KEY environment variable.\n"
                     "  Generate a key at: https://console.neon.tech/app/settings/api-keys\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/neon.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/neon.md"
                 )
                 return False
 
@@ -157,7 +157,7 @@ class NeonAnalyzer(CloudAnalyzer):
                     "Invalid or expired Neon API key. "
                     "Verify your key is correct and hasn't been revoked.\n"
                     "  Generate a new key at: https://console.neon.tech/app/settings/api-keys\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/neon.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/neon.md"
                 )
                 return False
             elif response.status_code != 200:

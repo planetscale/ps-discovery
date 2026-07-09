@@ -58,15 +58,34 @@ class TestArgumentParsing:
         args = parser.parse_args(["config-template", "--output", "test.yaml"])
         assert args.command == "config-template"
         assert args.output == "test.yaml"
-        assert args.format == "yaml"
 
-    def test_config_template_json_format(self):
-        """Test config-template with json format."""
+    def test_bare_invocation_has_no_command(self):
+        """No subcommand parses with command=None (config-driven run)."""
         parser = create_main_parser()
-        args = parser.parse_args(
-            ["config-template", "--output", "test.json", "--format", "json"]
-        )
-        assert args.format == "json"
+        args = parser.parse_args([])
+        assert args.command is None
+        assert args.config is None
+
+    def test_top_level_config_flag(self):
+        """--config works with no subcommand."""
+        parser = create_main_parser()
+        args = parser.parse_args(["--config", "config.yaml"])
+        assert args.command is None
+        assert args.config == "config.yaml"
+
+    def test_top_level_providers_flag(self):
+        """--providers works with no subcommand."""
+        parser = create_main_parser()
+        args = parser.parse_args(["--providers", "aws"])
+        assert args.command is None
+        assert args.providers == "aws"
+
+    def test_top_level_engine_not_clobbered_by_subcommand(self):
+        """--engine before the subcommand survives (subparser SUPPRESS default)."""
+        parser = create_main_parser()
+        args = parser.parse_args(["--engine", "mysql", "database"])
+        assert args.command == "database"
+        assert args.engine == "mysql"
 
 
 class TestCommonArguments:
@@ -442,12 +461,33 @@ class TestCombinedSummary:
 class TestErrorHandling:
     """Test CLI error handling."""
 
-    def test_no_command_shows_help(self, capsys):
-        """Test that no command shows help and exits."""
+    def test_no_command_no_config_errors(self, capsys, tmp_path, monkeypatch):
+        """Bare invocation with nothing configured errors politely.
+
+        With no subcommand, no config file, and no provider env vars,
+        resolve_modules() yields an empty set and the CLI exits 1 with an
+        actionable message instead of running anything.
+        """
+        # Run from an empty dir so no ./config.yaml is auto-discovered, and
+        # clear provider/db env vars so inference yields nothing.
+        monkeypatch.chdir(tmp_path)
+        for var in (
+            "AWS_ENABLED",
+            "GCP_ENABLED",
+            "SUPABASE_ENABLED",
+            "HEROKU_ENABLED",
+            "NEON_ENABLED",
+            "PGDATABASE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
         with patch("sys.argv", ["cli"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
             assert exc_info.value.code == 1
+
+        captured = capsys.readouterr()
+        assert "Nothing to discover" in captured.err
 
     @patch("planetscale_discovery.cli.ConfigManager")
     def test_keyboard_interrupt_handling(self, mock_config_manager, capsys):

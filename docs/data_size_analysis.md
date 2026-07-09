@@ -272,6 +272,8 @@ The data size analysis is included in the database discovery report:
 Check all tables with minimal performance impact:
 
 ```yaml
+engine: postgres
+
 database:
   host: localhost
   database: mydb
@@ -286,7 +288,7 @@ database:
 
 Run:
 ```bash
-ps-discovery database --config config.yaml
+ps-discovery --config config.yaml
 ```
 
 ### Example 2: Detailed Analysis (Specific Tables)
@@ -383,7 +385,7 @@ Schedule analysis during low-traffic periods:
 
 ```bash
 # Cron job example - 2 AM daily
-0 2 * * * ps-discovery database --config config.yaml
+0 2 * * * ps-discovery --config config.yaml
 ```
 
 ## Interpreting Results

@@ -99,9 +99,8 @@ The Heroku API key must belong to a user (or team member) with access to the app
 ```yaml
 # PlanetScale Discovery - Heroku Provider Configuration Template
 
-# Modules to enable
-modules:
-  - cloud
+# Database engine (Heroku Postgres is PostgreSQL)
+engine: postgres
 
 # Provider configuration
 providers:
@@ -122,7 +121,6 @@ providers:
 # Output configuration
 output:
   output_dir: ./heroku_discovery_output
-  mask_sensitive_data: true
 
 # Logging settings
 log_level: INFO
@@ -134,8 +132,7 @@ log_level: INFO
 Discover all apps with Heroku Postgres that your API key can access:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   heroku:
@@ -152,8 +149,7 @@ output:
 Target a specific app by name:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   heroku:
@@ -170,8 +166,7 @@ output:
 Combine Heroku with other cloud providers:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   heroku:
@@ -292,7 +287,6 @@ The tool maps Heroku Postgres plan names to known specifications. vCPU and provi
 ### Report Handling
 
 - Reports may contain app names and add-on identifiers. Review before sharing externally.
-- Use `mask_sensitive_data: true` in output config to sanitize outputs.
 - Store reports securely and delete when no longer needed.
 
 ## Running Discovery
@@ -300,14 +294,11 @@ The tool maps Heroku Postgres plan names to known specifications. vCPU and provi
 ### Command Line
 
 ```bash
-# Using configuration file
-ps-discovery cloud --config heroku-config.yaml
+# Run discovery using your configuration file
+ps-discovery --config heroku-config.yaml
 
-# With specific output directory
-ps-discovery cloud --config heroku-config.yaml --output-dir ./output
-
-# Combined with database discovery
-ps-discovery both --config full-config.yaml
+# Save reports to a specific directory
+ps-discovery --config heroku-config.yaml --output-dir ./output
 ```
 
 ### Expected Output
@@ -428,7 +419,7 @@ export HEROKU_API_KEY="your-heroku-api-key"
 ps-discovery config-template --output heroku-config.yaml --providers heroku
 
 # 4. Run discovery
-ps-discovery cloud --config heroku-config.yaml
+ps-discovery --config heroku-config.yaml
 
 # 5. Review reports
 ls ./discovery_output/
@@ -445,7 +436,7 @@ cat ./discovery_output/cloud_discovery_summary.md
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - Documentation: See main [README.md](../../README.md)
 
 For Heroku-specific questions:

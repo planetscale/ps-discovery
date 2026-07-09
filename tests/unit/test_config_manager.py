@@ -4,7 +4,7 @@ Tests for Configuration Manager
 
 import pytest
 import tempfile
-import json
+import yaml
 import os
 from pathlib import Path
 from planetscale_discovery.config.config_manager import (
@@ -16,6 +16,7 @@ from planetscale_discovery.config.config_manager import (
     HerokuConfig,
     OutputConfig,
     DiscoveryConfig,
+    resolve_modules,
 )
 
 
@@ -136,7 +137,9 @@ class TestDiscoveryConfig:
         assert isinstance(config.aws, AWSConfig)
         assert isinstance(config.gcp, GCPConfig)
         assert isinstance(config.output, OutputConfig)
-        assert "database" in config.modules
+        # modules defaults to None ("unspecified"); resolve_modules() infers
+        # what to run when the config file does not declare modules.
+        assert config.modules is None
         assert config.log_level == "INFO"
 
 
@@ -154,9 +157,9 @@ class TestConfigManager:
         manager = ConfigManager(config_path="/tmp/test.yaml")
         assert manager.config_path == "/tmp/test.yaml"
 
-    def test_load_from_json_file(self):
-        """Test loading configuration from JSON file"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+    def test_load_from_yaml_file(self):
+        """Test loading configuration from a YAML file"""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {
                     "host": "testhost",
@@ -168,7 +171,7 @@ class TestConfigManager:
                 "modules": ["database"],
                 "log_level": "DEBUG",
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -208,7 +211,7 @@ class TestConfigManager:
 
     def test_load_aws_config(self):
         """Test loading AWS configuration"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "providers": {
@@ -224,7 +227,7 @@ class TestConfigManager:
                 },
                 "modules": ["database", "cloud"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -240,7 +243,7 @@ class TestConfigManager:
 
     def test_load_gcp_config(self):
         """Test loading GCP configuration"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "providers": {
@@ -256,7 +259,7 @@ class TestConfigManager:
                 },
                 "modules": ["database", "cloud"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -271,7 +274,7 @@ class TestConfigManager:
 
     def test_load_output_config(self):
         """Test loading output configuration"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "output": {
@@ -279,7 +282,7 @@ class TestConfigManager:
                 },
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -292,12 +295,12 @@ class TestConfigManager:
 
     def test_validation_invalid_module(self):
         """Test validation catches invalid modules"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "modules": ["invalid_module"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -309,12 +312,12 @@ class TestConfigManager:
 
     def test_validation_missing_database_name(self):
         """Test validation catches missing database name"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"host": "localhost"},
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -326,12 +329,12 @@ class TestConfigManager:
 
     def test_validation_cloud_no_provider(self):
         """Test validation catches cloud module without providers"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "modules": ["cloud"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -343,12 +346,12 @@ class TestConfigManager:
 
     def test_get_config(self):
         """Test getting configuration"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -364,18 +367,15 @@ class TestConfigManager:
         with pytest.raises(ValueError, match="Configuration not loaded"):
             manager.validate_config()
 
-    def test_save_json_template(self):
-        """Test saving JSON configuration template"""
+    def test_non_yaml_template_rejected(self):
+        """A non-YAML output extension is rejected (config is YAML-only)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_file = Path(tmpdir) / "config.json"
             manager = ConfigManager()
-            manager.save_config_template(str(output_file))
-
-            assert output_file.exists()
-            with open(output_file) as f:
-                template = json.load(f)
-            assert "database" in template
-            assert "output" in template
+            with pytest.raises(
+                ValueError, match="Unsupported config template extension"
+            ):
+                manager.save_config_template(str(output_file))
 
     def test_save_yaml_template(self):
         """Test saving YAML configuration template"""
@@ -391,13 +391,13 @@ class TestConfigManager:
 
     def test_load_with_target_database(self):
         """Test loading configuration with target_database"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "target_database": "specific_db",
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -427,7 +427,7 @@ class TestConfigManager:
 
     def test_load_data_size_config(self):
         """Test loading data_size configuration"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {
                     "database": "testdb",
@@ -443,7 +443,7 @@ class TestConfigManager:
                 },
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -462,12 +462,12 @@ class TestConfigManager:
 
     def test_data_size_config_defaults_when_not_specified(self):
         """Test data_size configuration uses defaults when not specified"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "modules": ["database"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -484,7 +484,7 @@ class TestConfigManager:
 
     def test_load_heroku_config(self):
         """Test loading Heroku configuration from file"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "providers": {
@@ -497,7 +497,7 @@ class TestConfigManager:
                 },
                 "modules": ["database", "cloud"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -560,7 +560,7 @@ class TestConfigManager:
 
     def test_validation_cloud_heroku_provider(self):
         """Test validation passes with only heroku provider enabled"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
             config_data = {
                 "database": {"database": "testdb"},
                 "providers": {
@@ -570,7 +570,7 @@ class TestConfigManager:
                 },
                 "modules": ["cloud"],
             }
-            json.dump(config_data, f)
+            yaml.dump(config_data, f)
             config_file = f.name
 
         try:
@@ -580,3 +580,96 @@ class TestConfigManager:
             assert config.heroku.enabled is True
         finally:
             os.unlink(config_file)
+
+
+class TestResolveModules:
+    """Tests for resolve_modules() — the config-as-source-of-truth logic."""
+
+    def test_subcommand_overrides_everything(self):
+        config = DiscoveryConfig(modules=["cloud"])  # config says cloud...
+        # ...but the explicit subcommand wins.
+        assert resolve_modules(config, "database") == ["database"]
+        assert resolve_modules(config, "cloud") == ["cloud"]
+        assert resolve_modules(config, "both") == ["database", "cloud"]
+
+    def test_explicit_file_modules_honored(self):
+        config = DiscoveryConfig(modules=["database"])
+        assert resolve_modules(config, None) == ["database"]
+
+    def test_explicit_file_modules_ordered_and_filtered(self):
+        config = DiscoveryConfig(modules=["cloud", "database", "bogus"])
+        assert resolve_modules(config, None) == ["database", "cloud"]
+
+    def test_infer_database_only(self):
+        config = DiscoveryConfig()
+        config.database.database = "mydb"
+        assert resolve_modules(config, None) == ["database"]
+
+    def test_infer_cloud_only(self):
+        config = DiscoveryConfig()
+        config.aws.enabled = True
+        assert resolve_modules(config, None) == ["cloud"]
+
+    def test_infer_both(self):
+        config = DiscoveryConfig()
+        config.database.database = "mydb"
+        config.neon.enabled = True
+        assert resolve_modules(config, None) == ["database", "cloud"]
+
+    def test_infer_mysql_by_host(self):
+        config = DiscoveryConfig(engine="mysql")
+        config.mysql.host = "db.example.com"
+        assert resolve_modules(config, None) == ["database"]
+
+    def test_infer_empty_when_nothing_configured(self):
+        config = DiscoveryConfig()
+        assert resolve_modules(config, None) == []
+
+
+class TestConfigRequired:
+    """Tests for load_config(config_required=...)."""
+
+    def test_missing_explicit_path_raises(self):
+        manager = ConfigManager("/nonexistent/path/config.yaml")
+        with pytest.raises(ValueError, match="Configuration file not found"):
+            manager.load_config(config_required=True, validate=False)
+
+    def test_missing_path_falls_back_when_not_required(self):
+        # Without config_required, a missing path falls back to env/defaults.
+        manager = ConfigManager("/nonexistent/path/config.yaml")
+        config = manager.load_config(config_required=False, validate=False)
+        assert isinstance(config, DiscoveryConfig)
+
+
+class TestSelfDescribingTemplate:
+    """Generated templates carry engine: and omit the optional modules: key."""
+
+    def test_yaml_template_has_engine(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=["aws"], engines=["postgres"]
+            )
+            text = path.read_text()
+            assert "engine: postgres" in text
+            # modules: is an optional override, not part of the default config.
+            assert "modules:" not in text
+
+    def test_yaml_template_mysql_only_engine(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=[], engines=["mysql"]
+            )
+            text = path.read_text()
+            assert "engine: mysql" in text
+
+    def test_yaml_template_supabase_token_at_top_level(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=["supabase"], engines=["postgres"]
+            )
+            data = yaml.safe_load(path.read_text())
+            # Supabase access_token lives at the top level of the block.
+            assert "access_token" in data["providers"]["supabase"]

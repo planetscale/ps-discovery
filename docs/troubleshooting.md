@@ -2,7 +2,7 @@
 
 ## Python Installation
 
-**Python 3.9 or higher is required.** If you don't have it, install it for your platform:
+**Python 3.10 or higher is required.** If you don't have it, install it for your platform:
 
 <details>
 <summary><b>macOS</b></summary>
@@ -34,7 +34,8 @@ sudo apt install python3 python3-pip python3-venv
 python3 --version
 ```
 
-For older versions that need Python 3.9+:
+Ubuntu 20.04 and Debian 11 ship Python 3.9 or older, which is no longer
+supported. Install a newer interpreter:
 ```bash
 sudo apt install software-properties-common
 sudo add-apt-repository ppa:deadsnakes/ppa
@@ -48,11 +49,15 @@ sudo apt install python3.12 python3.12-venv python3-pip
 <summary><b>Amazon Linux 2023</b></summary>
 
 ```bash
-# Amazon Linux 2023 includes Python 3.9+ by default
-sudo yum install python3 python3-pip
+# Amazon Linux 2023 ships Python 3.9 as the default python3, which is no
+# longer supported. Install Python 3.11 (or newer) explicitly:
+sudo dnf install python3.11 python3.11-pip
+
+# Run setup.sh with the newer interpreter, e.g.:
+python3.11 -m venv venv  # or ensure python3.11 is first on PATH
 
 # Verify installation
-python3 --version
+python3.11 --version
 ```
 
 </details>
@@ -61,11 +66,12 @@ python3 --version
 <summary><b>RHEL/Rocky Linux/CentOS</b></summary>
 
 ```bash
-# Install Python 3.9+
-sudo dnf install python3 python3-pip
+# RHEL 9 / Rocky Linux 9 ship Python 3.9 as the default python3, which is no
+# longer supported. Install Python 3.11 (or newer) explicitly:
+sudo dnf install python3.11 python3.11-pip
 
 # Verify installation
-python3 --version
+python3.11 --version
 ```
 
 </details>
@@ -100,7 +106,7 @@ pip install psycopg2-binary
 
 ## Managed Database Environments
 
-When running against managed PostgreSQL services (AWS RDS, Google Cloud SQL, etc.):
+When running against managed PostgreSQL services (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, etc.):
 
 - **Expected Warnings**: You may see warnings about missing schema privileges or transaction errors for certain advanced features
 - **Graceful Degradation**: The tool is designed to continue analysis even when some features are restricted

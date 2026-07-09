@@ -1,6 +1,9 @@
 # Complete Discovery Configuration
 # For both database and cloud infrastructure discovery
 
+# Database engine to analyze: postgres or mysql
+engine: postgres
+
 database:
   host: localhost
   port: 5432
@@ -30,16 +33,8 @@ providers:
       service_account_key: path/to/service-account-key.json
     discover_all: true
 
-# Discovery modules to run
-modules:
-  - database
-  - cloud
-
 output:
   output_dir: ./discovery_output
-  include_costs: true
-  mask_sensitive_data: true
-  generate_diagrams: false
 
 log_level: INFO
 log_file: discovery.log

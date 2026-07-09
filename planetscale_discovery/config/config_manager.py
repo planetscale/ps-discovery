@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
-import json
 
 from ..common.utils import load_config_file
 
@@ -140,10 +139,78 @@ class DiscoveryConfig:
     heroku: HerokuConfig = field(default_factory=HerokuConfig)
     neon: NeonConfig = field(default_factory=NeonConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    modules: List[str] = field(default_factory=lambda: ["database", "cloud"])
+    # None means "unspecified" — the config file did not declare `modules:`.
+    # resolve_modules() then infers what to run from the config contents.
+    modules: Optional[List[str]] = None
     log_level: str = "INFO"
     log_file: Optional[str] = None
     target_database: Optional[str] = None
+
+
+def resolve_modules(
+    config: DiscoveryConfig, command: Optional[str] = None
+) -> List[str]:
+    """Resolve which discovery modules to run.
+
+    The config file is the source of truth; the CLI subcommand is an optional
+    override. Precedence (first match wins):
+
+    1. Explicit subcommand: ``database`` -> ["database"], ``cloud`` -> ["cloud"],
+       ``both`` -> ["database", "cloud"].
+    2. Explicit ``modules:`` declared in the config file (``config.modules`` is
+       not None).
+    3. Inference from config contents: include "cloud" if any cloud provider is
+       enabled; include "database" if the active engine's connection looks
+       configured.
+
+    Returns a list that is a subset of {"database", "cloud"}, ordered
+    [database, cloud]. An empty result means nothing is configured to run and
+    the caller should error politely.
+    """
+    # 1. Explicit subcommand wins.
+    if command == "database":
+        return ["database"]
+    if command == "cloud":
+        return ["cloud"]
+    if command == "both":
+        return ["database", "cloud"]
+
+    # 2. Explicit modules from the config file.
+    if config.modules is not None:
+        order = {"database": 0, "cloud": 1}
+        return sorted((m for m in config.modules if m in order), key=lambda m: order[m])
+
+    # 3. Infer from config contents.
+    modules: List[str] = []
+
+    if _database_is_configured(config):
+        modules.append("database")
+
+    if any(
+        provider.enabled
+        for provider in (
+            config.aws,
+            config.gcp,
+            config.supabase,
+            config.heroku,
+            config.neon,
+        )
+    ):
+        modules.append("cloud")
+
+    return modules
+
+
+def _database_is_configured(config: DiscoveryConfig) -> bool:
+    """Return True if the active engine's connection looks meaningfully set.
+
+    PostgreSQL: a database name is required (matches the run requirement in
+    cli.run_database_discovery). MySQL: an empty database means "all databases",
+    so a non-default host is the reliable signal that a connection was set up.
+    """
+    if config.engine == "mysql":
+        return bool(config.mysql.database) or config.mysql.host != "localhost"
+    return bool(config.database.database)
 
 
 class ConfigManager:
@@ -155,11 +222,24 @@ class ConfigManager:
         self.config: Optional[DiscoveryConfig] = None
 
     def load_config(
-        self, config_path: Optional[str] = None, validate: bool = True
+        self,
+        config_path: Optional[str] = None,
+        validate: bool = True,
+        config_required: bool = False,
     ) -> DiscoveryConfig:
-        """Load configuration from file or environment."""
+        """Load configuration from file or environment.
+
+        When ``config_required`` is True and a config path is set but the file
+        does not exist, raise instead of silently falling back to environment
+        variables/defaults. This is used when the user explicitly passed
+        ``--config`` so a typo'd path fails loudly rather than running with an
+        unexpected configuration.
+        """
         if config_path:
             self.config_path = config_path
+
+        if config_required and self.config_path and not Path(self.config_path).exists():
+            raise ValueError(f"Configuration file not found: {self.config_path}")
 
         if self.config_path and Path(self.config_path).exists():
             # Load from file
@@ -167,7 +247,7 @@ class ConfigManager:
             try:
                 self.config = self._parse_config_dict(config_data)
             except Exception as e:
-                docs_base = "https://github.com/planetscale/ps-discovery/blob/main"
+                docs_base = "https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main"
                 raise ValueError(
                     f"Failed to parse configuration file '{self.config_path}': {e}\n"
                     "\n"
@@ -352,7 +432,8 @@ class ConfigManager:
             heroku=heroku_config,
             neon=neon_config,
             output=output_config,
-            modules=config_data.get("modules", ["database", "cloud"]),
+            # Absent key -> None (unspecified); resolve_modules() will infer.
+            modules=config_data.get("modules"),
             log_level=config_data.get("log_level", "INFO"),
             log_file=config_data.get("log_file"),
             target_database=config_data.get("target_database"),
@@ -468,19 +549,22 @@ class ConfigManager:
                 f"Valid engines are: {', '.join(sorted(valid_engines))}"
             )
 
-        # Validate modules
+        # Validate modules. At runtime main() sets config.modules to the
+        # resolved list before validating; `or []` only guards direct callers
+        # that load with validate=True before modules have been resolved.
+        modules = self.config.modules or []
         valid_modules = {"database", "cloud"}
-        for module in self.config.modules:
+        for module in modules:
             if module not in valid_modules:
                 errors.append(f"Invalid module: {module}")
 
         # Validate database config if database module enabled
-        if "database" in self.config.modules and self.config.engine == "postgres":
+        if "database" in modules and self.config.engine == "postgres":
             if not self.config.database.database:
                 errors.append("Database name is required for PostgreSQL discovery")
 
         # Validate cloud providers if cloud module enabled
-        if "cloud" in self.config.modules:
+        if "cloud" in modules:
             if not (
                 self.config.aws.enabled
                 or self.config.gcp.enabled
@@ -522,10 +606,18 @@ class ConfigManager:
         providers = [p.strip().lower() for p in providers]
         engines = [e.strip().lower() for e in engines]
 
+        # A run targets a single engine. Default to mysql only when it is the
+        # sole selection; otherwise postgres.
+        selected_engine = "mysql" if engines == ["mysql"] else "postgres"
+
         if output_path.suffix.lower() in [".yaml", ".yml"]:
-            # Start with header
-            template_yaml = """# PlanetScale Discovery Configuration
+            template_yaml = f"""# PlanetScale Discovery Configuration
 # Generated for your selected providers
+#
+# Fill in the values below, then run:  ps-discovery
+
+# Database engine to analyze: postgres or mysql
+engine: {selected_engine}
 """
 
             # Add database engine sections
@@ -545,7 +637,7 @@ database:
 
             if "mysql" in engines:
                 template_yaml += """
-# MySQL connection settings (use with --engine mysql)
+# MySQL connection settings (set engine: mysql above to use this block)
 mysql:
   host: localhost
   port: 3306
@@ -644,7 +736,8 @@ mysql:
 """
 
             # Add output and logging settings
-            template_yaml += """# Output settings
+            template_yaml += """
+# Output settings
 output:
   output_dir: ./discovery_output
 
@@ -656,67 +749,10 @@ log_level: INFO  # Options: DEBUG, INFO, WARNING, ERROR
             with open(output_path, "w") as f:
                 f.write(template_yaml)
         else:
-            # JSON template
-            template = {
-                "database": {
-                    "host": "localhost",
-                    "port": 5432,
-                    "database": "your_database_name",
-                    "username": "your_username",
-                    "password": "your_password",
-                    "ssl_mode": "prefer",
-                },
-                "output": {
-                    "output_dir": "./discovery_output",
-                },
-                "log_level": "INFO",
-            }
-
-            # Add cloud provider sections if any were specified
-            if providers:
-                template["providers"] = {}
-
-                if "aws" in providers:
-                    template["providers"]["aws"] = {
-                        "enabled": True,
-                        "regions": ["us-west-2", "us-east-1"],
-                        "credentials": {"profile": "default"},
-                        "discover_all": True,
-                    }
-
-                if "gcp" in providers:
-                    template["providers"]["gcp"] = {
-                        "enabled": True,
-                        "project_id": "your-gcp-project-id",
-                        "regions": ["us-central1", "us-west1"],
-                        "credentials": {
-                            "service_account_key": "/path/to/service-account-key.json"
-                        },
-                        "discover_all": True,
-                    }
-
-                if "supabase" in providers:
-                    template["providers"]["supabase"] = {
-                        "enabled": True,
-                        "credentials": {"access_token": "your_supabase_access_token"},
-                    }
-
-                if "heroku" in providers:
-                    template["providers"]["heroku"] = {
-                        "enabled": True,
-                        "api_key": "your_heroku_api_key",
-                        "discover_all": True,
-                    }
-
-                if "neon" in providers:
-                    template["providers"]["neon"] = {
-                        "enabled": True,
-                        "api_key": "your_neon_api_key",
-                        "discover_all": True,
-                    }
-
-            with open(output_path, "w") as f:
-                json.dump(template, f, indent=2)
+            raise ValueError(
+                f"Unsupported config template extension: {output_path.suffix}. "
+                "Use a .yaml or .yml output path."
+            )
 
     def get_config(self) -> DiscoveryConfig:
         """Get current configuration."""

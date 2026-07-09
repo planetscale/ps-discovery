@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PlanetScale Discovery CLI can analyze Google Cloud SQL instances, AlloyDB clusters, and related networking infrastructure.
+The PlanetScale Discovery CLI can analyze Google Cloud SQL instances (PostgreSQL and MySQL engines), AlloyDB clusters, and related networking infrastructure.
 
 ## Prerequisites
 
@@ -141,8 +141,7 @@ providers:
 ### Basic Configuration
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   gcp:
@@ -434,48 +433,6 @@ gcloud services enable sqladmin.googleapis.com compute.googleapis.com
 - Review service account usage regularly
 - Monitor for anomalous behavior
 
-## Advanced Configuration
-
-### VPC Service Controls
-
-For organizations using VPC Service Controls:
-
-```yaml
-providers:
-  gcp:
-    enabled: true
-    project_id: protected-project
-    vpc_service_controls:
-      enabled: true
-      perimeter: accessPolicies/POLICY_ID/servicePerimeters/PERIMETER_NAME
-```
-
-### Shared VPC Configuration
-
-For resources in shared VPC:
-
-```yaml
-providers:
-  gcp:
-    enabled: true
-    project_id: service-project-123
-    shared_vpc:
-      host_project: vpc-host-project-123
-```
-
-### Custom API Endpoints
-
-For Private Google Access:
-
-```yaml
-providers:
-  gcp:
-    enabled: true
-    project_id: private-project
-    endpoint_override:
-      sqladmin: https://sqladmin.private.googleapis.com
-```
-
 ## Recommendations
 
 ### High Availability
@@ -511,5 +468,5 @@ When running against managed PostgreSQL services (Cloud SQL, AlloyDB):
 ## Support
 
 For issues with GCP discovery:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - GCP Support: https://cloud.google.com/support

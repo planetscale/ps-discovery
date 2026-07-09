@@ -6,7 +6,7 @@ Thank you for your interest in contributing to the PlanetScale Discovery Tools. 
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - Git
 - pipx (recommended) or pip
 
@@ -271,7 +271,7 @@ If you encounter issues during development:
 1. Check the test output for detailed error messages
 2. Review the testing documentation above
 3. Ensure all dependencies are installed correctly
-4. Verify Python version compatibility (3.9+)
+4. Verify Python version compatibility (3.10+)
 
 ## License
 

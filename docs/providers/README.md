@@ -126,9 +126,6 @@ See individual provider documentation for detailed authentication setup.
 You can discover multiple cloud providers simultaneously:
 
 ```yaml
-modules:
-  - cloud
-
 providers:
   aws:
     enabled: true
@@ -242,6 +239,9 @@ pipx install -e ".[heroku]"
 
 # All providers
 pipx install -e ".[all]"
+
+# Neon only
+pipx install -e ".[neon]"
 ```
 
 ## Output Format
@@ -255,7 +255,8 @@ All providers generate consistent output:
     "aws": { /* AWS discoveries */ },
     "gcp": { /* GCP discoveries */ },
     "supabase": { /* Supabase discoveries */ },
-    "heroku": { /* Heroku discoveries */ }
+    "heroku": { /* Heroku discoveries */ },
+    "neon": { /* Neon discoveries */ }
   },
   "summary": {
     "providers_discovered": ["aws", "gcp", "supabase", "heroku"],
@@ -282,7 +283,6 @@ All providers generate consistent output:
 - Use least-privilege access
 
 ### Report Handling
-- Enable `mask_sensitive_data: true` in output config
 - Store reports securely
 - Review reports before sharing
 - Sanitize before sending to third parties
@@ -325,21 +325,10 @@ All providers generate consistent output:
 3. Review logs for warnings about skipped resources
 4. Ensure API endpoints are accessible
 
-## Provider Comparison
-
-| Feature | AWS | GCP | Supabase | Heroku |
-|---------|-----|-----|----------|--------|
-| Database Types | RDS, Aurora | Cloud SQL, AlloyDB | PostgreSQL | PostgreSQL (add-ons) |
-| Authentication | IAM, Access Keys | Service Accounts | Access Tokens | API Keys |
-| Networking | VPC, Security Groups | VPC, Firewalls | SSL, IPv6 | Managed (no VPC config) |
-| Pricing Tiers | Multiple | Multiple | Free to Enterprise | Essential to Shield |
-| API Maturity | Mature | Mature | Growing | Mature |
-| Documentation | Extensive | Extensive | Good | Good |
-
 ## Getting Help
 
 - [Main README](../../README.md)
-- [GitHub Issues](https://github.com/planetscale/ps-discovery/issues)
+- [GitHub Issues](https://github.com/planetscale/planetscale-discovery-cli-dev/issues)
 - Provider-specific documentation (see links above)
 
 ## Contributing

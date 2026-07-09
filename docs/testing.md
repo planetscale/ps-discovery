@@ -135,12 +135,7 @@ cd ps-discovery
 ## Testing Different Python Versions
 
 ```bash
-# Python 3.9
-docker run -it --rm -v $(pwd):/app python:3.9-slim bash
-cd /app
-./setup.sh
-
-# Python 3.10
+# Python 3.10 (minimum supported)
 docker run -it --rm -v $(pwd):/app python:3.10-slim bash
 cd /app
 ./setup.sh
@@ -157,6 +152,11 @@ cd /app
 
 # Python 3.13
 docker run -it --rm -v $(pwd):/app python:3.13-slim bash
+cd /app
+./setup.sh
+
+# Python 3.14
+docker run -it --rm -v $(pwd):/app python:3.14-slim bash
 cd /app
 ./setup.sh
 ```
@@ -218,7 +218,7 @@ jobs:
 6. **Network issues** (pip install failures)
 7. **Permission issues** (trying to write to read-only filesystem)
 8. **Shell compatibility** (bash vs zsh vs dash)
-9. **Python version too old** (< 3.9)
+9. **Python version too old** (< 3.10)
 10. **Missing dependencies** (psycopg2-binary compilation issues)
 
 ## Success Criteria
@@ -227,6 +227,6 @@ A successful test should:
 1. Complete setup without errors
 2. Create functional venv
 3. Install all required dependencies
-4. Generate sample-config.yaml
+4. Generate config.yaml
 5. Pass `python3 -m planetscale_discovery --help` test
 6. Provide helpful error messages if anything fails

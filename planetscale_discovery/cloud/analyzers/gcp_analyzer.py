@@ -113,14 +113,14 @@ class GCPAnalyzer(CloudAnalyzer):
                 "or a service account key file.\n"
                 "  Quick start: gcloud auth application-default login\n"
                 "  Or set: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json\n"
-                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/gcp.md",
+                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/gcp.md",
                 e,
             )
             return False
         except Exception as e:
             self.add_error(
                 "GCP authentication failed.\n"
-                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/gcp.md",
+                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/gcp.md",
                 e,
             )
             return False

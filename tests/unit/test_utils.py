@@ -4,6 +4,7 @@ Tests for common utility functions
 
 import tempfile
 import json
+import pytest
 from pathlib import Path
 from datetime import datetime
 from planetscale_discovery.common.utils import (
@@ -41,16 +42,14 @@ class TestLogging:
 class TestConfigLoading:
     """Tests for configuration loading"""
 
-    def test_load_json_config(self):
-        """Test loading JSON config file"""
+    def test_rejects_non_yaml_config(self):
+        """Config files must be YAML; other extensions are rejected."""
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-            config = {"database": {"host": "localhost", "port": 5432}}
-            json.dump(config, f)
+            f.write('{"database": {"host": "localhost"}}')
             config_file = f.name
 
-        loaded = load_config_file(config_file)
-        assert loaded["database"]["host"] == "localhost"
-        assert loaded["database"]["port"] == 5432
+        with pytest.raises(ValueError, match="Unsupported configuration file format"):
+            load_config_file(config_file)
 
     def test_load_yaml_config(self):
         """Test loading YAML config file"""

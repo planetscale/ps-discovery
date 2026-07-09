@@ -206,9 +206,7 @@ FROM emails TABLESAMPLE BERNOULLI (10);
 These analyzers can run anytime on production databases:
 
 ```yaml
-modules:
-  - database  # Safe: config, schema, performance, security, features
-  - cloud     # Safe: Only queries cloud provider APIs
+engine: postgres
 ```
 
 ### Requires Caution (Opt-In Analyzers)
@@ -247,7 +245,7 @@ database:
 
 ### Managed Database Environments
 
-When running against managed PostgreSQL services (AWS RDS, Cloud SQL, Supabase, etc.):
+When running against managed PostgreSQL services (AWS RDS, Cloud SQL, Supabase, Heroku Postgres, Neon, etc.):
 
 - **Default analyzers are safe** - they only read metadata
 - **Data size analyzer requires caution** - consult your cloud provider's best practices
@@ -283,8 +281,7 @@ When running against managed PostgreSQL services (AWS RDS, Cloud SQL, Supabase, 
 
 ```yaml
 # Fastest discovery - skip data size analysis
-modules:
-  - database
+engine: postgres
 
 database:
   host: localhost
@@ -302,8 +299,7 @@ database:
 
 ```yaml
 # Moderate performance impact with sampling
-modules:
-  - database
+engine: postgres
 
 database:
   host: db-replica.example.com  # Use replica
@@ -321,8 +317,7 @@ database:
 
 ```yaml
 # Detailed analysis - use during maintenance windows
-modules:
-  - database
+engine: postgres
 
 database:
   host: db-replica.example.com
