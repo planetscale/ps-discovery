@@ -13,7 +13,7 @@ README = (pathlib.Path(__file__).parent / "README.md").read_text()
 
 setup(
     name="planetscale-discovery-tools",
-    version="1.2.0",
+    version="1.3.0",
     description="Comprehensive database and cloud infrastructure discovery tools",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -78,7 +78,7 @@ setup(
         ],
     },
     # Python version requirement
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     # Classification
     classifiers=[
         "Development Status :: 5 - Production/Stable",
@@ -86,11 +86,11 @@ setup(
         "Topic :: Database",
         "Topic :: System :: Systems Administration",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
     ],
     # Additional metadata
     keywords="postgresql mysql database discovery cloud aws gcp supabase heroku neon",
