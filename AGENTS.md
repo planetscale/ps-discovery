@@ -47,7 +47,7 @@ Key top-level files: `VERSION`, `setup.py`, `pyproject.toml`, `requirements.txt`
 
 ## Development Setup
 
-Requires Python 3.9+.
+Requires Python 3.10+.
 
 ```bash
 python3 -m venv .venv
@@ -58,11 +58,14 @@ pip install pytest pytest-cov pytest-mock moto responses  # Test deps
 pip install black flake8 mypy    # Dev tools
 ```
 
-Or use `./setup.sh` which handles venv creation and dependency prompts interactively.
+Or use `./setup.sh`, which creates the venv, installs dependencies, and uses
+arrow-key selectors (or the `PSDISCOVERY_ENGINE` / `PSDISCOVERY_PROVIDER`
+environment variables in CI) to pick the database engine and cloud provider,
+then writes a starter `config.yaml`.
 
 ## Testing
 
-CI runs tests across Python 3.9-3.13 via `.github/workflows/tests.yml`.
+CI runs tests across Python 3.10-3.14 via `.github/workflows/tests.yml`.
 
 ```bash
 # Run all tests
@@ -110,7 +113,12 @@ Database analyzers extend `DatabaseAnalyzer` (adds a psycopg2 connection). Cloud
 
 ### CLI Layer
 
-`cli.py` provides subcommands: `database`, `cloud`, `both`, `config-template`. The `ps-discovery` wrapper script (shell script at project root) activates the venv automatically.
+The config file is the source of truth. Running `ps-discovery` with no subcommand
+loads `./config.yaml` (or the file passed to `--config`) and runs whatever database
+and/or cloud modules it declares. `cli.py` also provides explicit subcommands for
+running a single scope directly: `database`, `cloud`, `both`, and `config-template`
+(generates a YAML template). The `ps-discovery` wrapper script (shell script at
+project root) activates the venv automatically.
 
 ### Graceful Degradation
 

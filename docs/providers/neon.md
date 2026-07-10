@@ -94,9 +94,8 @@ The API key must have access to the projects being analyzed. The discovery tool 
 ```yaml
 # PlanetScale Discovery - Neon Provider Configuration Template
 
-# Modules to enable
-modules:
-  - cloud
+# Database engine (Neon is PostgreSQL)
+engine: postgres
 
 # Provider configuration
 providers:
@@ -131,8 +130,7 @@ log_level: INFO
 Discover all projects your API key can access:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   neon:
@@ -149,8 +147,7 @@ output:
 Target a specific project by ID:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   neon:
@@ -167,8 +164,7 @@ output:
 Combine Neon with other cloud providers:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   neon:
@@ -291,14 +287,11 @@ The tool maps Neon Compute Units (CU) to hardware specifications:
 ### Command Line
 
 ```bash
-# Using configuration file
-ps-discovery cloud --config neon-config.yaml
+# Run discovery using your configuration file
+ps-discovery --config neon-config.yaml
 
-# With specific output directory
-ps-discovery cloud --config neon-config.yaml --output-dir ./output
-
-# Combined with database discovery
-ps-discovery both --config full-config.yaml
+# Save reports to a specific directory
+ps-discovery --config neon-config.yaml --output-dir ./output
 ```
 
 ### Expected Output
@@ -386,7 +379,7 @@ export NEON_API_KEY="your-neon-api-key"
 ps-discovery config-template --output neon-config.yaml --providers neon
 
 # 4. Run discovery
-ps-discovery cloud --config neon-config.yaml
+ps-discovery --config neon-config.yaml
 
 # 5. Review reports
 ls ./discovery_output/
@@ -404,7 +397,7 @@ cat ./discovery_output/cloud_discovery_summary.md
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - Documentation: See main [README.md](../../README.md)
 
 For Neon-specific questions:

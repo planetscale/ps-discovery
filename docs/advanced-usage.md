@@ -7,7 +7,7 @@ For users who want more control over the installation:
 ```bash
 # Clone the repository (for development)
 git clone <repository-url>
-cd ps-discovery
+cd planetscale-discovery-cli-dev
 
 # Option 1: Install with pipx (isolates dependencies)
 pipx install -e ".[mysql]"     # Add MySQL support
@@ -35,10 +35,7 @@ For analysis that focuses on a specific target database:
 
 ```bash
 # Focus analysis on a specific database identifier
-ps-discovery cloud --config config.yaml --target-database my-rds-instance
-
-# Combined focused analysis (database + targeted cloud infrastructure)
-ps-discovery both --config config.yaml --target-database my-rds-instance
+ps-discovery --config config.yaml --target-database my-rds-instance
 ```
 
 This **focused approach**:
@@ -49,13 +46,29 @@ This **focused approach**:
 
 ## CLI Reference
 
+Running `ps-discovery` with no subcommand auto-discovers `./config.yaml` in the current directory (or the file given by `--config`) and runs whatever the config declares. The `database`, `cloud`, and `both` subcommands and the `--engine` flag are also available to override the config from the command line.
+
+### Selecting What Runs
+
+By default `ps-discovery` decides what to run from the contents of your config. A configured database block runs database discovery, and any cloud provider with `enabled: true` runs cloud discovery. You normally do not need to set anything to control this.
+
+To restrict a run, add an optional top-level `modules:` list containing `database`, `cloud`, or both. Its main use is forcing a cloud-only scan when the same config also has a database configured (or, conversely, a database-only scan when cloud providers are enabled):
+
+```yaml
+# Only run cloud discovery, even though a database is configured
+modules:
+  - cloud
+```
+
+The `database`, `cloud`, and `both` subcommands do the same thing from the command line for a one-off run, without editing your config.
+
 ### Engine Selection
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--engine` | Database engine to discover (`postgres` or `mysql`) | `postgres` |
+| `--engine` | Override the config's database engine (`postgres` or `mysql`) | from config (`postgres` if unset) |
 
-The `--engine` flag is available on the `database` and `both` subcommands. PostgreSQL is the default when no flag is specified.
+The engine is normally set in the config file with the top-level `engine:` key. The `--engine` flag overrides it and is available on the `database` and `both` subcommands. PostgreSQL is the default when neither is specified.
 
 ### Connection Parameters
 
@@ -69,7 +82,7 @@ These flags apply to both PostgreSQL and MySQL. The values are routed to the app
 | `-u, --username` | Database username | | `root` |
 | `-W, --password` | Prompt for password | | |
 | `--ssl-mode` | SSL connection mode | `prefer` | `disabled` |
-| `--config` | YAML or JSON configuration file | | |
+| `--config` | YAML configuration file | `./config.yaml` | |
 
 ### Analysis Options
 
@@ -96,10 +109,9 @@ These flags apply to both PostgreSQL and MySQL. The values are routed to the app
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--output` | Output file path (required) | |
+| `--output` | Output file path, `.yaml` or `.yml` (required) | |
 | `--engines` | Comma-separated engines: `postgres`, `mysql` | `postgres` |
 | `--providers` | Comma-separated cloud providers: `aws`, `gcp`, `supabase`, `heroku`, `neon` | |
-| `--format` | Output format: `yaml`, `json` | `yaml` |
 
 ## Automating Discovery
 
@@ -171,8 +183,7 @@ ps-discovery both \
 You can discover multiple cloud providers simultaneously:
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   aws:

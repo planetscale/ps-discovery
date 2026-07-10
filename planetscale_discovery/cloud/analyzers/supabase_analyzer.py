@@ -70,7 +70,7 @@ class SupabaseAnalyzer(CloudAnalyzer):
                     "Set it in your config file under providers.supabase.access_token, "
                     "or set the SUPABASE_ACCESS_TOKEN environment variable.\n"
                     "  Generate a token at: https://supabase.com/dashboard/account/tokens\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/supabase.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/supabase.md"
                 )
                 return False
 
@@ -91,7 +91,7 @@ class SupabaseAnalyzer(CloudAnalyzer):
                     "Invalid or expired Supabase access token. "
                     "Verify your token is correct and hasn't been revoked.\n"
                     "  Generate a new token at: https://supabase.com/dashboard/account/tokens\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/supabase.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/supabase.md"
                 )
                 return False
             elif response.status_code != 200:

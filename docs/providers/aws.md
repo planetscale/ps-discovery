@@ -124,7 +124,7 @@ export AWS_ACCESS_KEY_ID=your-access-key
 export AWS_SECRET_ACCESS_KEY=your-secret-key
 export AWS_DEFAULT_REGION=us-east-1
 
-ps-discovery cloud --config config.yaml
+ps-discovery --config config.yaml
 ```
 
 ### Option 4: IAM Instance Profile
@@ -136,8 +136,7 @@ When running on EC2, the tool can automatically use the instance's IAM role. No 
 ### Basic Configuration
 
 ```yaml
-modules:
-  - cloud
+engine: postgres
 
 providers:
   aws:
@@ -160,7 +159,9 @@ providers:
     regions:
       - us-east-1
     discover_all: true
-    target_database: my-rds-instance  # Focus on specific database
+
+# Focus discovery on a specific database instance (top-level key)
+target_database: my-rds-instance
 
 output:
   output_dir: ./focused_discovery
@@ -393,19 +394,6 @@ If not specified, the tool defaults to `us-east-1`.
 
 ## Advanced Configuration
 
-### Custom Endpoint Configuration
-
-For AWS GovCloud or custom endpoints:
-
-```yaml
-providers:
-  aws:
-    enabled: true
-    regions:
-      - us-gov-west-1
-    endpoint_url: https://rds.us-gov-west-1.amazonaws.com
-```
-
 ### Proxy Configuration
 
 ```bash
@@ -413,7 +401,7 @@ export HTTP_PROXY=http://proxy.example.com:8080
 export HTTPS_PROXY=http://proxy.example.com:8080
 export NO_PROXY=169.254.169.254  # For instance metadata
 
-ps-discovery cloud --config config.yaml
+ps-discovery --config config.yaml
 ```
 
 ### Session Token Authentication
@@ -458,5 +446,5 @@ providers:
 ## Support
 
 For issues with AWS discovery:
-- Report bugs: https://github.com/planetscale/ps-discovery/issues
+- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
 - AWS Support: https://aws.amazon.com/support/

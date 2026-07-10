@@ -133,7 +133,7 @@ class HerokuAnalyzer(CloudAnalyzer):
                     "pass --heroku-api-key on the command line, "
                     "or set the HEROKU_API_KEY environment variable.\n"
                     "  To create an API key, run: heroku authorizations:create --short\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/heroku.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/heroku.md"
                 )
                 return False
 
@@ -154,7 +154,7 @@ class HerokuAnalyzer(CloudAnalyzer):
                     "Invalid or expired Heroku API key. "
                     "Verify your key is correct and hasn't been revoked.\n"
                     "  To create a new key, run: heroku authorizations:create --short\n"
-                    "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/heroku.md"
+                    "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/heroku.md"
                 )
                 return False
             elif response.status_code != 200:

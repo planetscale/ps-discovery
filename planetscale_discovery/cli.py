@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List
 
-from .config.config_manager import ConfigManager
+from .config.config_manager import ConfigManager, resolve_modules
 from .cloud.discovery import CloudDiscoveryTool
 from .common.utils import setup_logging, generate_timestamp
 from . import __version__
@@ -26,57 +26,50 @@ def create_main_parser() -> argparse.ArgumentParser:
         ),
         epilog="""
 Examples:
-  # PostgreSQL database discovery (default engine)
+  # Config-driven (recommended): runs whatever ./config.yaml declares.
+  # Auto-discovers ./config.yaml when --config is omitted.
+  ps-discovery
+  ps-discovery --config full-config.yaml
+
+  # Or run a specific scope directly:
   ps-discovery database --host localhost -d mydb -u postgres
-
-  # MySQL database discovery
   ps-discovery database --engine mysql --host localhost -u root -W
-
-  # Cloud discovery only
   ps-discovery cloud --config cloud-config.yaml
-
-  # Both database and cloud discovery
   ps-discovery both --config full-config.yaml
-  ps-discovery both --engine mysql --host localhost -u root -W --providers aws
 
-  # Generate configuration template
-  ps-discovery config-template --output discovery-config.yaml
+  # Generate a configuration template
+  ps-discovery config-template --output config.yaml
+
+Global options (--config, --engine, --providers, --output-dir, --log-level)
+may be used with no subcommand: `ps-discovery --config config.yaml`.
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Create subparsers
+    # Shared run options on the top-level parser so a bare `ps-discovery`
+    # (no subcommand) and `ps-discovery --config x` both parse.
+    add_shared_run_args(parser)
+
+    # Create subparsers. Not required: omitting a subcommand runs from config.
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Database discovery subcommand
     db_parser = subparsers.add_parser(
         "database", help="Database discovery (use --engine to select postgres or mysql)"
     )
-    add_common_args(db_parser)
-    db_parser.add_argument(
-        "--engine",
-        choices=["postgres", "mysql"],
-        default=None,
-        help="Database engine to discover (overrides engine from config; defaults to postgres if unset)",
-    )
+    add_shared_run_args(db_parser, suppress_defaults=True)
     add_database_args(db_parser)
 
     # Cloud discovery subcommand
     cloud_parser = subparsers.add_parser("cloud", help="Cloud infrastructure discovery")
-    add_common_args(cloud_parser)
+    add_shared_run_args(cloud_parser, suppress_defaults=True)
     add_cloud_args(cloud_parser)
 
     # Combined discovery subcommand
     both_parser = subparsers.add_parser(
         "both", help="Combined database and cloud discovery"
     )
-    add_common_args(both_parser)
-    both_parser.add_argument(
-        "--engine",
-        choices=["postgres", "mysql"],
-        default=None,
-        help="Database engine to discover (overrides engine from config; defaults to postgres if unset)",
-    )
+    add_shared_run_args(both_parser, suppress_defaults=True)
     add_database_args(both_parser)
     add_cloud_args(both_parser)
 
@@ -85,13 +78,9 @@ Examples:
         "config-template", help="Generate configuration template"
     )
     config_parser.add_argument(
-        "--output", required=True, help="Output file for configuration template"
-    )
-    config_parser.add_argument(
-        "--format",
-        choices=["yaml", "json"],
-        default="yaml",
-        help="Configuration format",
+        "--output",
+        required=True,
+        help="Output file for the configuration template (.yaml or .yml)",
     )
     config_parser.add_argument(
         "--providers",
@@ -107,36 +96,70 @@ Examples:
     return parser
 
 
-def add_common_args(parser: argparse.ArgumentParser) -> None:
-    """Add common arguments to a subcommand parser."""
-    common_group = parser.add_argument_group("Common Options")
+def add_shared_run_args(
+    parser: argparse.ArgumentParser, suppress_defaults: bool = False
+) -> None:
+    """Add run options that are valid with or without a subcommand.
 
-    common_group.add_argument(
-        "--config", "-c", help="Configuration file (YAML or JSON)", type=str
+    These live on both the top-level parser and each run subparser. On the
+    subparsers we use ``argparse.SUPPRESS`` as the default so that an option
+    given at the top level (before the subcommand) is not clobbered by the
+    subparser's default when the same option is omitted after the subcommand.
+    """
+
+    def default(value):
+        return argparse.SUPPRESS if suppress_defaults else value
+
+    group = parser.add_argument_group("Common Options")
+
+    group.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default=default(None),
+        help="Configuration file (YAML). Defaults to ./config.yaml if present.",
     )
 
-    common_group.add_argument(
+    group.add_argument(
         "--output-dir",
         "-o",
-        help="Output directory for reports (overrides output.output_dir from config)",
-        default=None,
         type=str,
+        default=default(None),
+        help="Output directory for reports (overrides output.output_dir from config)",
     )
 
-    common_group.add_argument(
+    group.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
+        default=default("INFO"),
         help="Logging level",
     )
 
-    common_group.add_argument("--log-file", help="Log file path", type=str)
+    group.add_argument(
+        "--log-file", type=str, default=default(None), help="Log file path"
+    )
 
-    common_group.add_argument(
+    group.add_argument(
         "--local-summary",
         action="store_true",
-        default=False,
+        default=default(False),
         help="Generate a local markdown summary for debugging. This file stays on your machine and is not sent anywhere.",
+    )
+
+    group.add_argument(
+        "--engine",
+        choices=["postgres", "mysql"],
+        default=default(None),
+        help="Database engine to discover (overrides engine from config; defaults to postgres if unset)",
+    )
+
+    group.add_argument(
+        "--providers",
+        default=default(None),
+        help=(
+            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon). "
+            "Overrides the enabled providers in the config file."
+        ),
     )
 
 
@@ -190,15 +213,6 @@ def add_database_args(parser: argparse.ArgumentParser) -> None:
 def add_cloud_args(parser: argparse.ArgumentParser) -> None:
     """Add cloud-specific arguments."""
     cloud_group = parser.add_argument_group("Cloud Discovery Options")
-
-    cloud_group.add_argument(
-        "--providers",
-        help=(
-            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon). "
-            "If not specified, uses config file settings."
-        ),
-        default=None,
-    )
 
     cloud_group.add_argument(
         "--regions", help="Comma-separated list of regions to analyze"
@@ -267,8 +281,9 @@ def run_database_discovery(config: Any, args: argparse.Namespace) -> Dict[str, A
     from .database.discovery import DatabaseDiscoveryTool
 
     # Override analyzer modules from CLI --analyzers flag
-    if args.analyzers:
-        requested = args.analyzers.split(",")
+    analyzers = getattr(args, "analyzers", None)
+    if analyzers:
+        requested = analyzers.split(",")
         invalid = [a for a in requested if a not in VALID_DATABASE_ANALYZERS]
         if invalid:
             valid_list = ", ".join(VALID_DATABASE_ANALYZERS)
@@ -297,8 +312,9 @@ def run_mysql_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
     from .database.mysql_discovery import MySQLDiscoveryTool
 
     # Override analyzer modules from CLI --analyzers flag
-    if args.analyzers:
-        requested = args.analyzers.split(",")
+    analyzers = getattr(args, "analyzers", None)
+    if analyzers:
+        requested = analyzers.split(",")
         invalid = [a for a in requested if a not in VALID_MYSQL_ANALYZERS]
         if invalid:
             valid_list = ", ".join(VALID_MYSQL_ANALYZERS)
@@ -316,34 +332,42 @@ def run_mysql_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
 
 
 def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]:
-    """Run cloud discovery."""
-    # Override config with command line arguments
-    if args.providers:
-        providers = args.providers.split(",")
+    """Run cloud discovery.
+
+    Cloud-specific flags only exist on the cloud/both subparsers, so read them
+    defensively — a config-driven run (no subcommand) won't have them.
+    """
+    # Override config with command line arguments. --providers is already
+    # applied in main() before module resolution; re-applying here is harmless
+    # and keeps this entry point usable on its own.
+    providers_arg = getattr(args, "providers", None)
+    if providers_arg:
+        providers = providers_arg.split(",")
         config.aws.enabled = "aws" in providers
         config.gcp.enabled = "gcp" in providers
         config.supabase.enabled = "supabase" in providers
         config.heroku.enabled = "heroku" in providers
         config.neon.enabled = "neon" in providers
 
-    if args.regions:
-        regions = args.regions.split(",")
+    regions = getattr(args, "regions", None)
+    if regions:
+        regions = regions.split(",")
         if config.aws.enabled:
             config.aws.regions = regions
         if config.gcp.enabled:
             config.gcp.regions = regions
 
-    if args.aws_profile:
+    if getattr(args, "aws_profile", None):
         config.aws.profile = args.aws_profile
 
-    if args.gcp_project:
+    if getattr(args, "gcp_project", None):
         config.gcp.project_id = args.gcp_project
 
-    if args.gcp_key:
+    if getattr(args, "gcp_key", None):
         config.gcp.service_account_key = args.gcp_key
 
     # Set target database for focused analysis
-    if args.target_database:
+    if getattr(args, "target_database", None):
         config.target_database = args.target_database
 
     # Heroku-specific overrides
@@ -807,20 +831,6 @@ def main() -> None:
     parser = create_main_parser()
     args = parser.parse_args()
 
-    if not args.command:
-        print(
-            "Usage: ps-discovery <command> [options]\n"
-            "\n"
-            "Commands:\n"
-            "  database         Database discovery (--engine postgres|mysql)\n"
-            "  cloud            Cloud infrastructure discovery\n"
-            "  both             Combined database and cloud discovery\n"
-            "  config-template  Generate configuration template\n"
-            "\n"
-            "Run 'ps-discovery <command> --help' for details on a specific command."
-        )
-        sys.exit(1)
-
     try:
         # Handle config template generation
         if args.command == "config-template":
@@ -833,9 +843,25 @@ def main() -> None:
             print(f"Configuration template saved to {args.output}")
             return
 
-        # Load configuration without validation
-        config_manager = ConfigManager(args.config)
-        config = config_manager.load_config(validate=False)
+        # Determine the config path. An explicit --config must exist (fail
+        # loudly on a typo); otherwise auto-discover a config in the CWD.
+        config_arg = getattr(args, "config", None)
+        config_required = bool(config_arg)
+        config_path = config_arg
+        autodiscovered_path = None
+        if not config_path:
+            for candidate in ("config.yaml", "config.yml", "sample-config.yaml"):
+                if Path(candidate).exists():
+                    config_path = candidate
+                    autodiscovered_path = candidate
+                    break
+
+        # Load configuration without validation (validation runs after the
+        # module set is resolved).
+        config_manager = ConfigManager(config_path)
+        config = config_manager.load_config(
+            validate=False, config_required=config_required
+        )
 
         # Override global config with CLI args
         if args.output_dir:
@@ -876,6 +902,8 @@ def main() -> None:
 
         # Set up logging
         logger = setup_logging(config.log_level, config.log_file)
+        if autodiscovered_path:
+            logger.info(f"Loaded configuration from ./{autodiscovered_path}")
 
         # Combined results
         combined_results = {
@@ -886,28 +914,39 @@ def main() -> None:
             "summary": {},
         }
 
-        # Set modules based on command
-        if args.command == "database":
-            config.modules = ["database"]
-        elif args.command == "cloud":
-            config.modules = ["cloud"]
-        elif args.command == "both":
-            config.modules = ["database", "cloud"]
-
-        # Apply cloud provider flags before validation so --providers works
-        if hasattr(args, "providers") and args.providers:
-            providers = args.providers.split(",")
+        # Apply the --providers override BEFORE resolving modules so inference
+        # reflects providers enabled on the command line.
+        providers_arg = getattr(args, "providers", None)
+        if providers_arg:
+            providers = [p.strip() for p in providers_arg.split(",")]
             config.aws.enabled = "aws" in providers
             config.gcp.enabled = "gcp" in providers
             config.supabase.enabled = "supabase" in providers
             config.heroku.enabled = "heroku" in providers
             config.neon.enabled = "neon" in providers
 
-        # Validate configuration after setting modules
+        # Resolve which modules to run. Precedence: explicit subcommand, then
+        # the config file's `modules:`, then inference from config contents.
+        modules = resolve_modules(config, args.command)
+        config.modules = modules
+
+        if not modules:
+            print(
+                "Nothing to discover.\n"
+                "  No database connection is configured and no cloud provider is enabled.\n"
+                "  Fix this by either:\n"
+                "    - running ./setup.sh to generate and fill in config.yaml, or\n"
+                "    - running 'ps-discovery config-template --output config.yaml' and editing it, or\n"
+                "    - passing an explicit subcommand (database | cloud | both) with flags.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Validate configuration against the resolved module set.
         config_manager.validate_config()
 
-        # Run discovery based on command and engine
-        if args.command in ["database", "both"]:
+        # Run discovery based on the resolved modules and engine.
+        if "database" in modules:
             engine_label = "MySQL" if config.engine == "mysql" else "PostgreSQL"
             logger.info(f"Starting {engine_label} discovery...")
             try:
@@ -919,10 +958,12 @@ def main() -> None:
                 logger.info(f"{engine_label} discovery completed successfully")
             except Exception as e:
                 _handle_database_error(e, logger, config.engine)
-                if args.command != "both":
+                # Fatal only when database is the sole module; when cloud also
+                # runs, let it proceed.
+                if modules == ["database"]:
                     sys.exit(1)
 
-        if args.command in ["cloud", "both"]:
+        if "cloud" in modules:
             logger.info("Starting cloud discovery...")
             try:
                 cloud_results = run_cloud_discovery(config, args)
@@ -930,7 +971,7 @@ def main() -> None:
                 logger.info("Cloud discovery completed successfully")
             except Exception as e:
                 logger.error(f"Cloud discovery failed: {e}")
-                if args.command == "cloud":
+                if modules == ["cloud"]:
                     sys.exit(1)
 
         # Generate combined summary
@@ -957,7 +998,7 @@ def main() -> None:
             logger.info(f"Summary report saved to {md_path}")
 
         # Print summary
-        print_discovery_summary(summary, args.command)
+        print_discovery_summary(summary)
 
     except KeyboardInterrupt:
         print("\nDiscovery interrupted by user")
@@ -1034,13 +1075,18 @@ def generate_combined_summary(results: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
-def print_discovery_summary(summary: Dict[str, Any], command: str) -> None:
-    """Print discovery summary to console."""
+def print_discovery_summary(summary: Dict[str, Any]) -> None:
+    """Print discovery summary to console.
+
+    Keyed off which results were produced rather than the invocation command,
+    so it works the same whether the run was config-driven or used an explicit
+    subcommand.
+    """
     print("\n" + "=" * 60)
     print("DISCOVERY SUMMARY")
     print("=" * 60)
 
-    if command in ["database", "both"] and summary.get("database_summary"):
+    if summary.get("database_summary"):
         db_summary = summary["database_summary"]
         engine = db_summary.get("engine", "postgres")
 
@@ -1062,7 +1108,7 @@ def print_discovery_summary(summary: Dict[str, Any], command: str) -> None:
             print(f"\n   Information Gaps: {gap_count}")
             print("   See reports for details")
 
-    if command in ["cloud", "both"] and summary.get("cloud_summary"):
+    if summary.get("cloud_summary"):
         cloud_summary = summary["cloud_summary"]
         print("\nCLOUD ANALYSIS:")
         print(f"   Providers Analyzed: {cloud_summary.get('providers_analyzed', 0)}")

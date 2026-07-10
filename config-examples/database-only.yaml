@@ -1,6 +1,9 @@
 # Database Discovery Only Configuration
 # For discovering PostgreSQL database environments
 
+# Database engine to analyze: postgres or mysql
+engine: postgres
+
 database:
   host: localhost
   port: 5432
@@ -10,12 +13,7 @@ database:
   ssl_mode: prefer
   connection_timeout: 30
 
-# Discovery modules to run
-modules:
-  - database
-
 output:
   output_dir: ./discovery_output
-  mask_sensitive_data: true
 
 log_level: INFO
