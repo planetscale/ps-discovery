@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-10
+
+### Added
+
+- **Config-driven runs.** The configuration file is now the source of truth. Running `ps-discovery` with no subcommand loads `./config.yaml` (auto-discovered) or the file passed to `--config` and runs whatever database and/or cloud modules it declares. Subcommands (`database`, `cloud`, `both`) remain available to run a single scope directly.
+- Global run options (`--config`, `--engine`, `--providers`, `--output-dir`, `--log-level`) may now be given before or without a subcommand, e.g. `ps-discovery --config config.yaml`.
+- Optional `modules:` list in the config file to explicitly select which modules run; when omitted, modules are inferred from the config contents.
+- `setup.sh` now uses arrow-key selectors for engine and cloud provider (or the `PSDISCOVERY_ENGINE` / `PSDISCOVERY_PROVIDER` environment variables for non-interactive/CI use) and writes a starter `config.yaml`, never clobbering an existing one (writes `new-config.yaml` instead).
+
+### Changed
+
+- Minimum supported Python raised to **3.10** (3.9 is end-of-life); CI test matrix is now Python 3.10–3.14.
+- Refreshed runtime and development dependencies to current versions, and regrouped Dependabot updates into `production`, `development`, and `github-actions` groups on a 14-day cooldown to reduce PR volume.
+
+### Removed
+
+- Configuration is now **YAML-only**; JSON config input is no longer supported.
+- `config-template` no longer accepts `--format`; the output path must end in `.yaml` or `.yml`.
+
 ## [1.2.0] - 2026-05-26
 
 ### Added
