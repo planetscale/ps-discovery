@@ -86,8 +86,12 @@ Quick Start:
    chmod +x setup.sh
    ./setup.sh
 
-3. Edit sample-config.yaml with your credentials and run discovery:
-   ./ps-discovery both --config sample-config.yaml
+3. Fill in config.yaml (created by setup.sh) with your credentials,
+   then run discovery:
+   ./ps-discovery
+
+Running ./ps-discovery with no arguments uses ./config.yaml. See README.md
+to run a specific scope or point at a different config file.
 
 No virtual environment activation required — the wrapper script
 handles it automatically.
@@ -135,19 +139,20 @@ Release Date: $(date +%Y-%m-%d)
    ./setup.sh
    \`\`\`
 
-3. Run discovery (see INSTALL.txt for full configuration options):
+3. Fill in config.yaml (created by setup.sh), then run discovery
+   (see INSTALL.txt for options):
    \`\`\`
-   ./ps-discovery both --config sample-config.yaml
+   ./ps-discovery
    \`\`\`
 
 ## What's New in v${VERSION}
 
 ${CHANGELOG_SECTION}
 
-For detailed usage instructions, see README.md
-For provider-specific setup, see docs/providers/
+For detailed usage instructions, see [README.md](https://github.com/planetscale/ps-discovery/blob/main/README.md)
+For provider-specific setup, see [docs/providers/](https://github.com/planetscale/ps-discovery/tree/main/docs/providers)
 
-Report issues: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+Report issues: https://github.com/planetscale/ps-discovery/issues
 EOF
 
 # Create zip file
