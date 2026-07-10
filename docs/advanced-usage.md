@@ -81,7 +81,7 @@ These flags apply to both PostgreSQL and MySQL. The values are routed to the app
 | `-d, --database` | Database name | (required) | (optional — empty discovers all) |
 | `-u, --username` | Database username | | `root` |
 | `-W, --password` | Prompt for password | | |
-| `--ssl-mode` | SSL connection mode | `prefer` | `disabled` |
+| `--ssl-mode` | SSL connection mode | `require` | `disabled` |
 | `--config` | YAML configuration file | `./config.yaml` | |
 
 ### Analysis Options

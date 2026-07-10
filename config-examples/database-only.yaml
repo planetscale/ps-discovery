@@ -10,7 +10,7 @@ database:
   database: your_database_name
   username: your_username
   password: your_password
-  ssl_mode: prefer
+  ssl_mode: require
   connection_timeout: 30
 
 output:

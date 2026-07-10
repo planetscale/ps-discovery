@@ -29,7 +29,7 @@ class TestDatabaseConfig:
         assert config.host == "localhost"
         assert config.port == 5432
         assert config.database == ""
-        assert config.ssl_mode == "prefer"
+        assert config.ssl_mode == "require"
         assert isinstance(config.data_size, DataSizeConfig)
 
 

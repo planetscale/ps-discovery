@@ -36,7 +36,7 @@ class DatabaseConfig:
     database: str = ""
     username: str = ""
     password: str = ""
-    ssl_mode: str = "prefer"
+    ssl_mode: str = "require"
     connection_timeout: int = 30
     data_size: DataSizeConfig = field(default_factory=DataSizeConfig)
     excluded_databases: List[str] = field(default_factory=list)
@@ -448,7 +448,7 @@ class ConfigManager:
             database=os.getenv("PGDATABASE", ""),
             username=os.getenv("PGUSER", ""),
             password=os.getenv("PGPASSWORD", ""),
-            ssl_mode=os.getenv("PGSSLMODE", "prefer"),
+            ssl_mode=os.getenv("PGSSLMODE", "require"),
         )
 
         # MySQL configuration
@@ -630,7 +630,7 @@ database:
   database: your_database_name
   username: your_username
   password: your_password
-  ssl_mode: prefer  # Options: disable, allow, prefer, require, verify-ca, verify-full
+  ssl_mode: require  # Options: disable, allow, prefer, require, verify-ca, verify-full
   # excluded_databases:  # Additional databases to skip (rdsadmin is always excluded)
   #   - some_internal_db
 """
