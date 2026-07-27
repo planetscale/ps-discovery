@@ -136,7 +136,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
         """Detect LOCK TABLES usage from status counters."""
         try:
             cursor = self.connection.cursor()
-            cursor.execute("SHOW GLOBAL STATUS LIKE 'Table_locks_immediate'")
+            cursor.execute("SHOW GLOBAL STATUS LIKE 'Com_lock_tables'")
             row = cursor.fetchone()
             cursor.close()
             if row:

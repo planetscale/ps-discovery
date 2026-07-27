@@ -99,15 +99,18 @@ class TestStatusCounterDetectors:
     def test_lock_tables_positive_when_counter_gt_zero(self):
         analyzer = _make_analyzer()
         cursor = MagicMock()
-        cursor.fetchone.return_value = ("Table_locks_immediate", 42)
+        cursor.fetchone.return_value = ("Com_lock_tables", 42)
         analyzer.connection.cursor.return_value = cursor
 
         assert analyzer._detect_lock_tables() is True
+        cursor.execute.assert_called_once_with(
+            "SHOW GLOBAL STATUS LIKE 'Com_lock_tables'"
+        )
 
     def test_lock_tables_false_when_counter_zero(self):
         analyzer = _make_analyzer()
         cursor = MagicMock()
-        cursor.fetchone.return_value = ("Table_locks_immediate", 0)
+        cursor.fetchone.return_value = ("Com_lock_tables", 0)
         analyzer.connection.cursor.return_value = cursor
 
         assert analyzer._detect_lock_tables() is False
