@@ -49,7 +49,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
             "innodb_compression": self._has_innodb_compression(),
             "ssl": self._detect_ssl(variables),
             "explicit_lock_tables": self._detect_lock_tables(),
-            "xa_transactions": self._detect_xa(variables),
+            "xa_transactions": self._detect_xa(),
             "prepared_statements": self._detect_prepared_stmts(variables),
             "galera_cluster": self._detect_galera(variables),
         }
@@ -145,19 +145,16 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
             pass
         return False
 
-    def _detect_xa(self, variables: Dict[str, str]) -> bool:
-        """Detect XA transactions support (innodb_support_xa was removed in 8.0, XA is always on)."""
-        xa_var = variables.get("innodb_support_xa", "")
-        if xa_var:
-            return xa_var.upper() == "ON"
-        # In MySQL 8.0+, XA is always supported. Check status for actual usage.
+    def _detect_xa(self) -> bool:
+        """Detect XA transaction usage from the Com_xa_* command counters."""
         try:
             cursor = self.connection.cursor()
             cursor.execute("SHOW GLOBAL STATUS LIKE 'Com_xa_%'")
             rows = cursor.fetchall()
             cursor.close()
             for row in rows:
-                if int(row[1]) > 0:
+                value = row[1]
+                if str(value).isdigit() and int(value) > 0:
                     return True
         except Exception:
             pass
@@ -176,7 +173,11 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
         return False
 
     def _detect_galera(self, variables: Dict[str, str]) -> bool:
-        return any(k.startswith("wsrep_") for k in variables)
+        """Detect an active Galera cluster: wsrep_on=ON with a real wsrep_provider loaded."""
+        if (variables.get("wsrep_on") or "").upper() != "ON":
+            return False
+        provider = (variables.get("wsrep_provider") or "").strip().lower()
+        return provider not in ("", "none")
 
     def _user_schema_filter(self, col: str) -> str:
         quoted = ", ".join(f"'{db}'" for db in SYSTEM_DATABASES)

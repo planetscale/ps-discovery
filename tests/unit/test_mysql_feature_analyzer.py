@@ -55,22 +55,54 @@ class TestVariableBasedDetectors:
         analyzer = _make_analyzer()
         assert analyzer._detect_ssl({}) is False
 
-    def test_galera_detected_from_wsrep_prefix(self):
+    def test_galera_active_requires_wsrep_on_and_provider(self):
         analyzer = _make_analyzer()
         assert (
-            analyzer._detect_galera({"wsrep_provider": "/usr/lib/galera/..."}) is True
+            analyzer._detect_galera(
+                {
+                    "wsrep_on": "ON",
+                    "wsrep_provider": "/usr/lib/galera/libgalera_smm.so",
+                }
+            )
+            is True
+        )
+
+    def test_galera_false_when_wsrep_off_despite_vars_present(self):
+        analyzer = _make_analyzer()
+        assert (
+            analyzer._detect_galera(
+                {
+                    "wsrep_on": "OFF",
+                    "wsrep_provider": "none",
+                    "wsrep_ready": "OFF",
+                }
+            )
+            is False
+        )
+
+    def test_galera_false_when_on_but_no_provider(self):
+        analyzer = _make_analyzer()
+        assert (
+            analyzer._detect_galera({"wsrep_on": "ON", "wsrep_provider": "none"})
+            is False
         )
 
     def test_galera_absent_without_wsrep_vars(self):
         analyzer = _make_analyzer()
         assert analyzer._detect_galera({"innodb_buffer_pool_size": "1G"}) is False
 
-    def test_xa_detected_when_innodb_support_xa_on(self):
+    def test_xa_false_when_counters_zero(self):
         analyzer = _make_analyzer()
-        assert analyzer._detect_xa({"innodb_support_xa": "ON"}) is True
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [
+            ("Com_xa_start", 0),
+            ("Com_xa_commit", 0),
+        ]
+        analyzer.connection.cursor.return_value = cursor
 
-    def test_xa_fallback_to_status_counters_when_var_absent(self):
-        """MySQL 8.0 removed innodb_support_xa; fall back to Com_xa_* counters."""
+        assert analyzer._detect_xa() is False
+
+    def test_xa_detected_from_usage_counters(self):
         analyzer = _make_analyzer()
         cursor = MagicMock()
         cursor.fetchall.return_value = [
@@ -79,18 +111,7 @@ class TestVariableBasedDetectors:
         ]
         analyzer.connection.cursor.return_value = cursor
 
-        assert analyzer._detect_xa({}) is True
-
-    def test_xa_false_when_all_counters_zero(self):
-        analyzer = _make_analyzer()
-        cursor = MagicMock()
-        cursor.fetchall.return_value = [
-            ("Com_xa_commit", 0),
-            ("Com_xa_rollback", 0),
-        ]
-        analyzer.connection.cursor.return_value = cursor
-
-        assert analyzer._detect_xa({}) is False
+        assert analyzer._detect_xa() is True
 
 
 class TestStatusCounterDetectors:
