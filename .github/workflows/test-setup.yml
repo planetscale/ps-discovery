@@ -12,9 +12,13 @@ on:
   # Manual trigger available from Actions tab
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   test-macos:
     name: Test on macOS
+    permissions:
+      contents: read
     strategy:
       matrix:
         os:
@@ -74,6 +78,8 @@ jobs:
   test-linux-containers:
     name: Test on Linux (Docker)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +141,8 @@ jobs:
   test-edge-cases:
     name: Test Edge Cases
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code

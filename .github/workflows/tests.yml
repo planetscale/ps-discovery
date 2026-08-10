@@ -13,6 +13,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     if: env.IS_TRUSTED_SOURCE == 'true'
+    permissions:
+      contents: read
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -50,6 +52,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     if: env.IS_TRUSTED_SOURCE == 'true'
+    permissions:
+      contents: read
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -69,6 +73,8 @@ jobs:
   security:
     runs-on: ubuntu-latest
     if: env.IS_TRUSTED_SOURCE == 'true'
+    permissions:
+      contents: read
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
