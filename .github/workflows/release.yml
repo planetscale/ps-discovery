@@ -58,6 +58,3 @@ jobs:
           --notes-file "dist/ps-discovery-${{ steps.get_version.outputs.version }}/RELEASE_NOTES.txt" \
           "dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip" \
           "dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip.sha256"
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
