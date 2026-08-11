@@ -50,14 +50,14 @@ jobs:
         sha256sum -c "ps-discovery-${VERSION}.zip.sha256"
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3
-      with:
-        name: PlanetScale Discovery Tools v${{ steps.get_version.outputs.version }}
-        body_path: dist/ps-discovery-${{ steps.get_version.outputs.version }}/RELEASE_NOTES.txt
-        files: |
-          dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip
-          dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip.sha256
-        draft: false
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release create "v${{ steps.get_version.outputs.version }}" \
+          --title "PlanetScale Discovery Tools v${{ steps.get_version.outputs.version }}" \
+          --notes-file "dist/ps-discovery-${{ steps.get_version.outputs.version }}/RELEASE_NOTES.txt" \
+          "dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip" \
+          "dist/ps-discovery-${{ steps.get_version.outputs.version }}.zip.sha256"
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
