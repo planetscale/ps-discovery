@@ -118,6 +118,32 @@ class TestMySQLReplicationAnalyzer:
         debug_mock.assert_called_once()
         assert "expire_logs_days" in debug_mock.call_args[0][0]
 
+    def test_binlog_retention_5_6_falls_back_when_seconds_missing(
+        self, mock_connection
+    ):
+        """Pre-8.0 has no @@binlog_expire_logs_seconds. That failure must not
+        skip the @@expire_logs_days read that follows it."""
+        connection, cursor = mock_connection
+        analyzer = MySQLReplicationAnalyzer(connection)
+
+        cursor.execute.side_effect = [
+            Exception("Unknown system variable 'binlog_expire_logs_seconds'"),
+            None,  # SELECT @@expire_logs_days
+        ]
+        cursor.fetchone.side_effect = [(14,)]
+
+        with patch.object(analyzer.logger, "debug") as debug_mock:
+            result = analyzer._get_binlog_retention()
+
+        assert result["expire_logs_days"] == 14
+        assert result["retention_hours"] == 336.0  # 14 * 24
+        assert "expire_logs_seconds" not in result
+        assert "warning" not in result
+        # A supported-elsewhere variable being absent is not an analysis gap.
+        assert len(analyzer.errors) == 0
+        assert len(analyzer.warnings) == 0
+        assert "binlog_expire_logs_seconds" in debug_mock.call_args[0][0]
+
     def test_analyze_includes_binlog_retention(self, mock_connection):
         """Full analyze() should include binlog_retention key."""
         connection, cursor = mock_connection

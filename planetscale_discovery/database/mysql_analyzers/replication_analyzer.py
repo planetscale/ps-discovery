@@ -98,49 +98,67 @@ class MySQLReplicationAnalyzer(DatabaseAnalyzer):
         return {}
 
     def _get_binlog_retention(self) -> Dict[str, Any]:
-        """Extract binlog retention settings from global variables."""
-        try:
-            retention: Dict[str, Any] = {}
-            cursor = self.connection.cursor()
+        """Extract binlog retention settings from global variables.
 
-            # MySQL 8.0+ uses binlog_expire_logs_seconds (default 2592000 = 30 days)
-            cursor.execute("SELECT @@binlog_expire_logs_seconds AS expire_seconds")
-            row = cursor.fetchone()
-            if row and row[0] is not None:
-                secs = int(row[0])
+        Each variable gets its own try. No server has both: binlog_expire_logs_seconds
+        is 8.0+, and expire_logs_days was removed in 8.4 -- so a missing variable
+        must not skip the read of the other one.
+        """
+        retention: Dict[str, Any] = {}
+        failures: List[str] = []
+
+        # MySQL 8.0+ uses binlog_expire_logs_seconds (default 2592000 = 30 days).
+        # Absent before 8.0 -- log at debug, then fall through to expire_logs_days.
+        try:
+            secs = self._select_scalar("SELECT @@binlog_expire_logs_seconds")
+            if secs is not None:
+                secs = int(secs)
                 retention["expire_logs_seconds"] = secs
                 if secs > 0:
                     retention["retention_hours"] = round(secs / 3600, 1)
-
-            # Older MySQL uses expire_logs_days (deprecated in 8.0, removed in 8.4).
-            # A missing variable raises — log at debug so we don't mask other errors
-            # (permission, connection) silently, but don't surface as a warning since
-            # `binlog_expire_logs_seconds` above is the modern replacement.
-            try:
-                cursor.execute("SELECT @@expire_logs_days AS expire_days")
-                row = cursor.fetchone()
-                if row and row[0] is not None:
-                    days = int(row[0])
-                    retention["expire_logs_days"] = days
-                    # If seconds didn't set retention, derive from days
-                    if "retention_hours" not in retention and days > 0:
-                        retention["retention_hours"] = days * 24.0
-            except Exception as e:
-                self.logger.debug(f"Could not read @@expire_logs_days: {e}")
-
-            cursor.close()
-
-            # Total binlog size from binary_logs (already collected, but handy here)
-            if not retention.get("retention_hours"):
-                retention["retention_hours"] = 0
-                retention["warning"] = (
-                    "No binlog retention configured or binlog disabled"
-                )
-
-            return retention
         except Exception as e:
-            self.add_error(f"Failed to get binlog retention: {e}", e)
+            self.logger.debug(f"Could not read @@binlog_expire_logs_seconds: {e}")
+            failures.append(f"binlog_expire_logs_seconds: {e}")
+
+        # Older MySQL uses expire_logs_days (deprecated in 8.0, removed in 8.4).
+        # A missing variable raises — log at debug so we don't mask other errors
+        # (permission, connection) silently, but don't surface as a warning since
+        # `binlog_expire_logs_seconds` above is the modern replacement.
+        try:
+            days = self._select_scalar("SELECT @@expire_logs_days")
+            if days is not None:
+                days = int(days)
+                retention["expire_logs_days"] = days
+                # If seconds didn't set retention, derive from days
+                if "retention_hours" not in retention and days > 0:
+                    retention["retention_hours"] = days * 24.0
+        except Exception as e:
+            self.logger.debug(f"Could not read @@expire_logs_days: {e}")
+            failures.append(f"expire_logs_days: {e}")
+
+        # Neither variable readable: report that, rather than implying no retention.
+        if not retention:
+            self.add_error(
+                "Failed to get binlog retention, no retention variable could be "
+                f"read ({'; '.join(failures)})"
+            )
             return {}
+
+        if not retention.get("retention_hours"):
+            retention["retention_hours"] = 0
+            retention["warning"] = "No binlog retention configured or binlog disabled"
+
+        return retention
+
+    def _select_scalar(self, query: str) -> Any:
+        """Run a single-value SELECT on its own cursor and return that value."""
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(query)
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            cursor.close()
 
     def _get_binlog_format(self) -> str:
         """Get binlog format from variables."""

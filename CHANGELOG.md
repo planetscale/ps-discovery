@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MySQL schema object counts were multiplied on servers with an empty schema.** A scoped (PlanetScale/Vitess-style) `information_schema` is now proven with `SHOW TABLES` before falling back to per-database iteration, and that iteration drops identical rows when merging. Previously a schema holding no base tables triggered the fallback, which re-ran every cross-database query once per schema.
+- **Column metadata was lost on MySQL 5.6 and MariaDB before 10.2.** The column query is retried without `generation_expression` (MySQL 5.7.6+), rather than the whole statement failing and leaving `column_analysis` empty.
+- **Binlog retention was always blank before MySQL 8.0.** `@@binlog_expire_logs_seconds` (8.0+) and `@@expire_logs_days` (removed in 8.4) are read independently, so a missing variable no longer skips the other.
+- **Failed sub-queries are now reported.** `add_error` keeps the underlying exception, and analyzer errors and warnings appear as analysis gaps, so an empty section is distinguishable from a section that genuinely found nothing.
+- The `information_schema.check_constraints` version guard (MySQL 8.0.16+) now runs, instead of the missing table being filed as a generic query failure.
+
 ## [1.3.0] - 2026-07-10
 
 ### Added

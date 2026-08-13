@@ -4,6 +4,7 @@ analysis-gap extraction.
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from planetscale_discovery.database.mysql_discovery import MySQLDiscovery
@@ -179,5 +180,56 @@ class TestScanForErrors:
     def test_no_gaps_when_no_errors(self, discovery):
         discovery._extract_analysis_gaps(
             "schema", {"tables": [{"name": "users"}, {"name": "orders"}]}
+        )
+        assert discovery.results["analysis_gaps"] == []
+
+
+class TestCollectAnalyzerIssues:
+    """Analyzer-recorded errors must reach the report.
+
+    An analyzer that loses a whole section returns an empty list, so without
+    this the report can't tell "query rejected" from "nothing to report".
+    """
+
+    @pytest.fixture
+    def discovery(self, base_params):
+        return MySQLDiscovery(base_params)
+
+    def test_analyzer_errors_become_gaps(self, discovery):
+        analyzer = SimpleNamespace(
+            errors=[
+                {
+                    "message": "Query execution failed: SELECT generation_expression",
+                    "exception": "Unknown column 'generation_expression'",
+                    "exception_type": "ProgrammingError",
+                }
+            ],
+            warnings=[],
+        )
+
+        discovery._collect_analyzer_issues("schema", analyzer)
+
+        assert len(discovery.results["analysis_gaps"]) == 1
+        gap = discovery.results["analysis_gaps"][0]
+        assert gap["module"] == "schema"
+        assert gap["type"] == "analysis_error"
+        assert gap["severity"] == "medium"
+        assert "generation_expression" in gap["error_message"]
+
+    def test_analyzer_warnings_become_low_severity_gaps(self, discovery):
+        analyzer = SimpleNamespace(
+            errors=[],
+            warnings=[{"message": "Could not check whether `restricted` has tables"}],
+        )
+
+        discovery._collect_analyzer_issues("schema", analyzer)
+
+        gap = discovery.results["analysis_gaps"][0]
+        assert gap["type"] == "analysis_warning"
+        assert gap["severity"] == "low"
+
+    def test_clean_analyzer_produces_no_gaps(self, discovery):
+        discovery._collect_analyzer_issues(
+            "schema", SimpleNamespace(errors=[], warnings=[])
         )
         assert discovery.results["analysis_gaps"] == []

@@ -28,6 +28,30 @@ def _quote_identifier(ident: str) -> str:
     return "`" + ident.replace("`", "``") + "`"
 
 
+def _dedupe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop identical duplicate rows, preserving first-seen order.
+
+    Per-database iteration re-runs queries that are not themselves scoped to
+    the current database. If information_schema turns out to be global after
+    all, that produces N identical copies of every row -- a plausible-looking
+    but badly inflated object count. Identical rows are indistinguishable in
+    the report anyway, so collapsing them is safe.
+    """
+    seen = set()
+    deduped: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            key = tuple(sorted((k, repr(v)) for k, v in row.items()))
+        except Exception:
+            deduped.append(row)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
 class MySQLSchemaAnalyzer(DatabaseAnalyzer):
     """Analyzes MySQL schema via information_schema."""
 
@@ -38,11 +62,15 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
         tables = self._get_table_analysis()
         dbs_in_tables = set(t.get("schema_name") for t in tables)
 
-        # If we found fewer databases in results than in database_list,
-        # information_schema is likely scoped (PlanetScale/Vitess).
-        # Fall back to per-database iteration.
-        needs_iteration = len(database_list) > 1 and len(dbs_in_tables) < len(
-            database_list
+        # A database missing from the cross-database result is either hidden
+        # (information_schema is scoped, as on PlanetScale/Vitess) or simply has
+        # no base tables of its own. Only the first case needs per-database
+        # iteration, so prove it before falling back: iterating when
+        # information_schema is global re-runs every cross-database query once
+        # per database and merges duplicate rows.
+        missing = [db for db in database_list if db not in dbs_in_tables]
+        needs_iteration = bool(missing) and self._schemas_hidden_from_info_schema(
+            missing
         )
 
         if needs_iteration:
@@ -51,6 +79,12 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 f"{len(database_list)} databases visible). Iterating per-database."
             )
             return self._analyze_per_database(database_list)
+
+        if missing:
+            self.logger.info(
+                f"{len(missing)} database(s) hold no base tables: "
+                f"{', '.join(missing)}"
+            )
 
         # Normal path: single-query results cover all databases
         routines = self._get_routine_analysis()
@@ -72,6 +106,51 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             "db_column_types": self._get_db_column_types(),
         }
         return results
+
+    def _schemas_hidden_from_info_schema(self, missing: List[str]) -> bool:
+        """Is information_schema hiding schemas, or are those schemas just empty?
+
+        Returns True as soon as SHOW TABLES proves one of the missing schemas
+        contains base tables that the cross-database information_schema query
+        failed to report -- the signature of a scoped information_schema.
+        """
+        for db in missing:
+            try:
+                if self._has_base_tables(db):
+                    self.logger.info(
+                        f"`{db}` contains base tables that the cross-database "
+                        "information_schema query did not report."
+                    )
+                    return True
+            except Exception as e:
+                self.add_warning(
+                    f"Could not check whether `{db}` contains tables, treating it "
+                    f"as empty rather than hidden: {e}"
+                )
+        return False
+
+    def _has_base_tables(self, db: str) -> bool:
+        """True if `db` contains at least one base table, per SHOW TABLES."""
+        quoted = _quote_identifier(db)
+        try:
+            rows = self._show_rows(f"SHOW FULL TABLES FROM {quoted}")
+            return any(
+                len(row) > 1 and str(row[1]).upper() == "BASE TABLE" for row in rows
+            )
+        except Exception as e:
+            # Not every server or proxy accepts the FULL form. Without the
+            # Table_type column, views count as tables.
+            self.logger.debug(f"SHOW FULL TABLES FROM {quoted} failed: {e}")
+            return bool(self._show_rows(f"SHOW TABLES FROM {quoted}"))
+
+    def _show_rows(self, query: str) -> List[Any]:
+        """Run a SHOW statement and return its rows, on a dedicated cursor."""
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(query)
+            return list(cursor.fetchall())
+        finally:
+            cursor.close()
 
     def _analyze_per_database(self, database_list: List[str]) -> Dict[str, Any]:
         """Iterate USE <db> for each database and merge results.
@@ -149,6 +228,11 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                     self.logger.warning(
                         f"Failed to restore original schema {original_db}: {e}"
                     )
+
+        # Collapse duplicates in case information_schema was global after all
+        for key, rows in merged.items():
+            if key != "database_catalog" and isinstance(rows, list):
+                merged[key] = _dedupe_rows(rows)
 
         # Sort tables by size descending (they come pre-sorted per-db but not globally)
         merged["table_analysis"].sort(
@@ -357,31 +441,58 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             return []
 
     def _get_column_analysis(self) -> List[Dict[str, Any]]:
-        """Per-column detail: data types, AUTO_INCREMENT, generated columns, charset."""
+        """Per-column detail: data types, AUTO_INCREMENT, generated columns, charset.
+
+        generation_expression only exists on MySQL 5.7.6+ / MariaDB 10.2+. On
+        older servers selecting it fails the whole statement, so retry without
+        it rather than losing every column in the report.
+        """
         try:
-            query = f"""
-                SELECT
-                    table_schema AS schema_name,
-                    table_name AS table_name,
-                    column_name AS column_name,
-                    ordinal_position AS ordinal_position,
-                    data_type AS data_type,
-                    column_type AS column_type,
-                    is_nullable AS is_nullable,
-                    column_default AS column_default,
-                    extra AS extra,
-                    character_set_name AS character_set_name,
-                    collation_name AS collation_name,
-                    column_comment AS column_comment,
-                    generation_expression AS generation_expression
-                FROM information_schema.columns
-                WHERE {self._user_databases_filter()}
-                ORDER BY table_schema, table_name, ordinal_position
-            """
-            return self.execute_query(query)
+            return self._column_analysis_query(with_generation_expression=True)
+        except Exception as e:
+            self.logger.info(
+                "information_schema.columns.generation_expression is unavailable "
+                f"(requires MySQL 5.7.6+ / MariaDB 10.2+), retrying without it: {e}"
+            )
+
+        try:
+            rows = self._column_analysis_query(with_generation_expression=False)
         except Exception as e:
             self.add_error(f"Failed to get column analysis: {e}", e)
             return []
+
+        # Keep the output shape stable across server versions.
+        for row in rows:
+            row["generation_expression"] = None
+        return rows
+
+    def _column_analysis_query(
+        self, with_generation_expression: bool
+    ) -> List[Dict[str, Any]]:
+        generation = (
+            ",\n                generation_expression AS generation_expression"
+            if with_generation_expression
+            else ""
+        )
+        query = f"""
+            SELECT
+                table_schema AS schema_name,
+                table_name AS table_name,
+                column_name AS column_name,
+                ordinal_position AS ordinal_position,
+                data_type AS data_type,
+                column_type AS column_type,
+                is_nullable AS is_nullable,
+                column_default AS column_default,
+                extra AS extra,
+                character_set_name AS character_set_name,
+                collation_name AS collation_name,
+                column_comment AS column_comment{generation}
+            FROM information_schema.columns
+            WHERE {self._user_databases_filter()}
+            ORDER BY table_schema, table_name, ordinal_position
+        """
+        return self.execute_query(query, raise_on_error=True)
 
     def _get_check_constraints(self) -> List[Dict[str, Any]]:
         """CHECK constraints (MySQL 8.0.16+). Gracefully returns empty on older versions."""
@@ -400,7 +511,9 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter('cc.constraint_schema')}
                 ORDER BY cc.constraint_schema, tc.table_name, cc.constraint_name
             """
-            return self.execute_query(query)
+            # raise_on_error so the version guard below actually sees the error
+            # instead of execute_query filing it as a generic query failure.
+            return self.execute_query(query, raise_on_error=True)
         except Exception as e:
             # information_schema.check_constraints doesn't exist before 8.0.16
             if (
