@@ -468,5 +468,5 @@ When running against managed PostgreSQL services (Cloud SQL, AlloyDB):
 ## Support
 
 For issues with GCP discovery:
-- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+- Report bugs: https://github.com/planetscale/ps-discovery/issues
 - GCP Support: https://cloud.google.com/support

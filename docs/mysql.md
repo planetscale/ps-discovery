@@ -359,7 +359,7 @@ pip install "ps-discovery[mysql]"
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+- Report bugs: https://github.com/planetscale/ps-discovery/issues
 - Documentation: See main [README.md](../README.md)
 
 For MySQL or PlanetScale-specific questions:

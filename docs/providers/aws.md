@@ -446,5 +446,5 @@ providers:
 ## Support
 
 For issues with AWS discovery:
-- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+- Report bugs: https://github.com/planetscale/ps-discovery/issues
 - AWS Support: https://aws.amazon.com/support/

@@ -376,7 +376,7 @@ ls ./supabase_discovery_output/
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+- Report bugs: https://github.com/planetscale/ps-discovery/issues
 - Documentation: See main [README.md](../../README.md)
 
 For Supabase-specific questions:

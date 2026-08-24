@@ -328,7 +328,7 @@ All providers generate consistent output:
 ## Getting Help
 
 - [Main README](../../README.md)
-- [GitHub Issues](https://github.com/planetscale/planetscale-discovery-cli-dev/issues)
+- [GitHub Issues](https://github.com/planetscale/ps-discovery/issues)
 - Provider-specific documentation (see links above)
 
 ## Contributing
