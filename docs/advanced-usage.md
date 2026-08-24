@@ -7,7 +7,7 @@ For users who want more control over the installation:
 ```bash
 # Clone the repository (for development)
 git clone <repository-url>
-cd planetscale-discovery-cli-dev
+cd ps-discovery
 
 # Option 1: Install with pipx (isolates dependencies)
 pipx install -e ".[mysql]"     # Add MySQL support

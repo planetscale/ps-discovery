@@ -397,7 +397,7 @@ cat ./discovery_output/cloud_discovery_summary.md
 ## Support
 
 For issues with the discovery tool:
-- Report bugs: https://github.com/planetscale/planetscale-discovery-cli-dev/issues
+- Report bugs: https://github.com/planetscale/ps-discovery/issues
 - Documentation: See main [README.md](../../README.md)
 
 For Neon-specific questions:

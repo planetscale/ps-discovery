@@ -247,7 +247,7 @@ class ConfigManager:
             try:
                 self.config = self._parse_config_dict(config_data)
             except Exception as e:
-                docs_base = "https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main"
+                docs_base = "https://github.com/planetscale/ps-discovery/blob/main"
                 raise ValueError(
                     f"Failed to parse configuration file '{self.config_path}': {e}\n"
                     "\n"
