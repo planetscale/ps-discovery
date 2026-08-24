@@ -23,15 +23,27 @@ class BaseAnalyzer(ABC):
         """Perform the analysis and return results."""
 
     def add_error(self, message: str, exception: Exception = None):
-        """Add an error message."""
+        """Add an error message, keeping the underlying exception detail.
+
+        The exception text is what makes an error actionable ("Unknown column
+        'generation_expression'"), so it is recorded on the entry and appended
+        to the log line unless the caller already folded it into the message.
+        """
         error_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "message": message,
             "analyzer": self.__class__.__name__,
         }
 
+        detail = message
+        if exception is not None:
+            error_entry["exception_type"] = type(exception).__name__
+            error_entry["exception"] = str(exception)
+            if str(exception) and str(exception) not in message:
+                detail = f"{message} [{type(exception).__name__}: {exception}]"
+
         self.errors.append(error_entry)
-        self.logger.error(f"{self.__class__.__name__}: {message}")
+        self.logger.error(f"{self.__class__.__name__}: {detail}")
 
     def add_warning(self, message: str):
         """Add a warning message."""
@@ -95,8 +107,15 @@ class DatabaseAnalyzer(BaseAnalyzer):
         super().__init__(config or {}, logger)
         self.connection = connection
 
-    def execute_query(self, query: str, params: tuple = None) -> List[Dict[str, Any]]:
-        """Execute a query and return results as list of dictionaries."""
+    def execute_query(
+        self, query: str, params: tuple = None, raise_on_error: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Execute a query and return results as list of dictionaries.
+
+        Pass raise_on_error when the caller needs to tell "the server rejected
+        this query" apart from "the query returned no rows" -- probing for a
+        column or table that only exists on newer server versions, for example.
+        """
         try:
             cursor = self.connection.cursor()
             if params:
@@ -113,7 +132,13 @@ class DatabaseAnalyzer(BaseAnalyzer):
             return [dict(zip(columns, row)) for row in rows]
 
         except Exception as e:
-            self.add_error(f"Query execution failed: {query[:100]}...", e)
+            if raise_on_error:
+                raise
+            # Collapse whitespace so the truncated snippet in the error message
+            # is readable, and keep the full statement at debug level.
+            self.logger.debug(f"Failed query: {query}")
+            condensed = " ".join(query.split())
+            self.add_error(f"Query execution failed: {condensed[:300]}", e)
             return []
 
     def execute_query_single(self, query: str, params: tuple = None) -> Dict[str, Any]:

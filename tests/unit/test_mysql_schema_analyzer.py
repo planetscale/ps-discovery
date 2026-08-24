@@ -4,6 +4,7 @@ Unit tests for MySQL Schema Analyzer - new sections
 """
 
 import pytest
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 from planetscale_discovery.database.mysql_analyzers.schema_analyzer import (
@@ -62,10 +63,11 @@ class TestMySQLSchemaAnalyzer:
         """Per-database iteration path should also include new keys."""
         with (
             patch.object(analyzer, "_get_database_list", return_value=["db1", "db2"]),
-            # Return only db1 in tables to trigger iteration
+            # Only db1 in tables, and db2 provably holds tables -> iteration
             patch.object(
                 analyzer, "_get_table_analysis", return_value=[{"schema_name": "db1"}]
             ),
+            patch.object(analyzer, "_has_base_tables", return_value=True),
             patch.object(analyzer, "_get_column_analysis", return_value=[]),
             patch.object(analyzer, "_get_index_analysis", return_value=[]),
             patch.object(analyzer, "_get_view_analysis", return_value=[]),
@@ -140,6 +142,43 @@ class TestMySQLSchemaAnalyzer:
         assert result[0]["generation_expression"] == "`qty` * `unit_price`"
         assert "GENERATED" in result[0]["extra"]
 
+    def test_column_analysis_retries_without_generation_expression(self, analyzer):
+        """generation_expression is 5.7.6+; on 5.6 the retry must keep the columns."""
+        base_row = {
+            "schema_name": "mydb",
+            "table_name": "users",
+            "column_name": "id",
+            "ordinal_position": 1,
+            "data_type": "bigint",
+            "column_type": "bigint(20) unsigned",
+            "is_nullable": "NO",
+            "column_default": None,
+            "extra": "auto_increment",
+            "character_set_name": None,
+            "collation_name": None,
+            "column_comment": "",
+        }
+        queries = []
+
+        def fake_execute_query(query, params=None, raise_on_error=False):
+            queries.append(query)
+            if "generation_expression" in query:
+                raise Exception(
+                    "Unknown column 'generation_expression' in 'field list'"
+                )
+            return [dict(base_row)]
+
+        with patch.object(analyzer, "execute_query", side_effect=fake_execute_query):
+            result = analyzer._get_column_analysis()
+
+        assert len(queries) == 2
+        assert "generation_expression" not in queries[1]
+        assert result[0]["column_name"] == "id"
+        # Key still present so the output shape doesn't depend on server version
+        assert result[0]["generation_expression"] is None
+        # An expected version difference is not an analysis gap
+        assert analyzer.errors == []
+
     def test_column_analysis_error_returns_empty(self, analyzer):
         """_get_column_analysis should return [] on error and record the gap."""
         with patch.object(
@@ -169,6 +208,13 @@ class TestMySQLSchemaAnalyzer:
 
         assert len(result) == 1
         assert result[0]["check_clause"] == "`price` > 0"
+
+    def test_check_constraints_probes_with_raise_on_error(self, analyzer):
+        """The version guard below only sees the error if the query raises."""
+        with patch.object(analyzer, "execute_query", return_value=[]) as execute_query:
+            analyzer._get_check_constraints()
+
+        assert execute_query.call_args.kwargs["raise_on_error"] is True
 
     def test_check_constraints_graceful_on_old_mysql(self, analyzer):
         """Should return [] without error on MySQL < 8.0.16 where table doesn't exist."""
@@ -358,3 +404,159 @@ class TestPerDatabaseSchemaRestore:
 
         use_statements = [s for s in executed if s.startswith("USE ")]
         assert use_statements[-1] == "USE `app_prod`"
+
+
+# Every collector _analyze_per_database and analyze() call apart from
+# _get_table_analysis, which each test drives directly.
+OTHER_COLLECTORS = [
+    "_get_column_analysis",
+    "_get_index_analysis",
+    "_get_view_analysis",
+    "_get_routine_analysis",
+    "_get_trigger_analysis",
+    "_get_constraint_analysis",
+    "_get_check_constraints",
+    "_get_partition_analysis",
+    "_get_db_object_counts",
+    "_get_db_storage_engines",
+    "_get_db_index_types",
+    "_get_db_column_types",
+]
+
+
+class TestScopedInformationSchemaDetection:
+    """A schema with no base tables must not look like a scoped information_schema.
+
+    Global information_schema plus per-database iteration means every
+    cross-database query runs once per database, so the merged result reports
+    every object once per database.
+    """
+
+    @pytest.fixture
+    def analyzer(self):
+        return MySQLSchemaAnalyzer(MagicMock())
+
+    def _patch_other_collectors(self, analyzer, stack):
+        for name in OTHER_COLLECTORS:
+            stack.enter_context(patch.object(analyzer, name, return_value=[]))
+
+    def test_empty_schema_does_not_trigger_iteration(self, analyzer):
+        """5 of 6 schemas hold tables; the 6th is empty. Counts must not multiply."""
+        databases = ["app", "billing", "events", "reporting", "sessions", "datadog"]
+        tables = [{"schema_name": db, "table_name": "t1"} for db in databases[:5]]
+
+        with ExitStack() as stack:
+            self._patch_other_collectors(analyzer, stack)
+            stack.enter_context(
+                patch.object(analyzer, "_get_database_list", return_value=databases)
+            )
+            stack.enter_context(
+                patch.object(analyzer, "_get_table_analysis", return_value=tables)
+            )
+            # SHOW TABLES agrees that `datadog` really is empty
+            probe = stack.enter_context(
+                patch.object(analyzer, "_has_base_tables", return_value=False)
+            )
+            per_db = stack.enter_context(
+                patch.object(analyzer, "_analyze_per_database")
+            )
+            result = analyzer.analyze()
+
+        per_db.assert_not_called()
+        probe.assert_called_once_with("datadog")
+        assert len(result["table_analysis"]) == 5
+
+    def test_hidden_schema_does_trigger_iteration(self, analyzer):
+        """A missing schema that demonstrably holds tables means scoped I_S."""
+        databases = ["ks_one", "ks_two"]
+
+        with ExitStack() as stack:
+            self._patch_other_collectors(analyzer, stack)
+            stack.enter_context(
+                patch.object(analyzer, "_get_database_list", return_value=databases)
+            )
+            stack.enter_context(
+                patch.object(
+                    analyzer,
+                    "_get_table_analysis",
+                    return_value=[{"schema_name": "ks_one", "table_name": "t1"}],
+                )
+            )
+            stack.enter_context(
+                patch.object(analyzer, "_has_base_tables", return_value=True)
+            )
+            per_db = stack.enter_context(
+                patch.object(
+                    analyzer, "_analyze_per_database", return_value={"iterated": True}
+                )
+            )
+            result = analyzer.analyze()
+
+        per_db.assert_called_once_with(databases)
+        assert result == {"iterated": True}
+
+    def test_unprobeable_schema_is_treated_as_empty_with_a_warning(self, analyzer):
+        """If we can't tell, don't iterate -- but say so instead of staying silent."""
+        databases = ["app", "restricted"]
+
+        with ExitStack() as stack:
+            self._patch_other_collectors(analyzer, stack)
+            stack.enter_context(
+                patch.object(analyzer, "_get_database_list", return_value=databases)
+            )
+            stack.enter_context(
+                patch.object(
+                    analyzer,
+                    "_get_table_analysis",
+                    return_value=[{"schema_name": "app", "table_name": "t1"}],
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    analyzer,
+                    "_has_base_tables",
+                    side_effect=Exception("SELECT command denied"),
+                )
+            )
+            per_db = stack.enter_context(
+                patch.object(analyzer, "_analyze_per_database")
+            )
+            analyzer.analyze()
+
+        per_db.assert_not_called()
+        assert len(analyzer.warnings) == 1
+        assert "restricted" in analyzer.warnings[0]["message"]
+
+    def test_has_base_tables_reads_table_type(self, analyzer):
+        """SHOW FULL TABLES rows are BASE TABLE / VIEW; only the former counts."""
+        with patch.object(
+            analyzer,
+            "_show_rows",
+            return_value=[("v_users", "VIEW"), ("users", "BASE TABLE")],
+        ):
+            assert analyzer._has_base_tables("app") is True
+
+        with patch.object(analyzer, "_show_rows", return_value=[("v_users", "VIEW")]):
+            assert analyzer._has_base_tables("app") is False
+
+    def test_has_base_tables_falls_back_to_short_show_tables(self, analyzer):
+        """Servers that reject SHOW FULL TABLES still get probed."""
+        with patch.object(
+            analyzer,
+            "_show_rows",
+            side_effect=[Exception("syntax error"), [("users",)]],
+        ):
+            assert analyzer._has_base_tables("app") is True
+
+    def test_per_database_merge_dedupes_identical_rows(self, analyzer):
+        """Safety net: identical rows from unscoped queries collapse to one."""
+        row = {"schema_name": "app", "table_name": "users", "total_size_bytes": 10}
+
+        with ExitStack() as stack:
+            self._patch_other_collectors(analyzer, stack)
+            stack.enter_context(
+                patch.object(analyzer, "_get_table_analysis", return_value=[row])
+            )
+            merged = analyzer._analyze_per_database(["app", "billing"])
+
+        assert merged["table_analysis"] == [row]

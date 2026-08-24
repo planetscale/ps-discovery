@@ -185,6 +185,7 @@ class MySQLDiscovery:
 
                 # Extract gaps
                 self._extract_analysis_gaps(module_name, module_results)
+                self._collect_analyzer_issues(module_name, analyzer)
 
                 self.logger.info(f"Completed {module_name} analysis")
 
@@ -221,6 +222,30 @@ class MySQLDiscovery:
                 "severity": severity,
             }
         )
+
+    def _collect_analyzer_issues(self, module_name: str, analyzer: Any):
+        """Record analyzer errors and warnings as analysis gaps.
+
+        Analyzers degrade gracefully: a rejected sub-query returns an empty list
+        and records the reason on the analyzer. Without this, an empty section in
+        the report is indistinguishable from a section that genuinely found
+        nothing -- which is how a failed query can quietly become "no columns".
+        """
+        for error in getattr(analyzer, "errors", []):
+            message = error.get("message", "Analysis error")
+            self._add_analysis_gap(
+                module_name,
+                "analysis_error",
+                message,
+                error.get("exception", message),
+                "medium",
+            )
+
+        for warning in getattr(analyzer, "warnings", []):
+            message = warning.get("message", "Analysis warning")
+            self._add_analysis_gap(
+                module_name, "analysis_warning", message, message, "low"
+            )
 
     def _extract_analysis_gaps(self, module_name: str, module_results: dict):
         if not isinstance(module_results, dict):
