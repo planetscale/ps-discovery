@@ -12,4 +12,4 @@ moto>=5.2.2
 responses>=0.26.2
 black>=26.5.1
 flake8>=7.3.0
-mypy>=2.3.0
+mypy>=2.3.1
