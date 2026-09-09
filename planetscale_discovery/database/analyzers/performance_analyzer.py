@@ -3,9 +3,31 @@ PostgreSQL Performance Analysis Module
 Analyzes performance metrics, query statistics, and resource utilization.
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+from planetscale_discovery.common.sanitize import redact_sql
+
+
+def _redact_query_field(row: Dict[str, Any], field: str = "query") -> Dict[str, Any]:
+    """Replace a raw statement-text field with its redacted shape.
+
+    ``pg_stat_activity.query`` is never normalized by PostgreSQL, so it always
+    holds the literal values of the statement currently executing. The raw field
+    is dropped rather than kept alongside.
+    """
+    raw = row.pop(field, None)
+    row[f"{field}_redacted"] = redact_sql(raw)
+    return row
+
+
+def _redact_statement_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Redact the ``query`` field of pg_stat_statements rows.
+
+    Usually a no-op, since the server normalizes that text. It matters for the
+    cases where it does not: utility statements are stored verbatim.
+    """
+    return [_redact_query_field(dict(row)) for row in rows]
 
 
 class PerformanceAnalyzer(DatabaseAnalyzer):
@@ -94,7 +116,11 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                     AND EXTRACT(EPOCH FROM (now() - xact_start)) > 300  -- 5 minutes
                     ORDER BY xact_start
                 """)
-                long_transactions = [dict(row) for row in cursor.fetchall()]
+                # pg_stat_activity.query is never normalized by the server, so it
+                # holds literal customer values. Redact before it reaches output.
+                long_transactions = [
+                    _redact_query_field(dict(row)) for row in cursor.fetchall()
+                ]
 
                 # Connection limits
                 cursor.execute(
@@ -120,12 +146,26 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
         """Analyze query performance using pg_stat_statements."""
         try:
             with self.connection.cursor() as cursor:
-                # Check if pg_stat_statements is available
+                # Check if pg_stat_statements is available. The "error" key is
+                # deliberate: DatabaseDiscovery._categorize_error matches on it to
+                # file a low-severity "missing_extension" analysis gap with a
+                # human explanation, so this is the graceful path, not a failure.
                 cursor.execute(
-                    "SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements'"
+                    "SELECT extversion FROM pg_extension"
+                    " WHERE extname = 'pg_stat_statements'"
                 )
-                if not cursor.fetchone():
-                    return {"error": "pg_stat_statements extension not available"}
+                extension_row = cursor.fetchone()
+                if not extension_row:
+                    return {
+                        "available": False,
+                        "error": "pg_stat_statements extension not available",
+                    }
+
+                extversion = (
+                    extension_row.get("extversion")
+                    if isinstance(extension_row, dict)
+                    else extension_row[0]
+                )
 
                 # Top queries by total time
                 cursor.execute("""
@@ -200,11 +240,22 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                 """)
                 high_io_queries = [dict(row) for row in cursor.fetchall()]
 
+                # pg_stat_statements normally hands back normalized text, but it
+                # can store literals when entries are being deallocated, and it
+                # never normalizes utility statements. Scan every text.
                 return {
-                    "top_queries_by_total_time": top_queries_by_time,
-                    "top_queries_by_calls": top_queries_by_calls,
-                    "slowest_queries_by_mean_time": slowest_queries,
-                    "highest_io_queries": high_io_queries,
+                    "available": True,
+                    "extension_version": extversion,
+                    "top_queries_by_total_time": _redact_statement_rows(
+                        top_queries_by_time
+                    ),
+                    "top_queries_by_calls": _redact_statement_rows(
+                        top_queries_by_calls
+                    ),
+                    "slowest_queries_by_mean_time": _redact_statement_rows(
+                        slowest_queries
+                    ),
+                    "highest_io_queries": _redact_statement_rows(high_io_queries),
                 }
 
         except Exception as e:
@@ -480,7 +531,14 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                          ON blocking_activity.pid = blocking_locks.pid
                     WHERE NOT blocked_locks.GRANTED
                 """)
-                blocking_locks = [dict(row) for row in cursor.fetchall()]
+                # Both statement columns come from pg_stat_activity.query, which
+                # PostgreSQL never normalizes -- they carry literal values.
+                blocking_locks = []
+                for row in cursor.fetchall():
+                    entry = dict(row)
+                    _redact_query_field(entry, "blocked_statement")
+                    _redact_query_field(entry, "blocking_statement")
+                    blocking_locks.append(entry)
 
                 return {
                     "lock_summary": lock_summary,

@@ -197,8 +197,8 @@ if ! $PIP_CMD install $PIP_FLAGS --upgrade pip 2>&1; then
 fi
 
 # Collect every Python dependency and install them in a single pass once the
-# engine and provider are chosen. pyyaml is always required.
-DEPS=("pyyaml>=6.0.3")
+# engine and provider are chosen. pyyaml and sqlparse are always required.
+DEPS=("pyyaml>=6.0.3" "sqlparse>=0.5.0")
 INSTALLED_ENGINES=""
 
 # Database engine selection
