@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **The statement timeout was unreachable.** `run_analysis` read `statement_timeout` from the connection parameters, but nothing ever put it there, so the value was always the 300s default and the setting could not be changed. Had it been present, `psycopg2.connect()` would have rejected it as an unknown keyword, since it is a server GUC rather than a libpq parameter. It is now a real `database.statement_timeout` config field, held separately from the connection parameters.
 
 ## [1.3.1] - 2026-08-24
 

@@ -13,6 +13,7 @@
 # Core dependencies (required)
 psycopg2-binary>=2.9.11   # PostgreSQL database connectivity
 pyyaml>=6.0.3             # Configuration file parsing
+sqlparse>=0.5.0           # SQL tokenizing, to redact literals from query text
 
 # AWS cloud discovery dependencies (required for AWS analysis)
 boto3>=1.42.52            # AWS SDK for Python
