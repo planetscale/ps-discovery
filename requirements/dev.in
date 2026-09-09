@@ -2,7 +2,10 @@
 # Source file for pip-compile. Output: ../requirements-dev-lock.txt
 #
 # To regenerate:
-#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes
+#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes --no-strip-extras
+#
+# Keep --no-strip-extras. A --require-hashes install rejects coverage[toml] if
+# the extra is stripped from the pin.
 #
 -c ../requirements-lock.txt
 pytest>=9.1.1
@@ -12,4 +15,5 @@ moto>=5.2.2
 responses>=0.26.2
 black>=26.5.1
 flake8>=7.3.0
-mypy>=2.3.0
+mypy>=2.3.1
+bandit>=1.9.4

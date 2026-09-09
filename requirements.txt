@@ -8,7 +8,7 @@
 #
 # To regenerate lock files after updating versions:
 #   pip-compile requirements/base.in -o requirements-lock.txt --generate-hashes
-#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes
+#   pip-compile requirements/dev.in -o requirements-dev-lock.txt --generate-hashes --no-strip-extras
 
 # Core dependencies (required)
 psycopg2-binary>=2.9.11   # PostgreSQL database connectivity
