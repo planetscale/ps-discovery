@@ -28,6 +28,7 @@ setup(
     install_requires=[
         "psycopg2-binary>=2.9.11",
         "pyyaml>=6.0.3",
+        "sqlparse>=0.5.0",
     ],
     # Optional dependencies
     extras_require={

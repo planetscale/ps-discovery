@@ -261,7 +261,9 @@ This tool collects **metadata only** — never actual data from your tables.
 
 **What is collected:** Schema metadata (table names, column types, constraints), database configuration (version, settings, extensions), usage statistics (table sizes, row counts, cache ratios), infrastructure topology (cloud resources, networking), and user/role names.
 
-**What is NOT collected:** Table contents, customer records, SQL queries, application code, or credentials. Passwords are used only for connection and are never stored in output.
+**What is NOT collected:** Table contents, customer records, literal values from queries, application code, or credentials. Passwords are used only for connection and are never stored in output.
+
+**Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by placeholders, so `SELECT * FROM orders WHERE email = ?` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
 
 All analysis runs locally — no data is sent to external services.
 
