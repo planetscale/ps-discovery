@@ -85,7 +85,7 @@ This will update the version in:
 - `pyproject.toml`
 - `planetscale_discovery/__init__.py`
 
-The script stops with an error if any of these files still holds the old version.
+The script stops with an error if any of these files was not updated to the new version.
 
 ### 4. Review and Commit Changes
 

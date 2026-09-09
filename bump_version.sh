@@ -75,13 +75,20 @@ sed -i.bak "s/^__version__ = \"${CURRENT_VERSION}\"/__version__ = \"${NEW_VERSIO
 rm planetscale_discovery/__init__.py.bak
 echo "✅ Updated planetscale_discovery/__init__.py"
 
-# Fail if any file still holds the old version
-STALE=$(grep -l "${CURRENT_VERSION}" VERSION setup.py pyproject.toml planetscale_discovery/__init__.py 2>/dev/null || true)
-if [ -n "${STALE}" ]; then
-    echo "❌ Error: these files still contain ${CURRENT_VERSION}:"
-    echo "${STALE}"
-    exit 1
-fi
+# Fail if any file did not end up at the new version
+ESCAPED_NEW_VERSION="${NEW_VERSION//./\\.}"
+
+check_version() {
+    grep -Eq "$2" "$1" || {
+        echo "❌ Error: $1 was not updated to ${NEW_VERSION}"
+        exit 1
+    }
+}
+
+check_version VERSION                           "^${ESCAPED_NEW_VERSION}$"
+check_version setup.py                          "version=\"${ESCAPED_NEW_VERSION}\","
+check_version pyproject.toml                    "^version = \"${ESCAPED_NEW_VERSION}\"$"
+check_version planetscale_discovery/__init__.py "^__version__ = \"${ESCAPED_NEW_VERSION}\"$"
 
 # Show what changed
 echo ""
