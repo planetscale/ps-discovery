@@ -38,6 +38,9 @@ class DatabaseConfig:
     password: str = ""
     ssl_mode: str = "prefer"
     connection_timeout: int = 30
+    # Server-side cap on any single analyzer query. Applied to the shared
+    # analyzer connection, so a slow catalog read cannot hang a discovery run.
+    statement_timeout: str = "300s"
     data_size: DataSizeConfig = field(default_factory=DataSizeConfig)
     excluded_databases: List[str] = field(default_factory=list)
 
@@ -302,6 +305,9 @@ class ConfigManager:
             db_config.ssl_mode = db_data.get("ssl_mode", db_config.ssl_mode)
             db_config.connection_timeout = db_data.get(
                 "connection_timeout", db_config.connection_timeout
+            )
+            db_config.statement_timeout = db_data.get(
+                "statement_timeout", db_config.statement_timeout
             )
             db_config.excluded_databases = db_data.get(
                 "excluded_databases", db_config.excluded_databases

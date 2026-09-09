@@ -65,15 +65,40 @@ sed -i.bak "s/version=\"${CURRENT_VERSION}\"/version=\"${NEW_VERSION}\"/" setup.
 rm setup.py.bak
 echo "✅ Updated setup.py"
 
+# Update pyproject.toml
+sed -i.bak "s/^version = \"${CURRENT_VERSION}\"/version = \"${NEW_VERSION}\"/" pyproject.toml
+rm pyproject.toml.bak
+echo "✅ Updated pyproject.toml"
+
+# Update the package __version__
+sed -i.bak "s/^__version__ = \"${CURRENT_VERSION}\"/__version__ = \"${NEW_VERSION}\"/" planetscale_discovery/__init__.py
+rm planetscale_discovery/__init__.py.bak
+echo "✅ Updated planetscale_discovery/__init__.py"
+
+# Fail if any file did not end up at the new version
+ESCAPED_NEW_VERSION="${NEW_VERSION//./\\.}"
+
+check_version() {
+    grep -Eq "$2" "$1" || {
+        echo "❌ Error: $1 was not updated to ${NEW_VERSION}"
+        exit 1
+    }
+}
+
+check_version VERSION                           "^${ESCAPED_NEW_VERSION}$"
+check_version setup.py                          "version=\"${ESCAPED_NEW_VERSION}\","
+check_version pyproject.toml                    "^version = \"${ESCAPED_NEW_VERSION}\"$"
+check_version planetscale_discovery/__init__.py "^__version__ = \"${ESCAPED_NEW_VERSION}\"$"
+
 # Show what changed
 echo ""
 echo "Changes made:"
-git diff VERSION setup.py
+git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py
 
 echo ""
 echo "Next steps:"
 echo "1. Review the changes above"
-echo "2. Commit: git add VERSION setup.py && git commit -m 'Bump version to ${NEW_VERSION}'"
+echo "2. Commit: git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py && git commit -m 'Bump version to ${NEW_VERSION}'"
 echo "3. Tag: git tag -a v${NEW_VERSION} -m 'Release v${NEW_VERSION}'"
 echo "4. Push: git push origin main && git push origin v${NEW_VERSION}"
 echo ""

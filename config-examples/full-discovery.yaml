@@ -11,7 +11,8 @@ database:
   username: your_username
   password: your_password
   ssl_mode: prefer
-  connection_timeout: 30
+  connection_timeout: 30      # seconds, passed to libpq connect_timeout
+  statement_timeout: 300s     # server-side cap per analyzer query; a bare number is milliseconds
 
 providers:
   aws:

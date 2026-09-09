@@ -79,18 +79,22 @@ Use the version bump script:
 ./bump_version.sh 1.2.3
 ```
 
-This will update:
-- `VERSION` file
-- `setup.py` version
+This will update the version in:
+- `VERSION`
+- `setup.py`
+- `pyproject.toml`
+- `planetscale_discovery/__init__.py`
+
+The script stops with an error if any of these files was not updated to the new version.
 
 ### 4. Review and Commit Changes
 
 ```bash
 # Review the changes
-git diff VERSION setup.py CHANGELOG.md
+git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py CHANGELOG.md
 
 # Commit the version bump and changelog
-git add VERSION setup.py CHANGELOG.md
+git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py CHANGELOG.md
 git commit -m "Release vX.Y.Z"
 ```
 

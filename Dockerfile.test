@@ -9,9 +9,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for layer caching
-COPY requirements.txt setup.py README.md ./
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pytest pytest-cov pytest-mock moto responses black flake8 mypy bandit
+COPY requirements.txt requirements-lock.txt requirements-dev-lock.txt setup.py README.md ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt && \
+    pip install --no-cache-dir --require-hashes -r requirements-dev-lock.txt && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY . .
