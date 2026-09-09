@@ -286,3 +286,71 @@ class TestPostgreSQLDiscovery:
             assert "performance" in results["analysis_results"]
             assert "security" in results["analysis_results"]
             assert "features" in results["analysis_results"]
+
+
+class TestStatementTimeoutPlumbing:
+    """The statement_timeout config knob must actually reach the server.
+
+    Before this was fixed, run_analysis read "statement_timeout" out of
+    connection_params, but nothing ever put it there, so the value was always
+    the 300s default and the setting was unreachable. Worse, had it been
+    present, psycopg2.connect() would have rejected it as an unknown keyword.
+    """
+
+    def test_timeout_is_not_passed_to_libpq(self):
+        params = {
+            "host": "localhost",
+            "database": "testdb",
+            "statement_timeout": "45s",
+        }
+        discovery = PostgreSQLDiscovery(params)
+
+        assert "statement_timeout" not in discovery.connection_params
+        assert discovery.statement_timeout == "45s"
+
+    def test_explicit_argument_sets_timeout(self):
+        discovery = PostgreSQLDiscovery(
+            {"host": "localhost", "database": "testdb"},
+            statement_timeout="90s",
+        )
+        assert discovery.statement_timeout == "90s"
+
+    def test_default_timeout_preserved(self):
+        discovery = PostgreSQLDiscovery({"host": "localhost", "database": "testdb"})
+        assert discovery.statement_timeout == "300s"
+
+    def test_configured_timeout_is_applied_to_the_connection(self):
+        """The value must be issued as a SET on the analyzer connection."""
+        with patch("planetscale_discovery.database.discovery.psycopg2.connect") as conn:
+            cursor = MagicMock()
+            analyzer_conn = MagicMock()
+            analyzer_conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+            analyzer_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+            conn.return_value = analyzer_conn
+
+            discovery = PostgreSQLDiscovery(
+                {"host": "localhost", "database": "testdb"},
+                statement_timeout="15s",
+            )
+            discovery.connection = MagicMock()
+            discovery.run_analysis(modules=[])
+
+            cursor.execute.assert_any_call("SET statement_timeout = %s", ("15s",))
+
+    def test_config_field_flows_from_discovery_tool(self):
+        """DatabaseConfig.statement_timeout must reach PostgreSQLDiscovery."""
+        config = DiscoveryConfig()
+        config.database = DatabaseConfig(database="testdb", statement_timeout="20s")
+        tool = DatabaseDiscoveryTool(config)
+
+        with patch(
+            "planetscale_discovery.database.discovery.PostgreSQLDiscovery"
+        ) as discovery_cls:
+            discovery_cls.return_value.connect.return_value = False
+            try:
+                tool.discover()
+            except ConnectionError:
+                pass
+
+        _, kwargs = discovery_cls.call_args
+        assert kwargs["statement_timeout"] == "20s"

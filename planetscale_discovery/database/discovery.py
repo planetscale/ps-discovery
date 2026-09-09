@@ -46,6 +46,7 @@ class DatabaseDiscoveryTool:
             config_dict,
             data_size_config=self.config.database.data_size,
             excluded_databases=self.config.database.excluded_databases,
+            statement_timeout=self.config.database.statement_timeout,
         )
         if not discovery.connect():
             raise ConnectionError("Failed to connect to PostgreSQL database")
@@ -75,8 +76,17 @@ class PostgreSQLDiscovery:
         connection_params: Dict[str, Any],
         data_size_config=None,
         excluded_databases=None,
+        statement_timeout: str = "300s",
     ):
-        self.connection_params = connection_params
+        # statement_timeout is a server GUC, not a libpq connection parameter, so
+        # it is held separately. Leaving it inside connection_params would make
+        # psycopg2.connect() reject it as an unknown keyword.
+        self.connection_params = {
+            k: v for k, v in connection_params.items() if k != "statement_timeout"
+        }
+        self.statement_timeout = (
+            connection_params.get("statement_timeout") or statement_timeout
+        )
         self.data_size_config = data_size_config
         self.excluded_databases = excluded_databases or []
         self.connection = None
@@ -153,9 +163,8 @@ class PostgreSQLDiscovery:
             analyzer_connection.autocommit = True
 
             # Set statement timeout to protect against runaway queries
-            statement_timeout = self.connection_params.get("statement_timeout", "300s")
             with analyzer_connection.cursor() as cursor:
-                cursor.execute("SET statement_timeout = %s", (statement_timeout,))
+                cursor.execute("SET statement_timeout = %s", (self.statement_timeout,))
 
         except Exception as e:
             self.logger.error(f"Failed to create analyzer connection: {e}")
