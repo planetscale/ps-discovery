@@ -7,7 +7,7 @@ Discovery tools for analyzing PostgreSQL and MySQL/Vitess database environments 
 The PlanetScale Discovery Tools consist of two main components:
 
 1. **Database Discovery** - Comprehensive database environment analysis for PostgreSQL and MySQL/Vitess
-2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon)
+2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, PlanetScale Postgres)
 
 Both tools can be used independently or together for a complete environment assessment.
 
@@ -51,6 +51,7 @@ nano config.yaml
 - **Supabase**: Set your `access_token` from [app.supabase.com/account/tokens](https://app.supabase.com/account/tokens)
 - **Heroku**: Set your `api_key` from [dashboard.heroku.com/account](https://dashboard.heroku.com/account) or set `HEROKU_API_KEY` env var
 - **Neon**: Set your `api_key` from [console.neon.tech/app/settings/api-keys](https://console.neon.tech/app/settings/api-keys) or set `NEON_API_KEY` env var
+- **PlanetScale**: Set `service_token_id` and `service_token` from [app.planetscale.com/settings/service-tokens](https://app.planetscale.com/settings/service-tokens) or set `PLANETSCALE_SERVICE_TOKEN_ID` and `PLANETSCALE_SERVICE_TOKEN` env vars
 
 ### 3. Run Discovery
 
@@ -70,7 +71,7 @@ No virtual environment activation required — the wrapper script handles it aut
 
 Results are saved to `./discovery_output/` by default:
 
-- **`planetscale_discovery_results.json`** - Complete structured data containing all discovery information
+- **`planetscale_discovery_results_<timestamp>.json`** - Complete structured data containing all discovery information
 
 If you're working with the PlanetScale team, send the JSON report file to your point of contact. The JSON report does not contain any actual data from your database — only metadata about structure, configuration, and infrastructure.
 
@@ -223,6 +224,8 @@ providers:
     enabled: false
   neon:
     enabled: false
+  planetscale:
+    enabled: false
 
 output:
   output_dir: ./reports
@@ -250,6 +253,7 @@ ps-discovery config-template --output config.yaml --engines postgres,mysql --pro
 | **Supabase** | Managed PostgreSQL projects, connection pooling | [Supabase Setup Guide](docs/providers/supabase.md) |
 | **Heroku** | Postgres add-ons, PgBouncer pooling, followers | [Heroku Setup Guide](docs/providers/heroku.md) |
 | **Neon** | Serverless Postgres projects, branches, endpoints | [Neon Setup Guide](docs/providers/neon.md) |
+| **PlanetScale** | Postgres databases, branches, cluster sizing (Postgres only) | [PlanetScale Setup Guide](docs/providers/planetscale.md) |
 
 ## Security & Data Privacy
 

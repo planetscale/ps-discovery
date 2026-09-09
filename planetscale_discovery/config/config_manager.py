@@ -120,6 +120,18 @@ class NeonConfig:
 
 
 @dataclass
+class PlanetScaleConfig:
+    """PlanetScale provider configuration."""
+
+    enabled: bool = False
+    service_token_id: Optional[str] = None
+    service_token: Optional[str] = None
+    organization: Optional[str] = None
+    target_database: Optional[str] = None
+    discover_all: bool = True
+
+
+@dataclass
 class OutputConfig:
     """Output configuration."""
 
@@ -138,6 +150,7 @@ class DiscoveryConfig:
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     heroku: HerokuConfig = field(default_factory=HerokuConfig)
     neon: NeonConfig = field(default_factory=NeonConfig)
+    planetscale: PlanetScaleConfig = field(default_factory=PlanetScaleConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     # None means "unspecified" — the config file did not declare `modules:`.
     # resolve_modules() then infers what to run from the config contents.
@@ -194,6 +207,7 @@ def resolve_modules(
             config.supabase,
             config.heroku,
             config.neon,
+            config.planetscale,
         )
     ):
         modules.append("cloud")
@@ -263,7 +277,8 @@ class ConfigManager:
                     f"  GCP:      {docs_base}/docs/providers/gcp.md\n"
                     f"  Supabase: {docs_base}/docs/providers/supabase.md\n"
                     f"  Heroku:   {docs_base}/docs/providers/heroku.md\n"
-                    f"  Neon:     {docs_base}/docs/providers/neon.md"
+                    f"  Neon:     {docs_base}/docs/providers/neon.md\n"
+                    f"  PlanetScale: {docs_base}/docs/providers/planetscale.md"
                 ) from e
         else:
             # Load from environment or use defaults
@@ -414,6 +429,23 @@ class ConfigManager:
                 "discover_all", neon_config.discover_all
             )
 
+        # Parse PlanetScale config
+        planetscale_config = PlanetScaleConfig()
+        if "providers" in config_data and "planetscale" in (
+            config_data["providers"] or {}
+        ):
+            ps_data = config_data["providers"]["planetscale"] or {}
+            planetscale_config.enabled = ps_data.get(
+                "enabled", planetscale_config.enabled
+            )
+            planetscale_config.service_token_id = ps_data.get("service_token_id")
+            planetscale_config.service_token = ps_data.get("service_token")
+            planetscale_config.organization = ps_data.get("organization")
+            planetscale_config.target_database = ps_data.get("target_database")
+            planetscale_config.discover_all = ps_data.get(
+                "discover_all", planetscale_config.discover_all
+            )
+
         # Parse output config
         output_config = OutputConfig()
         if "output" in config_data:
@@ -431,6 +463,7 @@ class ConfigManager:
             supabase=supabase_config,
             heroku=heroku_config,
             neon=neon_config,
+            planetscale=planetscale_config,
             output=output_config,
             # Absent key -> None (unspecified); resolve_modules() will infer.
             modules=config_data.get("modules"),
@@ -514,6 +547,15 @@ class ConfigManager:
             org_id=os.getenv("NEON_ORG_ID"),
         )
 
+        # PlanetScale configuration
+        planetscale_config = PlanetScaleConfig(
+            enabled=os.getenv("PLANETSCALE_ENABLED", "false").lower() == "true",
+            service_token_id=os.getenv("PLANETSCALE_SERVICE_TOKEN_ID"),
+            service_token=os.getenv("PLANETSCALE_SERVICE_TOKEN"),
+            organization=os.getenv("PLANETSCALE_ORGANIZATION"),
+            target_database=os.getenv("PLANETSCALE_TARGET_DATABASE"),
+        )
+
         # Output configuration
         output_config = OutputConfig(
             output_dir=os.getenv("DISCOVERY_OUTPUT_DIR", "./discovery_output"),
@@ -528,6 +570,7 @@ class ConfigManager:
             supabase=supabase_config,
             heroku=heroku_config,
             neon=neon_config,
+            planetscale=planetscale_config,
             output=output_config,
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_file=os.getenv("LOG_FILE"),
@@ -571,12 +614,13 @@ class ConfigManager:
                 or self.config.supabase.enabled
                 or self.config.heroku.enabled
                 or self.config.neon.enabled
+                or self.config.planetscale.enabled
             ):
                 errors.append(
                     "At least one cloud provider must be enabled for cloud discovery.\n"
                     "  Enable a provider in your config file (e.g. providers.aws.enabled: true)\n"
                     "  or pass --providers on the command line (e.g. --providers heroku).\n"
-                    "  Supported providers: aws, gcp, supabase, heroku, neon"
+                    "  Supported providers: aws, gcp, supabase, heroku, neon, planetscale"
                 )
 
         if errors:
@@ -589,7 +633,8 @@ class ConfigManager:
 
         Args:
             output_path: Path where the template should be saved
-            providers: List of cloud providers to include (aws, gcp, supabase, heroku, neon).
+            providers: List of cloud providers to include (aws, gcp, supabase, heroku,
+                      neon, planetscale).
                       If None or empty, no cloud provider sections are generated.
             engines: List of database engines to include (postgres, mysql).
                     Defaults to ["postgres"].
@@ -732,6 +777,23 @@ mysql:
     # Optional: filter to a specific organization
     # org_id: your-org-id
     discover_all: true  # Discover all Neon projects
+
+"""
+
+                if "planetscale" in providers:
+                    template_yaml += """  planetscale:
+    enabled: true
+    # Create a service token at: https://app.planetscale.com/settings/service-tokens
+    # Grant read_organization and read_databases on the organization, and
+    # read_branch on the databases.
+    # Or set PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN
+    service_token_id: your_service_token_id
+    service_token: your_service_token
+    # Optional: limit to one organization (otherwise all readable orgs)
+    # organization: your-org-slug
+    # Optional: analyze a specific database only
+    # target_database: my-database
+    discover_all: true  # Discover all Postgres databases.
 
 """
 

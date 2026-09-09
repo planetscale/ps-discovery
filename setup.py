@@ -58,6 +58,9 @@ setup(
         "neon": [
             "requests>=2.32.5",
         ],
+        "planetscale": [
+            "requests>=2.32.5",
+        ],
         "all": [
             "PyMySQL>=1.1.0",
             "boto3>=1.42.52",

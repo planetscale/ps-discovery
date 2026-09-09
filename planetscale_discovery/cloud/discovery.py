@@ -62,6 +62,10 @@ class CloudDiscoveryTool:
             if self.config.neon.enabled:
                 self._discover_neon()
 
+            # Discover PlanetScale resources
+            if self.config.planetscale.enabled:
+                self._discover_planetscale()
+
             # Generate summary
             self._generate_summary()
 
@@ -310,6 +314,54 @@ class CloudDiscoveryTool:
                 {
                     "timestamp": generate_timestamp(),
                     "message": f"Neon discovery failed: {e}",
+                    "type": "PROVIDER_ERROR",
+                }
+            )
+
+    def _discover_planetscale(self) -> None:
+        """Discover PlanetScale Postgres resources."""
+        self.logger.info("Starting PlanetScale discovery")
+
+        try:
+            # Lazy import PlanetScale analyzer only when needed
+            try:
+                from .analyzers.planetscale_analyzer import PlanetScaleAnalyzer
+            except ImportError:
+                self.logger.error(
+                    'PlanetScale dependencies not installed. Install with: pip install "ps-discovery[planetscale]"'
+                )
+                self.results["errors"].append(
+                    {
+                        "timestamp": generate_timestamp(),
+                        "message": "PlanetScale dependencies not installed",
+                        "type": "DEPENDENCY_ERROR",
+                    }
+                )
+                return
+
+            planetscale_analyzer = PlanetScaleAnalyzer(
+                self.config.planetscale, self.logger
+            )
+
+            if not planetscale_analyzer.authenticate():
+                for error in planetscale_analyzer.errors:
+                    self.results["errors"].append(error)
+                return
+
+            planetscale_results = planetscale_analyzer.analyze()
+            self.results["providers"]["planetscale"] = planetscale_results
+
+            self.logger.info(
+                f"PlanetScale discovery completed. Found "
+                f"{len(planetscale_results.get('organizations', []))} organization(s)"
+            )
+
+        except Exception as e:
+            self.logger.error(f"PlanetScale discovery failed: {e}")
+            self.results["errors"].append(
+                {
+                    "timestamp": generate_timestamp(),
+                    "message": f"PlanetScale discovery failed: {e}",
                     "type": "PROVIDER_ERROR",
                 }
             )

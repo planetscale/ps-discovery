@@ -107,6 +107,27 @@ providers:
     discover_all: true
 ```
 
+### [PlanetScale](planetscale.md)
+PlanetScale Postgres estate discovery across organizations, databases and branches.
+
+**Key Features:**
+- Organization, database and branch inventory across all readable orgs
+- Postgres only. Databases of other engines are skipped
+- Branch topology (production flag, parent branch, state, replica flags)
+- Cluster sizing per branch, with SKU specs (vCPU, RAM, storage) read live from the API
+- Organization plan tier and single tenancy flag
+- Service token authentication, read-only
+
+**Quick Start:**
+```yaml
+providers:
+  planetscale:
+    enabled: true
+    service_token_id: "your-service-token-id"
+    service_token: "your-service-token"
+    discover_all: true
+```
+
 ## Common Setup Patterns
 
 ### Authentication
@@ -118,6 +139,7 @@ Each provider has different authentication methods:
 - **Supabase**: Personal access tokens, service role keys
 - **Heroku**: Platform API keys (from Dashboard or CLI)
 - **Neon**: Personal, organization, or project-scoped API keys (from the Neon console)
+- **PlanetScale**: Service tokens, sent as a token ID and token pair
 
 See individual provider documentation for detailed authentication setup.
 
@@ -147,6 +169,11 @@ providers:
   neon:
     enabled: true
     api_key: "your-neon-api-key"
+
+  planetscale:
+    enabled: true
+    service_token_id: "your-service-token-id"
+    service_token: "your-service-token"
 
 output:
   output_dir: ./multi_cloud_discovery
@@ -185,6 +212,14 @@ export HEROKU_TARGET_APP=my-production-app  # Optional: target specific app
 export NEON_API_KEY=your-neon-api-key
 export NEON_TARGET_PROJECT=ep-broad-frost-12345    # Optional: target specific project
 export NEON_ORG_ID=org-xxxxxxxxxxxxxxxxx           # Optional: scope to a specific org
+```
+
+**PlanetScale:**
+```bash
+export PLANETSCALE_SERVICE_TOKEN_ID=your-service-token-id
+export PLANETSCALE_SERVICE_TOKEN=your-service-token
+export PLANETSCALE_ORGANIZATION=your-org-slug       # Optional: scope to one org
+export PLANETSCALE_TARGET_DATABASE=my-database      # Optional: target one database
 ```
 
 ### Discovery Scope
@@ -242,6 +277,9 @@ pipx install -e ".[all]"
 
 # Neon only
 pipx install -e ".[neon]"
+
+# PlanetScale only
+pipx install -e ".[planetscale]"
 ```
 
 ## Output Format
@@ -256,10 +294,11 @@ All providers generate consistent output:
     "gcp": { /* GCP discoveries */ },
     "supabase": { /* Supabase discoveries */ },
     "heroku": { /* Heroku discoveries */ },
-    "neon": { /* Neon discoveries */ }
+    "neon": { /* Neon discoveries */ },
+    "planetscale": { /* PlanetScale discoveries */ }
   },
   "summary": {
-    "providers_discovered": ["aws", "gcp", "supabase", "heroku"],
+    "providers_discovered": ["aws", "gcp", "supabase", "heroku", "neon", "planetscale"],
     "total_databases": 10,
     "total_clusters": 3,
     "total_regions": 5

@@ -243,14 +243,15 @@ ps-discovery --config supabase-config.yaml --output-dir ./output
 
 ### Expected Output
 
-The tool generates two report files:
+The tool always writes a JSON report. It writes a markdown report as well when
+you add the `--local-summary` flag.
 
-1. **JSON Report** (`cloud_discovery_results.json`)
+1. **JSON Report** (`planetscale_discovery_results_<timestamp>.json`)
    - Complete structured data
    - Programmatically accessible
    - All discovered details
 
-2. **Markdown Report** (`cloud_discovery_summary.md`)
+2. **Markdown Report** (`ps_discovery_<timestamp>.md`, with `--local-summary`)
    - Human-readable summary
    - Project overview tables
    - Configuration details

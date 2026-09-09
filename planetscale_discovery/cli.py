@@ -84,7 +84,7 @@ may be used with no subcommand: `ps-discovery --config config.yaml`.
     )
     config_parser.add_argument(
         "--providers",
-        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon). If not specified, only database and output sections are generated.",
+        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon,planetscale). If not specified, only database and output sections are generated.",
         default=None,
     )
     config_parser.add_argument(
@@ -157,7 +157,7 @@ def add_shared_run_args(
         "--providers",
         default=default(None),
         help=(
-            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon). "
+            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon,planetscale). "
             "Overrides the enabled providers in the config file."
         ),
     )
@@ -256,6 +256,26 @@ def add_cloud_args(parser: argparse.ArgumentParser) -> None:
         help="Filter Neon projects to a specific organization",
     )
 
+    cloud_group.add_argument(
+        "--planetscale-service-token-id",
+        help="PlanetScale service token ID for authentication",
+    )
+
+    cloud_group.add_argument(
+        "--planetscale-service-token",
+        help="PlanetScale service token for authentication",
+    )
+
+    cloud_group.add_argument(
+        "--planetscale-organization",
+        help="Filter PlanetScale discovery to a specific organization",
+    )
+
+    cloud_group.add_argument(
+        "--planetscale-target-database",
+        help="Target specific PlanetScale database for focused analysis",
+    )
+
 
 VALID_DATABASE_ANALYZERS = [
     "config",
@@ -348,6 +368,7 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
         config.supabase.enabled = "supabase" in providers
         config.heroku.enabled = "heroku" in providers
         config.neon.enabled = "neon" in providers
+        config.planetscale.enabled = "planetscale" in providers
 
     regions = getattr(args, "regions", None)
     if regions:
@@ -386,6 +407,25 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
 
     if hasattr(args, "neon_org_id") and args.neon_org_id:
         config.neon.org_id = args.neon_org_id
+
+    # PlanetScale-specific overrides
+    if (
+        hasattr(args, "planetscale_service_token_id")
+        and args.planetscale_service_token_id
+    ):
+        config.planetscale.service_token_id = args.planetscale_service_token_id
+
+    if hasattr(args, "planetscale_service_token") and args.planetscale_service_token:
+        config.planetscale.service_token = args.planetscale_service_token
+
+    if hasattr(args, "planetscale_organization") and args.planetscale_organization:
+        config.planetscale.organization = args.planetscale_organization
+
+    if (
+        hasattr(args, "planetscale_target_database")
+        and args.planetscale_target_database
+    ):
+        config.planetscale.target_database = args.planetscale_target_database
 
     # Run cloud discovery
     cloud_tool = CloudDiscoveryTool(config)
@@ -737,6 +777,51 @@ def generate_summary_markdown(
                     )
                 lines.append("")
 
+            elif provider_name == "neon":
+                lines.append(
+                    f"- **Projects:** {provider_summary.get('total_projects', 0)}"
+                )
+                lines.append(
+                    f"- **Branches:** {provider_summary.get('total_branches', 0)}"
+                )
+                lines.append(
+                    f"- **Endpoints:** {provider_summary.get('total_endpoints', 0)} "
+                    f"({provider_summary.get('read_replicas', 0)} read replica(s))"
+                )
+                pg_versions = provider_summary.get("pg_versions", [])
+                if pg_versions:
+                    lines.append(
+                        f"- **PostgreSQL versions:** {', '.join(str(v) for v in pg_versions)}"
+                    )
+                plan_tiers = provider_summary.get("plan_tiers", {})
+                if plan_tiers:
+                    lines.append(
+                        f"- **Plans:** {', '.join(f'{k} ({v})' for k, v in plan_tiers.items())}"
+                    )
+                lines.append("")
+
+            elif provider_name == "planetscale":
+                lines.append(
+                    f"- **Organizations:** {provider_summary.get('total_organizations', 0)}"
+                )
+                lines.append(
+                    f"- **Postgres databases:** {provider_summary.get('total_databases', 0)}"
+                )
+                lines.append(
+                    f"- **Branches:** {provider_summary.get('total_branches', 0)} "
+                    f"({provider_summary.get('production_branches', 0)} production)"
+                )
+                storage_used = provider_summary.get("total_storage_bytes_used", 0)
+                if storage_used:
+                    lines.append(f"- **Storage used:** {_format_bytes(storage_used)}")
+                cluster_sizes = provider_summary.get("cluster_sizes", {})
+                if cluster_sizes:
+                    lines.append(
+                        f"- **Cluster sizes:** "
+                        f"{', '.join(f'{k} ({v})' for k, v in cluster_sizes.items())}"
+                    )
+                lines.append("")
+
     # Gaps section
     gaps = []
     if db_results:
@@ -924,6 +1009,7 @@ def main() -> None:
             config.supabase.enabled = "supabase" in providers
             config.heroku.enabled = "heroku" in providers
             config.neon.enabled = "neon" in providers
+            config.planetscale.enabled = "planetscale" in providers
 
         # Resolve which modules to run. Precedence: explicit subcommand, then
         # the config file's `modules:`, then inference from config contents.

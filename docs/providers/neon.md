@@ -296,13 +296,14 @@ ps-discovery --config neon-config.yaml --output-dir ./output
 
 ### Expected Output
 
-The tool generates two report files:
+The tool always writes a JSON report. It writes a markdown report as well when
+you add the `--local-summary` flag.
 
-1. **JSON Report** (`cloud_discovery_results.json`)
+1. **JSON Report** (`planetscale_discovery_results_<timestamp>.json`)
    - Complete structured data with all project, branch, endpoint, and database details
    - Programmatically accessible for further analysis
 
-2. **Markdown Report** (`cloud_discovery_summary.md`)
+2. **Markdown Report** (`ps_discovery_<timestamp>.md`, with `--local-summary`)
    - Human-readable summary with tables
    - Per-project branch and endpoint details
    - Summary statistics across all projects
@@ -379,11 +380,11 @@ export NEON_API_KEY="your-neon-api-key"
 ps-discovery config-template --output neon-config.yaml --providers neon
 
 # 4. Run discovery
-ps-discovery --config neon-config.yaml
+ps-discovery --config neon-config.yaml --local-summary
 
 # 5. Review reports
 ls ./discovery_output/
-cat ./discovery_output/cloud_discovery_summary.md
+cat ./discovery_output/ps_discovery_*.md
 ```
 
 ## Additional Resources

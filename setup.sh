@@ -262,6 +262,10 @@ add_provider_deps() {
             DEPS+=("requests>=2.32.5")
             INSTALLED_PROVIDERS="neon"
             ;;
+        planetscale)
+            DEPS+=("requests>=2.32.5")
+            INSTALLED_PROVIDERS="planetscale"
+            ;;
         none | None | NONE | "")
             : # self-managed / direct connection — no extra dependencies
             ;;
@@ -283,6 +287,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         "Supabase" \
         "Heroku Postgres" \
         "Neon" \
+        "PlanetScale Postgres" \
         "None (self-managed / direct connection)")
     case "$provider_idx" in
         0) provider_choice="aws" ;;
@@ -290,6 +295,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         2) provider_choice="supabase" ;;
         3) provider_choice="heroku" ;;
         4) provider_choice="neon" ;;
+        5) provider_choice="planetscale" ;;
         *) provider_choice="none" ;;
     esac
 else
@@ -444,6 +450,10 @@ if [ -n "$INSTALLED_PROVIDERS" ]; then
     fi
     if [[ $INSTALLED_PROVIDERS == *"neon"* ]]; then
         echo "     • Neon: Set your API key or NEON_API_KEY env var"
+    fi
+    if [[ $INSTALLED_PROVIDERS == *"planetscale"* ]]; then
+        echo "     • PlanetScale: Set your service token ID and token, or the"
+        echo "       PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN env vars"
     fi
     echo ""
 fi

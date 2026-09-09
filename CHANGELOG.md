@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PlanetScale cloud discovery provider.** Records the current PlanetScale Postgres estate: organizations, databases, branches, the cluster size and SKU each branch runs, and branch storage usage against capacity. Postgres databases only; databases of other engines are skipped. Authenticates with a read-only service token, from the config file or the `PLANETSCALE_SERVICE_TOKEN_ID` and `PLANETSCALE_SERVICE_TOKEN` environment variables ([guide](docs/providers/planetscale.md)).
+- A Neon section in the `--local-summary` markdown report, which was missing.
+
+### Fixed
+
+- The provider guides and `docs/output-format.md` named the old, untimestamped report file names. They now match what the tool writes.
+
 ## [1.3.1] - 2026-08-24
 
 ### Fixed

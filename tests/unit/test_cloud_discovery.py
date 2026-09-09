@@ -340,6 +340,30 @@ class TestCloudDiscoveryTool:
         assert len(results["errors"]) > 0
         assert "Neon" in results["errors"][0]["message"]
 
+    @patch(
+        "planetscale_discovery.cloud.analyzers.planetscale_analyzer.PlanetScaleAnalyzer"
+    )
+    def test_discover_planetscale(self, mock_planetscale_analyzer_class):
+        """Test PlanetScale discovery"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = True
+        mock_analyzer.analyze.return_value = {
+            "organizations": [{"name": "test-org", "databases": []}],
+            "summary": {"total_databases": 1, "regions": ["us-east"]},
+        }
+        mock_planetscale_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.planetscale.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "planetscale" in results["providers"]
+        assert len(results["providers"]["planetscale"]["organizations"]) == 1
+        mock_analyzer.authenticate.assert_called_once()
+        mock_analyzer.analyze.assert_called_once()
+
     @patch("planetscale_discovery.cloud.analyzers.aws_analyzer.AWSAnalyzer")
     @patch("planetscale_discovery.cloud.analyzers.gcp_analyzer.GCPAnalyzer")
     def test_discover_mixed_success_and_failure(
