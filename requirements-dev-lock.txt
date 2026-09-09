@@ -100,13 +100,13 @@ boto3==1.43.73 \
     --hash=sha256:5b54da301c387abe30c5b3a5335652f1ebd73e814c725ba805d27a2d477ce547 \
     --hash=sha256:6e6c755e5039f204882c01d7936a46abce539b3f5bbb534a23a3f2afbc86f576
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   moto
 botocore==1.43.73 \
     --hash=sha256:068433028e011ccbeab1dd7c46b1090c24e378397693c66e67ca571176498daa \
     --hash=sha256:0fa1e63c24b3531be3e1bc1687a88b3be9e63a430153f24edd93efc162bb1c51
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   boto3
     #   moto
     #   s3transfer
@@ -585,7 +585,7 @@ jmespath==1.1.0 \
     --hash=sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d \
     --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   boto3
     #   botocore
 librt==0.15.0 \
@@ -830,9 +830,9 @@ mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
     # via markdown-it-py
-moto==5.2.2 \
-    --hash=sha256:3817f1e39721ca833579b921e53e3b68547ace6a34d848c9486fbb5905808de9 \
-    --hash=sha256:aac8023a429e125e91c91f8f4730a67b54f518cda587352f7e67252fe3168f75
+moto==5.2.3 \
+    --hash=sha256:5ec31b3cdbb383a19d46030157bd82aaaa7a9cc5f564200f995663d347bd4728 \
+    --hash=sha256:a9e95c3218b6eda18e74571f1ced11cb1bc3151467d562c1da6037b9d19832cb
     # via -r requirements/dev.in
 mypy==2.3.1 \
     --hash=sha256:114dff494000f18bd10d5d95d84b8567b26da60279ecbe838131841df20e635d \
@@ -953,7 +953,7 @@ python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   botocore
 pytokens==0.4.1 \
     --hash=sha256:0fc71786e629cef478cbf29d7ea1923299181d0699dbe7c3c0f4a583811d9fc1 \
@@ -1074,7 +1074,7 @@ pyyaml==6.0.3 \
     --hash=sha256:fa160448684b4e94d80416c0fa4aac48967a969efe22931448d853ada8baf926 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   bandit
     #   responses
 requests==2.34.2 \
@@ -1097,13 +1097,13 @@ s3transfer==0.19.2 \
     --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
     --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   boto3
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   python-dateutil
 stevedore==5.8.0 \
     --hash=sha256:88eede9e66ca80e34085b9174e2327da2c61ac91f24f70e41c3ad76e4bb4872b \
@@ -1174,7 +1174,7 @@ urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
     # via
-    #   -c requirements/../requirements-lock.txt
+    #   -c requirements-lock.txt
     #   botocore
     #   requests
     #   responses
