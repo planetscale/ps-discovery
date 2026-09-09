@@ -7,6 +7,7 @@ import tempfile
 import yaml
 import os
 from pathlib import Path
+from unittest.mock import patch
 from planetscale_discovery.config.config_manager import (
     ConfigManager,
     DatabaseConfig,
@@ -184,6 +185,50 @@ class TestConfigManager:
             assert config.log_level == "DEBUG"
         finally:
             os.unlink(config_file)
+
+    def test_load_planetscale_from_yaml_file(self):
+        """The PlanetScale provider block loads from a config file"""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            config_data = {
+                "providers": {
+                    "planetscale": {
+                        "enabled": True,
+                        "service_token_id": "id-abc",
+                        "service_token": "token-xyz",
+                        "organization": "my-org",
+                        "target_database": "my-database",
+                    }
+                }
+            }
+            yaml.dump(config_data, f)
+            config_file = f.name
+
+        try:
+            config = ConfigManager(config_file).load_config(validate=False)
+
+            assert config.planetscale.enabled is True
+            assert config.planetscale.service_token_id == "id-abc"
+            assert config.planetscale.service_token == "token-xyz"
+            assert config.planetscale.organization == "my-org"
+            assert config.planetscale.target_database == "my-database"
+        finally:
+            os.unlink(config_file)
+
+    def test_load_planetscale_from_environment(self):
+        """The PlanetScale provider block loads from the environment"""
+        env = {
+            "PLANETSCALE_SERVICE_TOKEN_ID": "env-id",
+            "PLANETSCALE_SERVICE_TOKEN": "env-token",
+            "PLANETSCALE_ORGANIZATION": "env-org",
+            "PLANETSCALE_TARGET_DATABASE": "env-database",
+        }
+        with patch.dict(os.environ, env):
+            config = ConfigManager().load_config(validate=False)
+
+        assert config.planetscale.service_token_id == "env-id"
+        assert config.planetscale.service_token == "env-token"
+        assert config.planetscale.organization == "env-org"
+        assert config.planetscale.target_database == "env-database"
 
     def test_load_from_environment(self):
         """Test loading configuration from environment"""

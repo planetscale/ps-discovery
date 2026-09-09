@@ -4,8 +4,11 @@ The tool generates reports in the specified output directory (default: `./discov
 
 ## Generated Files
 
-- **`planetscale_discovery_results.json`**: Complete analysis results in JSON format
-- **`discovery_summary.md`**: Local debugging summary (only when `--local-summary` flag is used)
+- **`planetscale_discovery_results_<timestamp>.json`**: Complete analysis results in JSON format
+- **`ps_discovery_<timestamp>.md`**: Local debugging summary (only when `--local-summary` flag is used)
+
+The `<timestamp>` is the discovery start time, for example
+`20260901T173146`. Each run writes new files and overwrites nothing.
 
 ## JSON Report Structure
 

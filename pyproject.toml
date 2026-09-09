@@ -10,7 +10,7 @@ authors = [{name = "PlanetScale", email = "engineering@planetscale.com"}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
-keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku", "neon"]
+keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "supabase", "heroku", "neon", "planetscale"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: System Administrators",
@@ -55,6 +55,9 @@ heroku = [
     "requests>=2.32.5",
 ]
 neon = [
+    "requests>=2.32.5",
+]
+planetscale = [
     "requests>=2.32.5",
 ]
 all = [

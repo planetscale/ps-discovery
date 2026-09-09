@@ -303,13 +303,14 @@ ps-discovery --config heroku-config.yaml --output-dir ./output
 
 ### Expected Output
 
-The tool generates two report files:
+The tool always writes a JSON report. It writes a markdown report as well when
+you add the `--local-summary` flag.
 
-1. **JSON Report** (`cloud_discovery_results.json`)
+1. **JSON Report** (`planetscale_discovery_results_<timestamp>.json`)
    - Complete structured data with all app and database details
    - Programmatically accessible for further analysis
 
-2. **Markdown Report** (`cloud_discovery_summary.md`)
+2. **Markdown Report** (`ps_discovery_<timestamp>.md`, with `--local-summary`)
    - Human-readable summary with tables
    - Per-app database details, pooling, and follower information
    - Recommendations specific to Heroku
@@ -419,11 +420,11 @@ export HEROKU_API_KEY="your-heroku-api-key"
 ps-discovery config-template --output heroku-config.yaml --providers heroku
 
 # 4. Run discovery
-ps-discovery --config heroku-config.yaml
+ps-discovery --config heroku-config.yaml --local-summary
 
 # 5. Review reports
 ls ./discovery_output/
-cat ./discovery_output/cloud_discovery_summary.md
+cat ./discovery_output/ps_discovery_*.md
 ```
 
 ## Additional Resources
