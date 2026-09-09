@@ -33,7 +33,7 @@ STORAGE_METRICS = {
     "planetscale_volume_usage_percentage": "usage_percentage",
 }
 
-_DOCS_URL = "https://github.com/planetscale/planetscale-discovery-cli-dev/blob/main/docs/providers/planetscale.md"
+_DOCS_URL = "https://github.com/planetscale/ps-discovery/blob/main/docs/providers/planetscale.md"
 _TOKEN_URL = "https://app.planetscale.com/settings/service-tokens"
 
 
