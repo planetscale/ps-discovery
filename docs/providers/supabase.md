@@ -368,6 +368,23 @@ ls ./supabase_discovery_output/
 - Consider data residency requirements
 - Evaluate network latency impacts
 
+## Query Workload Capture (optional)
+
+Query workload capture needs the `pg_stat_statements` extension, and Supabase
+enables it on every project by default. The query performance page in the
+dashboard is built on it, so there is normally nothing to do.
+
+If it has been turned off, re-enable it under **Database > Extensions**.
+
+The capture role needs `pg_monitor`:
+
+```sql
+GRANT pg_monitor TO planetscale_discovery;
+```
+
+`ps-discovery workload init` reports the exact state before you capture. See
+[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+
 ## Additional Resources
 
 - [Supabase Management API Documentation](https://supabase.com/docs/reference/api)

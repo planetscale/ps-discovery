@@ -387,6 +387,32 @@ ls ./discovery_output/
 cat ./discovery_output/ps_discovery_*.md
 ```
 
+## Query Workload Capture (optional)
+
+Query workload capture needs the `pg_stat_statements` extension. Neon preloads
+the library, so you only create the extension:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+GRANT pg_monitor TO planetscale_discovery;
+```
+
+### Scale-to-zero resets the statistics
+
+This is the one Neon-specific problem, and it decides whether a capture is worth
+running. When a Neon compute suspends or scales to zero, the collected
+statistics are lost. A capture spanning several days on a compute that idles
+keeps restarting from nothing, and the result describes only the periods between
+suspensions.
+
+Before you capture, disable scale-to-zero on the branch you are measuring, or
+accept a window that covers active periods only. Capture handles the resets
+rather than reporting negative numbers, and `finalize` counts them in the
+caveats, so check that count before you quote any figure.
+
+`ps-discovery workload init` reports the exact state before you capture. See
+[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+
 ## Additional Resources
 
 - [Neon API Reference](https://api-docs.neon.tech/reference/getting-started)

@@ -131,7 +131,8 @@ GRANT SELECT ON pg_user_mappings TO planetscale_discovery;
 GRANT SELECT ON pg_foreign_server TO planetscale_discovery;
 GRANT SELECT ON pg_foreign_data_wrapper TO planetscale_discovery;
 
--- For advanced performance analysis (if pg_stat_statements is enabled)
+-- For advanced performance analysis. Skip this line if the extension is not
+-- installed, or it will fail with "relation pg_stat_statements does not exist"
 GRANT SELECT ON pg_stat_statements TO planetscale_discovery;
 
 -- For replication analysis
@@ -141,9 +142,17 @@ GRANT SELECT ON pg_stat_subscription TO planetscale_discovery;
 -- For PostgreSQL 10+ enhanced privileges (recommended)
 GRANT pg_read_all_stats TO planetscale_discovery;
 GRANT pg_read_all_settings TO planetscale_discovery;
+
+-- Required for workload capture (see below)
+GRANT pg_monitor TO planetscale_discovery;
 ```
 
 Alternatively, you can use an existing superuser account for complete analysis.
+
+Query workload capture needs `pg_monitor` and a readable `pg_stat_statements`.
+It reads no user table, so it needs no `SELECT` on your data. See
+[Workload Capture](docs/workload_capture.md#before-you-start) for a smaller
+role and for how to enable `pg_stat_statements`.
 
 ## Required MySQL Privileges
 
@@ -255,6 +264,54 @@ ps-discovery config-template --output config.yaml --engines postgres,mysql --pro
 | **Neon** | Serverless Postgres projects, branches, endpoints | [Neon Setup Guide](docs/providers/neon.md) |
 | **PlanetScale** | Postgres databases, branches, cluster sizing (Postgres only) | [PlanetScale Setup Guide](docs/providers/planetscale.md) |
 
+## Query Workload Capture (optional, for Neki sharding design)
+
+Designing a sharding scheme for [PlanetScale Neki](https://neki.dev) needs the
+query workload, not only the schema. This optional flow records
+`pg_stat_statements` over a few days from cron. It writes the input files that a
+sharding planner reads.
+
+Nothing here runs during a normal discovery run, and nothing here writes into
+the discovery output. `./setup.sh` installs what the flow needs, so there is
+nothing extra to install.
+
+```bash
+# 1. Prepare a session directory and take the first snapshot
+./ps-discovery workload init --session ./workload-session
+
+# 2. Take one more snapshot. Run this repeatedly over a few days.
+#    init prints a crontab line that runs it every hour.
+./ps-discovery workload collect --session ./workload-session
+
+# 3. Turn the snapshots into the bundle
+./ps-discovery workload finalize --session ./workload-session
+```
+
+`--session` names a directory that this tool creates and owns. It holds the
+snapshots and the captured schema. Give all four commands the same directory.
+You can name it anything and put it anywhere. Delete it when you are done.
+Nothing persists on the database server.
+
+Each `collect` takes one snapshot and exits. It does no scheduling of its own.
+Two snapshots are the minimum, because a window needs two readings to
+difference. More snapshots, spread across a peak, give a better result.
+
+Compress the bundle directory and send the archive to your PlanetScale migration
+engineer, who uses it to plan the sharding scheme. The bundle holds a query log,
+a schema file, table row counts, a `manifest.json` recording when the capture
+ran, and a README summarizing what was collected.
+
+`pg_stat_statements` is required: it is the only record of the query workload,
+and that workload is what a sharding scheme is planned from. It is not a trusted
+extension, so enabling it needs a superuser or the provider's admin role. The
+capture role also needs `pg_monitor`. `workload init` checks both and stops with
+exit code 5 when either is missing.
+
+The flow reads catalogs and statistics views only. It reads no user table, never
+runs `ANALYZE` and holds no table locks. Read
+[Workload Capture](docs/workload_capture.md) before you enable it on a
+production primary.
+
 ## Security & Data Privacy
 
 This tool collects **metadata only** — never actual data from your tables.
@@ -263,7 +320,7 @@ This tool collects **metadata only** — never actual data from your tables.
 
 **What is NOT collected:** Table contents, customer records, literal values from queries, application code, or credentials. Passwords are used only for connection and are never stored in output.
 
-**Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by placeholders, so `SELECT * FROM orders WHERE email = ?` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
+**Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by `$N` placeholders, so `SELECT * FROM orders WHERE email = $1` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
 
 All analysis runs locally — no data is sent to external services.
 
@@ -276,6 +333,8 @@ All analysis runs locally — no data is sent to external services.
 - [Cleanup Procedures](docs/cleanup.md) - Removing discovery users and verifying cleanup
 - [Data Size Analysis](docs/data_size_analysis.md) - Optional large column and LOB analysis
 - [Performance Considerations](docs/performance_considerations.md) - Impact and timing guidance
+- [Workload Capture](docs/workload_capture.md) - Optional query workload capture for Neki sharding design
+- [Workload Bundle Format](docs/workload-bundle.md) - What the bundle contains and how to hand it over
 
 ## Support
 

@@ -4,7 +4,7 @@ Configuration management for PlanetScale Discovery Tools.
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 
 from ..common.utils import load_config_file
@@ -28,6 +28,24 @@ class DataSizeConfig:
 
 
 @dataclass
+class WorkloadConfig:
+    """Query workload capture for Neki sharding design.
+
+    Opt-in and off by default. Nested under ``database`` because it targets the
+    same server; a capture against a different host needs its own config file.
+    """
+
+    enabled: bool = False
+    # None means every non-system schema, matching the rest of the tool. An
+    # explicit list narrows it.
+    schemas: Optional[List[str]] = None
+    # Volume caps for an unattended multi-day session.
+    max_snapshots: int = 500
+    max_session_mb: int = 512
+    statement_text_max_chars: int = 8192
+
+
+@dataclass
 class DatabaseConfig:
     """Database connection configuration."""
 
@@ -42,7 +60,11 @@ class DatabaseConfig:
     # analyzer connection, so a slow catalog read cannot hang a discovery run.
     statement_timeout: str = "300s"
     data_size: DataSizeConfig = field(default_factory=DataSizeConfig)
+    workload: WorkloadConfig = field(default_factory=WorkloadConfig)
     excluded_databases: List[str] = field(default_factory=list)
+    # None means every non-system schema. Used by the workload collectors;
+    # the schema analyzer excludes system schemas the same way.
+    schemas: Optional[List[str]] = None
 
 
 @dataclass
@@ -291,6 +313,21 @@ class ConfigManager:
             self._validate_config()
         return self.config
 
+    @staticmethod
+    def _apply_dict(target: Any, data: Optional[Dict[str, Any]]) -> Any:
+        """Copy known keys from a config dict onto a dataclass instance.
+
+        Only fields the dataclass already declares are copied, so an unknown key
+        is ignored rather than silently creating an attribute nothing reads.
+        Keeping this in one place is what stops a new field from being added to
+        the dataclass and then forgotten in the parser -- which is how
+        ``data_size`` ended up parseable but absent from the config template.
+        """
+        for key, value in (data or {}).items():
+            if hasattr(target, key):
+                setattr(target, key, value)
+        return target
+
     def _parse_config_dict(self, config_data: Dict[str, Any]) -> DiscoveryConfig:
         """Parse configuration dictionary into DiscoveryConfig."""
         # Parse database config
@@ -312,6 +349,12 @@ class ConfigManager:
             db_config.excluded_databases = db_data.get(
                 "excluded_databases", db_config.excluded_databases
             )
+            db_config.schemas = db_data.get("schemas", db_config.schemas)
+
+            if "workload" in db_data:
+                db_config.workload = self._apply_dict(
+                    WorkloadConfig(), dict(db_data["workload"] or {})
+                )
 
             # Parse data_size config
             if "data_size" in db_data:
@@ -583,12 +626,71 @@ class ConfigManager:
             target_database=os.getenv("TARGET_DATABASE"),
         )
 
+    # Numeric bounds, as dotted paths into the config dataclasses. Checked
+    # regardless of whether the owning feature is enabled: a bad number in a
+    # disabled block is still a bug, and the user would rather hear about it now
+    # than the first time they turn the feature on.
+    _NUMERIC_RANGES: Dict[str, Tuple[float, float]] = {
+        "database.port": (1, 65535),
+        "database.connection_timeout": (1, 3600),
+        "mysql.port": (1, 65535),
+        "mysql.connection_timeout": (1, 3600),
+        # Never validated before. A typo here means table scans on production.
+        "database.data_size.sample_percent": (1, 100),
+        "database.data_size.max_table_size_gb": (1, 100000),
+        # Workload capture. These bound an unattended multi-day session, so a
+        # bad value is discovered days later unless it is caught here.
+        "database.workload.max_snapshots": (2, 100000),
+        "database.workload.max_session_mb": (1, 1000000),
+        "database.workload.statement_text_max_chars": (256, 1048576),
+    }
+
+    # Values restricted to a fixed set, as dotted paths.
+    _ENUMS: Dict[str, Tuple[str, ...]] = {}
+
+    def _resolve_path(self, path: str) -> Any:
+        """Walk a dotted path into the loaded config. Returns None if absent."""
+        current: Any = self.config
+        for part in path.split("."):
+            current = getattr(current, part, None)
+            if current is None:
+                return None
+        return current
+
+    def _validate_numeric_ranges(self, errors: List[str]) -> None:
+        """Bound-check every entry in _NUMERIC_RANGES, appending to errors."""
+        for path, (low, high) in self._NUMERIC_RANGES.items():
+            value = self._resolve_path(path)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(
+                    f"{path} must be a number, got {type(value).__name__}: {value!r}"
+                )
+                continue
+            if not (low <= value <= high):
+                errors.append(f"{path} must be between {low} and {high}, got {value}")
+
+    def _validate_enums(self, errors: List[str]) -> None:
+        """Check every entry in _ENUMS, appending to errors."""
+        for path, allowed in self._ENUMS.items():
+            value = self._resolve_path(path)
+            if value is None:
+                continue
+            if value not in allowed:
+                errors.append(
+                    f"{path} must be one of {', '.join(allowed)}, got {value!r}"
+                )
+
     def _validate_config(self) -> None:
         """Validate configuration settings."""
         if not self.config:
             raise ValueError("Configuration not loaded")
 
         errors = []
+
+        self._validate_numeric_ranges(errors)
+        self._validate_enums(errors)
 
         # Validate engine
         valid_engines = {"postgres", "mysql"}
@@ -684,6 +786,34 @@ database:
   ssl_mode: prefer  # Options: disable, allow, prefer, require, verify-ca, verify-full
   # excluded_databases:  # Additional databases to skip (rdsadmin is always excluded)
   #   - some_internal_db
+  # schemas:  # Leave unset to analyze every non-system schema
+  #   - public
+
+  # Optional: large column and LOB analysis. Off by default because it reads
+  # sampled rows from your tables, unlike the rest of discovery.
+  # data_size:
+  #   enabled: false
+  #   sample_percent: 10        # 1-100
+  #   max_table_size_gb: 10     # Skip tables larger than this
+  #   target_schemas:
+  #     - public
+  #   target_tables: []         # Empty means every table in target_schemas
+
+  # Optional: query workload capture, for PlanetScale Neki sharding design.
+  # Off by default. Nothing here runs during a normal discovery run -- it is
+  # driven by `ps-discovery workload init | collect | finalize`.
+  #
+  # It captures pg_stat_statements and table/index activity over time and
+  # writes the input files a sharding planner reads. It reads only catalogs and
+  # statistics views, never a user table, never runs ANALYZE, and never resets
+  # any statistics.
+  # See docs/workload_capture.md before enabling this on a production primary.
+  # workload:
+  #   enabled: false
+  #   schemas:                  # Leave unset for every non-system schema
+  #     - public
+  #   max_snapshots: 500        # 168 = one week hourly
+  #   max_session_mb: 512       # Hard stop; the session refuses to grow past it
 """
 
             if "mysql" in engines:

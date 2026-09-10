@@ -438,6 +438,25 @@ providers:
 - Baseline current performance metrics
 - Identify workload patterns
 
+## Query Workload Capture (optional)
+
+Query workload capture needs the `pg_stat_statements` extension. On RDS and
+Aurora the default parameter group already loads the library, so you normally
+only create the extension. Connect as a member of `rds_superuser`:
+
+```sql
+CREATE EXTENSION pg_stat_statements;
+GRANT pg_monitor TO planetscale_discovery;
+```
+
+If a custom parameter group dropped the library, add `pg_stat_statements` to
+`shared_preload_libraries` in that group and **reboot the instance**, because it
+is a static parameter. For Aurora, set it on the cluster parameter group.
+
+`ps-discovery workload init` reports the exact state and prints the remediation,
+so run it before you change anything. See
+[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+
 ## Additional Resources
 
 - [AWS RDS Documentation](https://docs.aws.amazon.com/rds/)

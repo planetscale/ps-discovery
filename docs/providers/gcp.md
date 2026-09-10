@@ -459,6 +459,30 @@ When running against managed PostgreSQL services (Cloud SQL, AlloyDB):
 - **Core Analysis:** Essential data still captured
 - **Error Handling:** Errors logged but don't prevent completion
 
+## Query Workload Capture (optional)
+
+Query workload capture needs the `pg_stat_statements` extension. Cloud SQL and
+AlloyDB differ:
+
+- **Cloud SQL** normally preloads the library, so you only create the extension.
+- **AlloyDB** does not. Set the `shared_preload_libraries` flag on the primary
+  instance to include `pg_stat_statements` and restart it first.
+
+Then, in the database:
+
+```sql
+CREATE EXTENSION pg_stat_statements;
+GRANT pg_monitor TO planetscale_discovery;
+```
+
+Setting flags with `gcloud sql instances patch --database-flags` **replaces the
+whole flag list**. Include every flag the instance already has, or you will
+silently drop one.
+
+`ps-discovery workload init` reports the exact state and prints the remediation,
+so run it before you change anything. See
+[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+
 ## Additional Resources
 
 - [Cloud SQL Documentation](https://cloud.google.com/sql/docs)

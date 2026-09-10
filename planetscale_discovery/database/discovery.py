@@ -134,7 +134,9 @@ class PostgreSQLDiscovery:
             self.logger.error(f"Failed to connect to PostgreSQL: {e}")
             return False
 
-    def run_analysis(self, modules: list = None) -> Dict[str, Any]:
+    def run_analysis(
+        self, modules: list = None, reuse_connection: bool = False
+    ) -> Dict[str, Any]:
         """Run comprehensive PostgreSQL environment analysis."""
         if not self.connection:
             raise RuntimeError("No database connection established")
@@ -154,17 +156,20 @@ class PostgreSQLDiscovery:
 
         self.logger.info(f"Running analysis modules: {modules}")
 
-        # Create a single shared connection for all analyzers
         analyzer_connection = None
         try:
-            analyzer_connection = psycopg2.connect(
-                cursor_factory=RealDictCursor, **self.connection_params
-            )
-            analyzer_connection.autocommit = True
-
-            # Set statement timeout to protect against runaway queries
-            with analyzer_connection.cursor() as cursor:
-                cursor.execute("SET statement_timeout = %s", (self.statement_timeout,))
+            if reuse_connection:
+                analyzer_connection = self.connection
+            else:
+                analyzer_connection = psycopg2.connect(
+                    cursor_factory=RealDictCursor, **self.connection_params
+                )
+                analyzer_connection.autocommit = True
+                with analyzer_connection.cursor() as cursor:
+                    cursor.execute(
+                        "SET statement_timeout = %s", (self.statement_timeout,)
+                    )
+                    cursor.execute("SET search_path = pg_catalog")
 
         except Exception as e:
             self.logger.error(f"Failed to create analyzer connection: {e}")
@@ -242,7 +247,7 @@ class PostgreSQLDiscovery:
                         "high",
                     )
         finally:
-            if analyzer_connection:
+            if analyzer_connection and not reuse_connection:
                 analyzer_connection.close()
 
         return self.results

@@ -1,68 +1,95 @@
-"""
-Replace literal values in SQL statement text.
+"""Replace literal values in SQL statement text with PostgreSQL placeholders.
 
-``pg_stat_activity.query`` is never normalized by PostgreSQL: it holds the exact
-text of the statement currently running, including its literal values. Emitting
-it verbatim puts real customer data in a report, so every statement text passes
-through here first.
-
-``pg_stat_statements`` text is usually normalized by the server, but not
-always -- utility statements are stored verbatim, so a ``CREATE ROLE ...
-PASSWORD 'x'`` appears in plaintext -- so it goes through the same path.
-
-The tokenizing is done by ``sqlparse``, which gets the cases that matter and are
-easy to get wrong: a ``--`` or ``/*`` inside a string literal is not a comment,
-and ``''`` is an escaped quote rather than the end of one.
+``pg_stat_activity.query`` is never normalized by PostgreSQL, so it holds the
+literal values of the running statement. ``pg_stat_statements`` is usually
+normalized but not always: utility statements are stored verbatim. Both go
+through here.
 """
 
+import re
 from typing import Optional
 
 import sqlparse
 from sqlparse import tokens as T
 
-PLACEHOLDER = "?"
+# $N, not ?, because ? is not a PostgreSQL placeholder and does not parse.
+FALLBACK_PLACEHOLDER = "$1"
 
+_EXISTING_PLACEHOLDER = re.compile(r"\$(\d+)")
 
-def _is_data(ttype) -> bool:
-    # Double-quoted text is a PostgreSQL identifier, not data.
-    return ttype is not None and ttype in T.Literal and ttype is not T.String.Symbol
+_DOLLAR_QUOTE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+
+_PREFIXED_PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_$])(?:[EeBbXxNn]|[Uu]&)(\$\d+)")
+
+# Token types whose value is data. A credential is a string literal like any other.
+LITERAL_TOKENS = frozenset(
+    {
+        T.Literal.String.Single,
+        T.Number.Integer,
+        T.Number.Float,
+        T.Number.Hexadecimal,
+    }
+)
+
+# String.Symbol is a quoted *identifier*; redacting it breaks "public"."orders".
+IDENTIFIER_TOKENS = frozenset({T.Literal.String.Symbol})
 
 
 def redact_sql(sql: Optional[str]) -> Optional[str]:
-    """Return the statement's shape, with literal values replaced.
-
-    Returns None for empty input, and the placeholder-only string for text that
-    cannot be tokenized -- never the original, since the point is that the
-    original may carry data.
-    """
+    """Return the statement's shape, literals replaced by $N placeholders."""
     if not sql or not str(sql).strip():
         return None
 
-    text = str(sql)
+    text = _empty_dollar_quotes(str(sql))
     try:
         statements = sqlparse.parse(sqlparse.format(text, strip_comments=True))
-        pieces = [
-            PLACEHOLDER if _is_data(token.ttype) else token.value
-            for statement in statements
-            for token in statement.flatten()
-        ]
+        # Continue after the highest placeholder the server already assigned.
+        next_number = _highest_placeholder(text) + 1
+        pieces = []
+        for statement in statements:
+            for token in statement.flatten():
+                if token.ttype in LITERAL_TOKENS:
+                    pieces.append(f"${next_number}")
+                    next_number += 1
+                else:
+                    pieces.append(token.value)
     except Exception:
-        # Fail closed. Returning the input on a parse failure would defeat the
-        # whole purpose of this function.
-        return PLACEHOLDER
+        # Fail closed: returning the input would defeat the point.
+        return FALLBACK_PLACEHOLDER
 
-    return " ".join("".join(pieces).split()) or PLACEHOLDER
+    redacted = _PREFIXED_PLACEHOLDER.sub(r"\1", "".join(pieces))
+    return " ".join(redacted.split()) or FALLBACK_PLACEHOLDER
+
+
+def _empty_dollar_quotes(text: str) -> str:
+    """Keep every dollar-quote delimiter, drop what is between them."""
+    out = []
+    position = 0
+    while True:
+        opening = _DOLLAR_QUOTE.search(text, position)
+        if not opening:
+            out.append(text[position:])
+            return "".join(out)
+        delimiter = opening.group(0)
+        body_starts = opening.end()
+        closing = text.find(delimiter, body_starts)
+        out.append(text[position:body_starts])
+        if closing < 0:
+            return "".join(out)
+        out.append(delimiter)
+        position = closing + len(delimiter)
 
 
 def statement_kind(sql: Optional[str]) -> Optional[str]:
-    """The leading keyword, e.g. ``SELECT`` or ``UPDATE``.
-
-    Useful on its own: "a long-running UPDATE" is most of what a reader needs
-    from a lock report, and it carries no data at all.
-    """
+    """The leading keyword, e.g. SELECT or UPDATE."""
     if not sql:
         return None
-    kind = sqlparse.parse(str(sql))
-    if not kind:
+    parsed = sqlparse.parse(str(sql))
+    if not parsed:
         return None
-    return (kind[0].get_type() or "UNKNOWN").upper()
+    return (parsed[0].get_type() or "UNKNOWN").upper()
+
+
+def _highest_placeholder(text: str) -> int:
+    numbers = [int(m) for m in _EXISTING_PLACEHOLDER.findall(text)]
+    return max(numbers) if numbers else 0
