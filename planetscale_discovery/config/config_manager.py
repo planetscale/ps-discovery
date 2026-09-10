@@ -43,6 +43,7 @@ class WorkloadConfig:
     max_snapshots: int = 500
     max_session_mb: int = 512
     statement_text_max_chars: int = 8192
+    statement_row_limit: int = 20000
 
 
 @dataclass
@@ -643,6 +644,7 @@ class ConfigManager:
         "database.workload.max_snapshots": (2, 100000),
         "database.workload.max_session_mb": (1, 1000000),
         "database.workload.statement_text_max_chars": (256, 1048576),
+        "database.workload.statement_row_limit": (1, 1000000),
     }
 
     # Values restricted to a fixed set, as dotted paths.

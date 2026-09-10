@@ -71,7 +71,7 @@ def write_bundle(
 
     statements = list((merged.get("statements") or {}).values())
     covered = merged.get("covered_seconds")
-    known = known_table_names(schema_analysis)
+    known = known_table_names(schema_analysis, target_schemas=target_schemas)
     plannable, excluded = _split_by_plannability(statements, known)
 
     identity = capture_id(merged)
@@ -348,7 +348,10 @@ def render_table_activity(merged: Dict[str, Any], identity: str) -> Dict[str, An
     }
 
 
-def known_table_names(schema_analysis: Dict[str, Any]) -> Set[str]:
+def known_table_names(
+    schema_analysis: Dict[str, Any],
+    target_schemas: Optional[Sequence[str]] = None,
+) -> Set[str]:
     """Lowercased relation names from the captured schema, bare and qualified.
 
     Views count. The schema analyzer keeps them in their own section, because
@@ -356,7 +359,11 @@ def known_table_names(schema_analysis: Dict[str, Any]) -> Set[str]:
     reads through a view names only the view, so leaving views out drops that
     traffic from the query log. An extension's own views are not the
     application's, and ``application_views`` is what draws that line.
+
+    target_schemas must match what render_schema_sql() was given, or a query
+    against a table left out of schema.sql can still count as known here.
     """
+    wanted = set(target_schemas) if target_schemas else None
     names: Set[str] = set()
     sections = (
         (schema_analysis.get("table_analysis") or [], "table_name"),
@@ -364,6 +371,8 @@ def known_table_names(schema_analysis: Dict[str, Any]) -> Set[str]:
     )
     for relations, name_field in sections:
         for relation in relations:
+            if wanted and relation.get("schema_name") not in wanted:
+                continue
             schema = (relation.get("schema_name") or "").lower()
             name = (relation.get(name_field) or "").lower()
             if name:

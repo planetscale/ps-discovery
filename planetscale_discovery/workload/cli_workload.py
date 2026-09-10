@@ -294,6 +294,7 @@ def _new_collector(connection, config, logger) -> WorkloadCollector:
         connection,
         logger=logger,
         schemas=workload.schemas or getattr(config.database, "schemas", None),
+        row_limit=workload.statement_row_limit,
         statement_text_max_chars=workload.statement_text_max_chars,
     )
 
@@ -450,7 +451,7 @@ def _finalize(args, config, logger) -> int:
         merged,
         store.read_schema(),
         collector_version=__version__,
-        target_schemas=workload.schemas,
+        target_schemas=workload.schemas or getattr(config.database, "schemas", None),
     )
     _print_summary(manifest, out_dir)
     return EXIT_OK
