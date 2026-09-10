@@ -12,8 +12,11 @@ import argparse
 
 import pytest
 
+from planetscale_discovery.config.config_manager import WorkloadConfig
 from planetscale_discovery.workload.cli_workload import (
     EXIT_USAGE,
+    _finalize,
+    _new_collector,
     add_workload_parser,
     handle_workload,
 )
@@ -119,3 +122,67 @@ class TestMysqlIsRefused:
 
         logger = mocker.Mock()
         assert handle_workload(Args(), self._Config("mysql"), logger) != EXIT_USAGE
+
+
+class _FinalizeDatabase:
+    workload = WorkloadConfig(schemas=None)
+    schemas = ["public"]
+
+
+class _FinalizeConfig:
+    database = _FinalizeDatabase()
+    engine = "postgres"
+
+
+class TestFinalizeSchemaScoping:
+    """target_schemas must match what the collector scoped snapshots to."""
+
+    class _Args:
+        session = "./wl"
+        allow_partial = False
+        out = None
+
+    def _mock_store(self, mocker):
+        store = mocker.Mock()
+        store.exists.return_value = True
+        store.read_snapshots.return_value = [{"status": "ok"}]
+        store.read_schema.return_value = {}
+        store.directory = mocker.Mock()
+        store.directory.__truediv__ = mocker.Mock(return_value="out")
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload.WorkloadStore",
+            return_value=store,
+        )
+
+    def test_database_schemas_is_the_fallback(self, mocker):
+        """workload.schemas unset, database.schemas set: finalize must use it."""
+        self._mock_store(mocker)
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload.merge_snapshots",
+            return_value={"usable": True},
+        )
+        write_bundle = mocker.patch(
+            "planetscale_discovery.workload.cli_workload.write_bundle",
+            return_value={},
+        )
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload.bundle_dir_name",
+            return_value="bundle",
+        )
+        mocker.patch("planetscale_discovery.workload.cli_workload._print_summary")
+        _finalize(self._Args(), _FinalizeConfig(), mocker.Mock())
+        assert write_bundle.call_args.kwargs["target_schemas"] == ["public"]
+
+
+class _RowLimitDatabase:
+    workload = WorkloadConfig(statement_row_limit=5000)
+
+
+class _RowLimitConfig:
+    database = _RowLimitDatabase()
+
+
+class TestNewCollectorRowLimit:
+    def test_statement_row_limit_reaches_the_collector(self, mocker):
+        collector = _new_collector(mocker.Mock(), _RowLimitConfig(), mocker.Mock())
+        assert collector.row_limit == 5000

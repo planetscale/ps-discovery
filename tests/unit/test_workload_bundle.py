@@ -420,6 +420,27 @@ class TestForeignStatementFilter:
             "SELECT $1 FROM ORDERS", known_table_names(SCHEMA)
         )
 
+    def test_target_schemas_excludes_other_schemas(self, tmp_path):
+        """A table outside target_schemas must not count as known.
+
+        Otherwise a query naming it can pass into workload.sql while the same
+        table is missing from the target_schemas-scoped schema.sql.
+        """
+        from planetscale_discovery.workload.bundle import known_table_names
+
+        schema = {
+            "table_analysis": [
+                {"schema_name": "public", "table_name": "orders", "table_type": "r"},
+                {"schema_name": "billing", "table_name": "invoices", "table_type": "r"},
+            ],
+            "index_analysis": [],
+            "constraint_analysis": [],
+        }
+        known = known_table_names(schema, target_schemas=["public"])
+        assert "orders" in known
+        assert "invoices" not in known
+        assert "billing.invoices" not in known
+
 
 class TestTheFinalizeSummaryPrints:
     """The printed summary reads the returned dict, so a removed key breaks it.
