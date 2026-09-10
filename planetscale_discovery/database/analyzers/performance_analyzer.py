@@ -150,9 +150,14 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                 # deliberate: DatabaseDiscovery._categorize_error matches on it to
                 # file a low-severity "missing_extension" analysis gap with a
                 # human explanation, so this is the graceful path, not a failure.
+                # The schema is read with the version. CREATE EXTENSION installs
+                # into public by default, and a role whose search_path is
+                # pg_catalog cannot resolve the view by a bare name, so the
+                # queries below name the schema the catalog reports.
                 cursor.execute(
-                    "SELECT extversion FROM pg_extension"
-                    " WHERE extname = 'pg_stat_statements'"
+                    "SELECT e.extversion, n.nspname FROM pg_extension e"
+                    " JOIN pg_namespace n ON n.oid = e.extnamespace"
+                    " WHERE e.extname = 'pg_stat_statements'"
                 )
                 extension_row = cursor.fetchone()
                 if not extension_row:
@@ -161,14 +166,18 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                         "error": "pg_stat_statements extension not available",
                     }
 
-                extversion = (
-                    extension_row.get("extversion")
-                    if isinstance(extension_row, dict)
-                    else extension_row[0]
+                if isinstance(extension_row, dict):
+                    extversion = extension_row.get("extversion")
+                    schema = extension_row.get("nspname")
+                else:
+                    extversion, schema = extension_row[0], extension_row[1]
+
+                pgss = '"{}"."pg_stat_statements"'.format(
+                    str(schema).replace('"', '""')
                 )
 
                 # Top queries by total time
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         queryid,
                         query,
@@ -180,14 +189,14 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                         stddev_exec_time,
                         rows,
                         100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0) AS hit_percent
-                    FROM pg_stat_statements
+                    FROM {pgss}
                     ORDER BY total_exec_time DESC
                     LIMIT 20
                 """)
                 top_queries_by_time = [dict(row) for row in cursor.fetchall()]
 
                 # Top queries by calls
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         queryid,
                         query,
@@ -196,14 +205,14 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                         mean_exec_time,
                         rows,
                         100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0) AS hit_percent
-                    FROM pg_stat_statements
+                    FROM {pgss}
                     ORDER BY calls DESC
                     LIMIT 20
                 """)
                 top_queries_by_calls = [dict(row) for row in cursor.fetchall()]
 
                 # Slowest queries by mean time
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         queryid,
                         query,
@@ -213,7 +222,7 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                         min_exec_time,
                         max_exec_time,
                         stddev_exec_time
-                    FROM pg_stat_statements
+                    FROM {pgss}
                     WHERE calls > 5  -- Only consider queries called more than 5 times
                     ORDER BY mean_exec_time DESC
                     LIMIT 20
@@ -221,7 +230,7 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                 slowest_queries = [dict(row) for row in cursor.fetchall()]
 
                 # Queries with highest I/O
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         queryid,
                         query,
@@ -233,7 +242,7 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                         temp_blks_read,
                         temp_blks_written,
                         100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0) AS hit_percent
-                    FROM pg_stat_statements
+                    FROM {pgss}
                     WHERE shared_blks_read + shared_blks_written > 0
                     ORDER BY (shared_blks_read + shared_blks_written) DESC
                     LIMIT 20

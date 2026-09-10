@@ -31,6 +31,13 @@ ENV/
 discovery_output/
 discovery_output_*/
 
+# Workload capture
+workload_session*/
+wl/
+*.workload_bundle/
+workload_bundle_*/
+*LITERALS_UNSAFE*
+
 # Configuration files with credentials (exclude from repo)
 *-config.yaml
 *-config.yml

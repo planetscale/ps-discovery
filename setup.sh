@@ -315,6 +315,15 @@ if ! $PIP_CMD install $PIP_FLAGS "${DEPS[@]}" 2>&1; then
     cleanup_on_error
 fi
 
+if [ "$engine_choice" != "mysql" ]; then
+    echo "📥 Installing the workload SQL parser (optional)..."
+    if ! $PIP_CMD install $PIP_FLAGS "pglast>=7,<9" 2>/dev/null; then
+        echo "⚠️  pglast did not install; no wheel for this platform or Python."
+        echo "   Everything else works. 'workload finalize' still writes the"
+        echo "   bundle, but cannot verify that schema.sql parses."
+    fi
+fi
+
 # Create main module entry point
 if [ ! -f "planetscale_discovery/__main__.py" ]; then
     if ! cat > planetscale_discovery/__main__.py << 'EOF'

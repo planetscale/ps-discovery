@@ -73,6 +73,13 @@ may be used with no subcommand: `ps-discovery --config config.yaml`.
     add_database_args(both_parser)
     add_cloud_args(both_parser)
 
+    # Workload capture subcommand (opt-in; for Neki sharding design).
+    # Registered from its own module, which is handed the two arg-group helpers
+    # rather than importing them, to avoid a circular import.
+    from planetscale_discovery.workload.cli_workload import add_workload_parser
+
+    add_workload_parser(subparsers)
+
     # Configuration template subcommand
     config_parser = subparsers.add_parser(
         "config-template", help="Generate configuration template"
@@ -989,6 +996,14 @@ def main() -> None:
         logger = setup_logging(config.log_level, config.log_file)
         if autodiscovered_path:
             logger.info(f"Loaded configuration from ./{autodiscovered_path}")
+
+        # Workload capture is not a discovery module: it manages its own session
+        # state and writes its own bundle, so it is dispatched before module
+        # resolution and returns its own exit code for a cron wrapper to read.
+        if args.command == "workload":
+            from planetscale_discovery.workload.cli_workload import handle_workload
+
+            sys.exit(handle_workload(args, config, logger))
 
         # Combined results
         combined_results = {

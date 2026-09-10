@@ -427,6 +427,26 @@ ls ./discovery_output/
 cat ./discovery_output/ps_discovery_*.md
 ```
 
+## Query Workload Capture (optional)
+
+Query workload capture needs the `pg_stat_statements` extension. Heroku preloads
+the library and does not let you change `shared_preload_libraries`, so you only
+create the extension:
+
+```sql
+CREATE EXTENSION pg_stat_statements;
+```
+
+`heroku pg:outliers` reads the same view. If that command returns rows, the
+extension is working.
+
+The capture role needs `pg_monitor`. Heroku credentials are not superuser, so if
+the grant is refused, run capture with the database's default credential and let
+`init` report what it can reach.
+
+`ps-discovery workload init` reports the exact state before you capture. See
+[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+
 ## Additional Resources
 
 - [Heroku Platform API Reference](https://devcenter.heroku.com/articles/platform-api-reference)

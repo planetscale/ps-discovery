@@ -104,6 +104,34 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 pip install psycopg2-binary
 ```
 
+### Workload Capture
+
+`ps-discovery workload init` reports the state of the server and prints the
+remediation for what it finds. Run it first; it is read-only. See
+[Workload Capture](workload_capture.md#before-you-start) for the full setup.
+
+The cases that are easy to get wrong:
+
+- **`pg_stat_statements` exists but stays empty.** The library is not in
+  `shared_preload_libraries`. `CREATE EXTENSION` alone is not enough, and the
+  setting needs a server restart. This one wastes a whole capture window, so
+  `init` reports it as its own case.
+- **Statement text reads `<insufficient privilege>`.** The role is missing
+  `pg_monitor`, so PostgreSQL hides other roles' statements. The result would
+  describe only the capture role's own statements, so capture refuses.
+- **`CREATE EXTENSION pg_stat_statements` is denied.** The extension is not
+  *trusted*, so it needs a superuser. On a managed service, use the provider's
+  control plane, or capture the relation tier without it.
+- **`collect` exits 2.** There is no session at that path. `init` creates the
+  session; `collect` never does, because a session with no baseline silently
+  captures nothing.
+- **Snapshot count stops rising.** The cron entry is the usual cause. cron
+  starts in the home directory, so a relative `--session` path or a relative
+  config path will not resolve. The line `init` prints includes the required
+  `cd`. Run the command by hand to see the error.
+- **Exit 5.** The server cannot support collection at all. Read the printed
+  remediation, which names the exact state found.
+
 ## Managed Database Environments
 
 When running against managed PostgreSQL services (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, etc.):

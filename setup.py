@@ -13,7 +13,7 @@ README = (pathlib.Path(__file__).parent / "README.md").read_text()
 
 setup(
     name="planetscale-discovery-tools",
-    version="1.3.1",
+    version="1.4.0",
     description="Comprehensive database and cloud infrastructure discovery tools",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -62,8 +62,12 @@ setup(
         "planetscale": [
             "requests>=2.32.5",
         ],
+        "workload": [
+            "pglast>=7,<9",
+        ],
         "all": [
             "PyMySQL>=1.1.0",
+            "pglast>=7,<9",
             "boto3>=1.42.52",
             "botocore>=1.42.52",
             "google-cloud-resource-manager>=1.16.0",
