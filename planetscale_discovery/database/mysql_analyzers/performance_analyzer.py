@@ -12,17 +12,35 @@ from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
 class MySQLPerformanceAnalyzer(DatabaseAnalyzer):
     """Analyzes MySQL performance via SHOW GLOBAL STATUS and SHOW PROCESSLIST."""
 
+    # SHOW GLOBAL STATUS and SHOW PROCESSLIST are separate round trips, so a
+    # busy server can legitimately gain or lose a few connections in between.
+    # Only a gap wider than this indicates the processlist itself is filtered.
+    PROCESSLIST_CHURN_TOLERANCE = 5
+
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config or {}, logger)
         self.sleep_interval = (config or {}).get("status_sleep_interval", 1)
 
     def analyze(self) -> Dict[str, Any]:
+        # The status snapshot is reused to sanity-check the processlist below,
+        # so it must be collected first. No extra round trip is needed.
+        status_counters = self._get_status_counters()
         results = {
-            "status_counters": self._get_status_counters(),
-            "processlist_summary": self._get_processlist_summary(),
+            "status_counters": status_counters,
+            "processlist_summary": self._get_processlist_summary(status_counters),
             "lock_analysis": self._get_lock_analysis(),
         }
         return results
+
+    @staticmethod
+    def _threads_connected(status_counters: Any) -> Any:
+        """Pull Threads_connected out of an already-collected status snapshot."""
+        if not isinstance(status_counters, dict):
+            return None
+        entry = (status_counters.get("counters") or {}).get("Threads_connected")
+        if isinstance(entry, dict):
+            return entry.get("current")
+        return None
 
     def _collect_status(self) -> Dict[str, str]:
         try:
@@ -85,7 +103,7 @@ class MySQLPerformanceAnalyzer(DatabaseAnalyzer):
             self.add_error(f"Failed to get status counters: {e}", e)
             return {"error": str(e)}
 
-    def _get_processlist_summary(self) -> Dict[str, Any]:
+    def _get_processlist_summary(self, status_counters: Any = None) -> Dict[str, Any]:
         """Collect SHOW FULL PROCESSLIST and summarize by command/user/host/db/state."""
         try:
             cursor = self.connection.cursor()
@@ -125,7 +143,7 @@ class MySQLPerformanceAnalyzer(DatabaseAnalyzer):
                 state = str(state) if state else "(no state)"
                 by_state[state] = by_state.get(state, 0) + 1
 
-            return {
+            summary = {
                 "total_processes": len(processes),
                 "by_command": dict(sorted(by_command.items(), key=lambda x: -x[1])),
                 "by_user": dict(sorted(by_user.items(), key=lambda x: -x[1])),
@@ -133,6 +151,30 @@ class MySQLPerformanceAnalyzer(DatabaseAnalyzer):
                 "by_db": dict(sorted(by_db.items(), key=lambda x: -x[1])),
                 "by_state": dict(sorted(by_state.items(), key=lambda x: -x[1])),
             }
+
+            # Without PROCESS, SHOW PROCESSLIST returns only the current user's
+            # own threads and raises no error, so these counts silently describe
+            # one account instead of the server. Threads_connected comes from
+            # SHOW GLOBAL STATUS, which needs no privilege, and gives us a
+            # server-wide number to check them against.
+            threads_connected = self._threads_connected(status_counters)
+            if threads_connected is not None:
+                summary["threads_connected"] = threads_connected
+                if (
+                    threads_connected
+                    > len(processes) + self.PROCESSLIST_CHURN_TOLERANCE
+                ):
+                    summary["processlist_truncated"] = True
+                    self.add_warning(
+                        f"Processlist shows {len(processes)} of "
+                        f"{threads_connected} connected threads; the summary "
+                        "covers only the current user's own connections. "
+                        "Grant PROCESS for a server-wide view."
+                    )
+                else:
+                    summary["processlist_truncated"] = False
+
+            return summary
         except Exception as e:
             self.add_error(f"Failed to get processlist summary: {e}", e)
             return {"error": str(e)}

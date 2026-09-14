@@ -111,3 +111,96 @@ class TestMySQLPerformanceAnalyzer:
         result = analyzer._get_lock_analysis()
 
         assert result["counters"] == {}
+
+
+class TestProcesslistTruncationDetection:
+    """Without PROCESS, the processlist silently covers one account only."""
+
+    @pytest.fixture
+    def mock_connection(self):
+        connection = MagicMock()
+        cursor = MagicMock()
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    @pytest.fixture
+    def analyzer(self, mock_connection):
+        connection, _ = mock_connection
+        return MySQLPerformanceAnalyzer(connection)
+
+    @staticmethod
+    def _status(threads_connected):
+        return {"counters": {"Threads_connected": {"current": threads_connected}}}
+
+    def _processlist(self, cursor, rows):
+        cursor.description = [
+            ("Id",),
+            ("User",),
+            ("Host",),
+            ("db",),
+            ("Command",),
+            ("State",),
+        ]
+        cursor.fetchall.return_value = rows
+
+    def test_truncated_processlist_warns(self, analyzer, mock_connection):
+        """The real prod case: 2 visible rows against 253 connected threads."""
+        _, cursor = mock_connection
+        self._processlist(
+            cursor,
+            [
+                (1, "app", "10.0.0.1", "prod", "Query", "init"),
+                (2, "app", "10.0.0.2", "prod", "Sleep", ""),
+            ],
+        )
+
+        summary = analyzer._get_processlist_summary(self._status(253))
+
+        assert summary["total_processes"] == 2
+        assert summary["threads_connected"] == 253
+        assert summary["processlist_truncated"] is True
+        assert len(analyzer.warnings) == 1
+        assert "PROCESS" in analyzer.warnings[0]["message"]
+
+    def test_full_processlist_does_not_warn(self, analyzer, mock_connection):
+        """With PROCESS the visible rows match (or exceed) Threads_connected."""
+        _, cursor = mock_connection
+        rows = [(i, "app", "10.0.0.1", "prod", "Sleep", "") for i in range(12)]
+        self._processlist(cursor, rows)
+
+        summary = analyzer._get_processlist_summary(self._status(10))
+
+        assert summary["processlist_truncated"] is False
+        assert len(analyzer.warnings) == 0
+
+    def test_small_churn_does_not_warn(self, analyzer, mock_connection):
+        """Connections opening between the two reads must not trip the check."""
+        _, cursor = mock_connection
+        rows = [(i, "app", "10.0.0.1", "prod", "Sleep", "") for i in range(20)]
+        self._processlist(cursor, rows)
+
+        summary = analyzer._get_processlist_summary(self._status(23))
+
+        assert summary["processlist_truncated"] is False
+        assert len(analyzer.warnings) == 0
+
+    def test_missing_status_skips_check(self, analyzer, mock_connection):
+        """No status snapshot means no claim either way."""
+        _, cursor = mock_connection
+        self._processlist(cursor, [(1, "app", "10.0.0.1", "prod", "Sleep", "")])
+
+        summary = analyzer._get_processlist_summary({"error": "failed"})
+
+        assert "processlist_truncated" not in summary
+        assert "threads_connected" not in summary
+        assert len(analyzer.warnings) == 0
+
+    def test_called_without_status_still_works(self, analyzer, mock_connection):
+        """The parameter is optional; existing callers must keep working."""
+        _, cursor = mock_connection
+        self._processlist(cursor, [(1, "app", "10.0.0.1", "prod", "Sleep", "")])
+
+        summary = analyzer._get_processlist_summary()
+
+        assert summary["total_processes"] == 1
+        assert "processlist_truncated" not in summary
