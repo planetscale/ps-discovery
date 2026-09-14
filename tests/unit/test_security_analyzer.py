@@ -775,3 +775,78 @@ class TestSecurityAnalyzer:
             # so an unhandled exception in a patched method will propagate.
             with pytest.raises(Exception, match="unexpected"):
                 analyzer.analyze()
+
+
+class TestRoleMembershipVersionCompatibility:
+    """pg_auth_members.inherit_option only exists on PostgreSQL 16+."""
+
+    @pytest.fixture
+    def mock_connection(self):
+        connection = MagicMock()
+        cursor_mock = MagicMock()
+        connection.cursor.return_value.__enter__ = MagicMock(return_value=cursor_mock)
+        connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        return connection, cursor_mock
+
+    @pytest.fixture
+    def analyzer(self, mock_connection):
+        connection, _ = mock_connection
+        return SecurityAnalyzer(connection)
+
+    @staticmethod
+    def _executed_sql(cursor_mock):
+        return " ".join(str(c.args[0]) for c in cursor_mock.execute.call_args_list)
+
+    def test_pg15_selects_null_placeholder(self, analyzer, mock_connection):
+        """On PostgreSQL 15 the column must not be referenced at all."""
+        _, cursor_mock = mock_connection
+        cursor_mock.fetchall.side_effect = [ROLES_RESPONSE, []]
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=150000):
+            result = analyzer._get_user_role_analysis()
+
+        sql = self._executed_sql(cursor_mock)
+        assert "NULL as inherit_option" in sql
+        assert "pgr.inherit_option" not in sql
+        # The role data must survive, not be discarded.
+        assert "error" not in result
+        assert result["summary"]["total_roles"] == len(ROLES_RESPONSE)
+
+    def test_pg16_selects_real_column(self, analyzer, mock_connection):
+        """On PostgreSQL 16+ the real column is still read."""
+        _, cursor_mock = mock_connection
+        cursor_mock.fetchall.side_effect = [ROLES_RESPONSE, ROLE_MEMBERSHIPS_RESPONSE]
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=160000):
+            result = analyzer._get_user_role_analysis()
+
+        assert "pgr.inherit_option" in self._executed_sql(cursor_mock)
+        assert len(result["role_memberships"]) == len(ROLE_MEMBERSHIPS_RESPONSE)
+
+    def test_unknown_version_falls_back_to_placeholder(self, analyzer, mock_connection):
+        """An unreadable server version must not break the query."""
+        _, cursor_mock = mock_connection
+        cursor_mock.fetchall.side_effect = [ROLES_RESPONSE, []]
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=0):
+            result = analyzer._get_user_role_analysis()
+
+        assert "NULL as inherit_option" in self._executed_sql(cursor_mock)
+        assert "error" not in result
+
+    def test_membership_failure_keeps_role_data(self, analyzer, mock_connection):
+        """A failed membership read must not discard roles already collected."""
+        _, cursor_mock = mock_connection
+        cursor_mock.fetchall.side_effect = [
+            ROLES_RESPONSE,
+            Exception("permission denied for table pg_auth_members"),
+        ]
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=160000):
+            result = analyzer._get_user_role_analysis()
+
+        assert "error" not in result
+        assert result["summary"]["total_roles"] == len(ROLES_RESPONSE)
+        assert result["role_memberships"] == []
+        assert len(analyzer.warnings) == 1
+        assert "Role memberships unavailable" in analyzer.warnings[0]["message"]
