@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **PlanetScale cloud discovery provider.** Records the current PlanetScale Postgres estate: organizations, databases, branches, the cluster size and SKU each branch runs, and branch storage usage against capacity. Postgres databases only; databases of other engines are skipped. Authenticates with a read-only service token, from the config file or the `PLANETSCALE_SERVICE_TOKEN_ID` and `PLANETSCALE_SERVICE_TOKEN` environment variables ([guide](docs/providers/planetscale.md)).
 - **Query workload capture.** A new opt-in `ps-discovery workload` subcommand records a PostgreSQL query workload over a few days from cron and writes a bundle for the PlanetScale migration team to plan a sharding scheme from. See [Workload Capture](docs/workload_capture.md) and [Workload Bundle Format](docs/workload-bundle.md).
+- **Query log capture, for transaction shapes and per-value skew.** `pg_stat_statements` records statements rather than transactions and normalizes every literal, so it cannot say which tables one transaction writes together, or how unevenly a candidate shard key's values are accessed. Both answers are in the server's own query log, and `collect` can now read it. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
+- **PlanetScale cloud discovery provider.** Records the current PlanetScale Postgres estate: organizations, databases, branches, the cluster size and SKU each branch runs, and branch storage usage against capacity. Postgres databases only at this time.
+
 
 ## [1.3.1] - 2026-08-24
 

@@ -447,6 +447,18 @@ the grant is refused, run capture with the database's default credential and let
 `ps-discovery workload init` reports the exact state before you capture. See
 [Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
 
+### Capturing transaction shapes with pgAudit
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and which platforms can supply it.
+
+Not available on Heroku Postgres: pgAudit needs `shared_preload_libraries`,
+Heroku does not let you change it, and its fixed extension allowlist excludes
+pgAudit.
+
 ## Additional Resources
 
 - [Heroku Platform API Reference](https://devcenter.heroku.com/articles/platform-api-reference)

@@ -290,6 +290,27 @@ size SKUs, one page set for the database list, and one page set of branches per
 database. A large organization produces many calls. Set `organization` or
 `target_database` to narrow the run.
 
+## Capturing transaction shapes
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and which platforms can supply it.
+
+Not available on PlanetScale Postgres today. `pg_stat_statements` is enabled
+and readable, so the aggregate capture works in full, but three things the log
+path needs are absent: `log_min_duration_statement` is `-1`, so statements
+reach no log; `log_line_prefix` carries neither `%c` nor `%v`, so logged
+statements could not be grouped into transactions; and `log_fdw` is not
+installed, so no log is readable over the connection. pgAudit is available but
+not installed. None of these is a setting a customer can change.
+
+Run `ps-discovery workload init --check` to see the current state. Until it
+changes, name the write paths that matter to your migration engineer, as
+[What the capture cannot see](../workload_capture.md#what-the-capture-cannot-see)
+describes.
+
 ## Troubleshooting
 
 ### "No PlanetScale service token provided" Error

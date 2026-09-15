@@ -3,11 +3,13 @@
 import re
 
 from planetscale_discovery.workload.collect import (
+    COLUMN_SQL,
     COUNTER_COLUMNS,
     EXCLUDED_SCHEMAS,
     INDEX_SQL,
     TABLE_SQL,
     WorkloadCollector,
+    _decode_ndv,
     build_statement_query,
 )
 
@@ -188,3 +190,62 @@ class TestTableRows:
             {"schemaname": "public", "relname": "t", "reltuples": 1, "idx_scan": None}
         )
         assert row["counters"]["idx_scan"] is None
+
+
+class TestInheritedRowsAreFiltered:
+    """pg_stats emits a second, tree-wide row per column for an inheritance
+    parent; both of the consumer's collectors filter it with NOT inherited."""
+
+    def test_the_column_query_filters_inherited_rows(self):
+        assert "AND NOT s.inherited" in COLUMN_SQL
+
+
+class TestDecodeNdv:
+    """PostgreSQL's sign convention, decoded where n_distinct meets a row count."""
+
+    def test_positive_is_an_absolute_count(self):
+        assert _decode_ndv(50, 1000) == 50.0
+
+    def test_negative_is_a_fraction_of_the_rows(self):
+        assert _decode_ndv(-0.5, 1000) == 500.0
+
+    def test_unique_column_decodes_to_the_row_count(self):
+        assert _decode_ndv(-1, 4242) == 4242.0
+
+    def test_ndv_is_floored_at_one(self):
+        assert _decode_ndv(-0.0001, 1000) == 1.0
+
+    def test_zero_means_unknown(self):
+        assert _decode_ndv(0, 1000) is None
+
+    def test_a_fraction_against_zero_rows_is_dropped(self):
+        """Flooring a fraction against zero rows would flip an equality's
+        selectivity from ~0 to ~1, so the column decodes to absent."""
+        assert _decode_ndv(-0.5, 0) is None
+
+
+class TestColumnRows:
+    def _collector(self):
+        from unittest.mock import MagicMock
+
+        return WorkloadCollector(MagicMock())
+
+    def test_the_decoded_ndv_and_freshness_ride_along(self):
+        row = self._collector()._column_row(
+            {
+                "schemaname": "public",
+                "tablename": "users",
+                "attname": "email",
+                "n_distinct": -0.9,
+                "null_frac": 0.25,
+                "row_count": 4000,
+                "in_index_or_constraint": True,
+                "last_analyze": "2026-09-10 01:00:00+00",
+                "last_autoanalyze": None,
+            }
+        )
+        assert row["ndv"] == 3600.0
+        assert row["n_distinct"] == -0.9
+        assert row["in_index_or_constraint"] is True
+        assert row["last_analyze"] == "2026-09-10 01:00:00+00"
+        assert row["last_autoanalyze"] is None

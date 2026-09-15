@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
+from planetscale_discovery.workload import bundle_burst
+from planetscale_discovery.workload.codes import label
 from planetscale_discovery.workload.collect import MCF_KEPT
 from planetscale_discovery.workload.schema_sql import (
     application_views,
@@ -38,7 +40,9 @@ TABLE_ACTIVITY_SCHEMA_VERSION = 2
 # What the query log is for: statements that route to data.
 PLANNABLE_KINDS = frozenset({"SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"})
 
-# The cardinality format, matching the consumer exactly.
+# The cardinality format. Version 1 nests each table's row count with the
+# column statistics collected for it.
+CARDINALITY_FILE_VERSION = 1
 CARDINALITY_EXCLUDED_SCHEMAS = frozenset(
     {"pg_catalog", "information_schema", "pg_toast", "__neki"}
 )
@@ -52,6 +56,7 @@ def write_bundle(
     schema_analysis: Dict[str, Any],
     collector_version: str,
     target_schemas: Optional[Sequence[str]] = None,
+    bursts: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Write the bundle and return a summary of what it holds.
 
@@ -88,7 +93,13 @@ def write_bundle(
     )
     _write_text(out_dir / "schema.sql", f"-- neki:capture {identity}\n{schema_sql}")
 
-    cardinality = write_cardinality(out_dir, schema_analysis, target_schemas)
+    cardinality = write_cardinality(
+        out_dir,
+        schema_analysis,
+        target_schemas,
+        columns=merged.get("columns"),
+        tables=merged.get("tables"),
+    )
     _write_json(out_dir / "manifest.json", render_manifest(merged, collector_version))
     columns = render_column_stats(merged, identity)
     _write_json(out_dir / "column_stats.json", columns)
@@ -96,8 +107,13 @@ def write_bundle(
         out_dir / "table_activity.json", render_table_activity(merged, identity)
     )
 
+    burst_summary, outside_window, unreadable_bursts = bundle_burst.write_bursts(
+        out_dir, bursts or [], merged, known
+    )
+
     summary = {
         "capture_id": identity,
+        "burst": burst_summary,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "discovery_version": collector_version,
         "basis": merged.get("basis"),
@@ -131,7 +147,15 @@ def write_bundle(
         },
         "cardinality": cardinality,
         "resets_observed": merged.get("resets_observed"),
-        "caveats": _caveats(merged, excluded, parse, cardinality),
+        "caveats": _caveats(
+            merged,
+            excluded,
+            parse,
+            cardinality,
+            burst_summary,
+            outside_window,
+            unreadable_bursts,
+        ),
     }
     _write_text(out_dir / "README.md", _render_readme(summary, out_dir))
     return summary
@@ -452,9 +476,12 @@ def render_workload_sql(
 def render_cardinality(
     schema_analysis: Dict[str, Any],
     target_schemas: Optional[Sequence[str]] = None,
-) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Any]]:
-    """Build the cardinality mapping: schema -> table -> row count."""
-    stats: Dict[str, Dict[str, float]] = {}
+    columns: Optional[Sequence[Dict[str, Any]]] = None,
+    tables: Optional[Any] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Build the cardinality document: version field, rowCount per table,
+    column statistics where collected; analyze timestamps surface only in meta."""
+    stats: Dict[str, Dict[str, Any]] = {}
     never_analyzed: List[str] = []
     excluded_relkinds = 0
     table_count = 0
@@ -479,33 +506,90 @@ def render_cardinality(
         except (TypeError, ValueError):
             pass
 
-        stats.setdefault(schema, {})[name] = _reltuples(raw)
+        stats.setdefault(schema, {})[name] = {"rowCount": _reltuples(raw)}
         table_count += 1
+
+    column_count = _attach_column_stats(stats, columns)
 
     meta = {
         "table_count": table_count,
         "schema_count": len(stats),
+        "column_count": column_count,
         "never_analyzed": sorted(never_analyzed),
+        "last_analyzed": _last_analyzed(tables, stats),
         "excluded_non_ordinary_tables": excluded_relkinds,
-        "format": "schema_table_reltuples",
+        "format": f"cardinality_v{CARDINALITY_FILE_VERSION}",
     }
-    return stats, meta
+    return {"version": CARDINALITY_FILE_VERSION, "tables": stats}, meta
+
+
+def _attach_column_stats(
+    stats: Dict[str, Dict[str, Any]], columns: Optional[Sequence[Dict[str, Any]]]
+) -> int:
+    """Fold the decoded column statistics into their table's entry: only
+    index/constraint columns with a decoded NDV; absent keys, never nulls."""
+    by_table: Dict[str, List[Dict[str, Any]]] = {}
+    for column in columns or []:
+        by_table.setdefault(str(column.get("table")), []).append(column)
+
+    count = 0
+    for schema, tables in stats.items():
+        for name, entry in tables.items():
+            emitted: Dict[str, Any] = {}
+            for column in by_table.get(f"{schema}.{name}") or []:
+                if not column.get("in_index_or_constraint"):
+                    continue
+                ndv, null_frac = column.get("ndv"), column.get("null_frac")
+                if ndv is None or null_frac is None:
+                    continue
+                emitted[str(column["column"])] = {
+                    "NDV": float(ndv),
+                    "NullFrac": float(null_frac),
+                }
+                count += 1
+            # Absent, not null: a table with no collected columns has no key.
+            if emitted:
+                entry["columns"] = emitted
+    return count
+
+
+def _last_analyzed(
+    tables: Optional[Any], stats: Dict[str, Dict[str, Any]]
+) -> Dict[str, str]:
+    """GREATEST(last_analyze, last_autoanalyze) per table, so a never-analyzed
+    table reads as an absence rather than a claim of freshness. Only the tables
+    the document holds appear."""
+    rows = tables.values() if isinstance(tables, dict) else tables or []
+    included = {f"{schema}.{name}" for schema, names in stats.items() for name in names}
+    out = {}
+    for entry in rows:
+        stamps = [
+            str(s)
+            for s in (entry.get("last_analyze"), entry.get("last_autoanalyze"))
+            if s
+        ]
+        name = str(entry.get("table") or "")
+        if name in included and stamps:
+            out[name] = max(stamps)
+    return dict(sorted(out.items()))
 
 
 def write_cardinality(
     out_dir: Union[str, Path],
     schema_analysis: Dict[str, Any],
     target_schemas: Optional[Sequence[str]] = None,
+    columns: Optional[Sequence[Dict[str, Any]]] = None,
+    tables: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Write both cardinality filenames with identical content."""
-    stats, meta = render_cardinality(schema_analysis, target_schemas)
+    doc, meta = render_cardinality(schema_analysis, target_schemas, columns, tables)
     out_dir = Path(out_dir)
     stem = Path(CARDINALITY_BASENAME).stem
     base_path = out_dir / f"{stem}.json"
     card_path = out_dir / f"{stem}-card.json"
 
     # Two-space indent and a trailing newline, matching the consumer's own output byte.
-    payload = json.dumps(stats, indent=2, sort_keys=True) + "\n"
+    payload = json.dumps(doc, indent=2, sort_keys=True) + "\n"
     for path in (base_path, card_path):
         _write_text(path, payload)
 
@@ -522,9 +606,19 @@ def _reltuples(value: Any) -> float:
     return number if number > 0 else 0.0
 
 
-def _caveats(merged, excluded, parse, cardinality) -> List[str]:
+def _caveats(
+    merged,
+    excluded,
+    parse,
+    cardinality,
+    burst_summary=None,
+    outside_window=None,
+    unreadable_bursts=None,
+) -> List[str]:
     """Notes that change how the counts in this bundle should be read."""
     caveats: List[str] = []
+    burst_summary = burst_summary or {}
+    outside_window = outside_window or []
 
     if merged.get("basis") != "windowed":
         # Names the cause first. Leading with "since the statistics were last
@@ -632,17 +726,51 @@ def _caveats(merged, excluded, parse, cardinality) -> List[str]:
         caveats.append(
             f"{len(cardinality['never_analyzed'])} table(s) have never been "
             "analyzed by PostgreSQL, so their row count is reported as 0 even "
-            "if they hold data. Run ANALYZE on them and capture again for an "
-            "accurate size."
+            "if they hold data, and they carry no column statistics. Run "
+            "ANALYZE on them and capture again for an accurate size."
         )
 
-    caveats.append(
-        "PostgreSQL records statements, not transactions, so this capture "
-        "cannot show which tables your application writes together in one "
-        "transaction. Two tables written together usually belong on the same "
-        "shard, so tell your migration engineer about the write paths that "
-        "matter most to you."
-    )
+    if not burst_summary.get("taken"):
+        caveats.append(
+            "PostgreSQL records statements, not transactions, so this capture "
+            "cannot show which tables your application writes together in one "
+            "transaction. Two tables written together usually belong on the "
+            "same shard, so tell your migration engineer about the write paths "
+            "that matter most to you. Set 'capture_log: true' to close this gap."
+        )
+    elif burst_summary.get("degraded_bursts"):
+        caveats.append(
+            f"{burst_summary['degraded_bursts']} of {burst_summary['bursts']} "
+            "burst(s) in burst.csv did not fully read the server's log, so "
+            "part of the window they cover may show no transaction shapes. "
+            "Check their warnings before treating the coverage as complete."
+        )
+
+    if outside_window:
+        caveats.append(
+            f"{label('burst_outside_window')}: {len(outside_window)} query log "
+            "window(s) were stored but fall outside this bundle's snapshot "
+            "window, so they were left out of burst.csv rather than mixed into "
+            "a window they do not describe. Export a log covering the time the "
+            "snapshots span, or finalize a session that spans it."
+        )
+
+    if burst_summary.get("undated"):
+        caveats.append(
+            f"{burst_summary['undated']} burst(s) carry timestamps this tool "
+            "could not resolve to a real instant, usually an imported log "
+            "whose server did not write UTC. They were kept in burst.csv "
+            "rather than dropped, but whether they fall inside this bundle's "
+            "snapshot window is unverified. Log in UTC for the capture window."
+        )
+
+    for burst in unreadable_bursts or []:
+        caveats.append(
+            f"A stored burst at {burst.get('path')} could not be read and was "
+            f"left out of burst.csv: {burst.get('error')}. It is not a window "
+            "problem; the file itself is unreadable."
+        )
+
     return caveats
 
 
@@ -654,10 +782,68 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
     caveats = summary.get("caveats") or []
     statements = summary["statements"]
     schema = summary["schema"]
+    burst = summary.get("burst") or {}
+    burst_taken = bool(burst.get("taken"))
     not_data = (
         statements["excluded_from_workload_sql"]
         - statements["excluded_not_this_application"]
     )
+
+    burst_files = ""
+    if burst_taken:
+        burst_files = (
+            "| `burst.csv` | the query-log burst: every statement the server "
+            "logged while it ran, **with the literal values still in it** |\n"
+            "| `coverage.json` | how much of the workload the burst saw, and "
+            "whether it landed on ordinary traffic |\n"
+        )
+
+    if burst_taken:
+        privacy = f"""## What is in here, and what is not
+
+The queries in `workload.sql` keep their structure and lose their values. A
+query your application ran as:
+
+    SELECT * FROM orders WHERE customer_email = 'ada@example.com'
+
+is recorded there as:
+
+    SELECT * FROM orders WHERE customer_email = $1
+
+**`burst.csv` is the exception, and it holds real data.** Its `query` and
+`parameters` columns keep the literal text your application sent, exactly as
+the server logged it. This capture recorded {burst.get('with_values', 0)}
+statement(s) carrying values. Before this archive leaves your organization,
+read `burst.csv` and treat it the way you would treat a database log.
+
+No table of yours was read to produce this bundle, and apart from the logged
+statement text in `burst.csv` it contains no rows from your data. Every file
+is readable only by you (mode `0600`), and this directory carries a
+`.gitignore` so it cannot be committed to a repository by accident. Delete
+it once the sharding scheme is planned.
+"""
+    else:
+        privacy = """## What is in here, and what is not
+
+The queries in `workload.sql` keep their structure and lose their values. A
+query your application ran as:
+
+    SELECT * FROM orders WHERE customer_email = 'ada@example.com'
+
+is recorded as:
+
+    SELECT * FROM orders WHERE customer_email = $1
+
+The structure is what a sharding scheme is designed from. The values are not
+needed for it, so they were removed before anything was written here. No table
+of yours was read to produce this bundle, and it contains no rows from your
+data.
+
+Every file is readable only by you (mode `0600`), and this directory carries a
+`.gitignore` so it cannot be committed to a repository by accident. Delete it
+once the sharding scheme is planned.
+"""
+
     return f"""# Workload bundle {summary['capture_id']}
 
 Captured by ps-discovery {summary['discovery_version']} on
@@ -692,12 +878,12 @@ Nothing is ranked, dropped for being small, or sampled.
 | --- | --- |
 | `workload.sql` | the queries, each with how often it ran and how long it took |
 | `schema.sql` | your tables, indexes and views, as `CREATE` statements |
-| `plantest_counts.json` | how many rows each table holds |
+| `plantest_counts.json` | how many rows each table holds, plus NDV and null fraction for indexed and constrained columns |
 | `plantest_counts-card.json` | the same content, under a second name the planning tools look for |
 | `manifest.json` | when this capture ran, and over which intervals |
 | `column_stats.json` | how evenly the values in each column are spread |
 | `table_activity.json` | how much each table was written and read, and which indexes were used |
-
+{burst_files}
 ## Sending it
 
 Compress this directory into one archive and send the archive to your
@@ -707,26 +893,7 @@ PlanetScale migration engineer.
 
 Send the whole archive rather than individual files.
 
-## What is in here, and what is not
-
-The queries in `workload.sql` keep their structure and lose their values. A
-query your application ran as:
-
-    SELECT * FROM orders WHERE customer_email = 'ada@example.com'
-
-is recorded as:
-
-    SELECT * FROM orders WHERE customer_email = $1
-
-The structure is what a sharding scheme is designed from. The values are not
-needed for it, so they were removed before anything was written here. No table
-of yours was read to produce this bundle, and it contains no rows from your
-data.
-
-Every file is readable only by you (mode `0600`), and this directory carries a
-`.gitignore` so it cannot be committed to a repository by accident. Delete it
-once the sharding scheme is planned.
-"""
+{privacy}"""
 
 
 def _write_text(path: Path, text: str) -> None:

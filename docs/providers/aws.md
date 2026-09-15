@@ -457,6 +457,179 @@ is a static parameter. For Aurora, set it on the cluster parameter group.
 so run it before you change anything. See
 [Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
 
+### Capturing transaction shapes with pgAudit
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and why you might want it.
+
+RDS and Aurora can do this two ways. **pgAudit is the default.** Read the
+comparison below before you choose `log_fdw` instead.
+
+#### log_fdw or pgAudit
+
+| | pgAudit (`capture_log_source: pgaudit`) | log_fdw (`capture_log_source: log_fdw`) |
+| --- | --- | --- |
+| Writes to your database | Nothing | A work schema, a foreign server, and the extension if absent, per `collect` |
+| One-time setup | `shared_preload_libraries` in the parameter group, one reboot, `CREATE EXTENSION pgaudit` | `CREATE EXTENSION log_fdw`, no reboot |
+| Per-capture setup | Two `ALTER ROLE` statements and a reset | None |
+| Privilege the capture role needs | `pg_monitor` | `rds_superuser` |
+| Scope of what is logged | One role, the application's | The whole server, every role |
+| Hands the log over by | An export you download and name in `capture_log_file` | This tool's own connection, no export |
+| What it records | Statement, session, transaction framing, bind values | The same, plus per-statement duration and error text |
+| Log volume it produces | The audited role's traffic | Every statement on the instance, at `log_min_duration_statement = 0` |
+| Superuser traffic | Not reliably audited | Logged like any other |
+| Cleanup afterwards | Reset the role, delete the exported files | The same, plus `workload init --cleanup` if a `collect` was killed |
+
+- **Choose pgAudit** unless you cannot reboot. It logs one role and writes
+  nothing to your database, and the reboot is once per instance however many
+  captures you run.
+- **Choose `log_fdw`** when a reboot on a production primary is not something
+  you can schedule, or when you need the durations and error text that only the
+  server log carries. It costs `rds_superuser` for the capture role, objects
+  created and dropped inside each `collect`, and a log holding every role's
+  statements rather than one.
+
+Both produce the same bundle.
+
+`ps-discovery workload init --check` reports which of the two this server can
+supply today, and names any objects a killed `collect` left behind.
+
+#### Permissions for log capture
+
+The discovery policy above is read-only, so it does not cover this. Enabling
+the logging and exporting the file are yours to do, and they need more:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "PlanetScaleWorkloadEnableLogging",
+            "Effect": "Allow",
+            "Action": [
+                "rds:CreateDBParameterGroup",
+                "rds:ModifyDBParameterGroup",
+                "rds:ModifyDBClusterParameterGroup",
+                "rds:ModifyDBInstance",
+                "rds:RebootDBInstance"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "PlanetScaleWorkloadExportLog",
+            "Effect": "Allow",
+            "Action": [
+                "rds:DescribeDBLogFiles",
+                "rds:DownloadDBLogFilePortion"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+Scope `Resource` to the instance or cluster you are capturing rather than `*`.
+Both statements are temporary: grant them for the capture and remove them
+afterwards.
+
+In the database you also need a role that can run `CREATE EXTENSION pgaudit`
+and `ALTER ROLE app SET ...`, which means `rds_superuser` or a role holding
+`ADMIN OPTION` on `app`. The capture role itself still needs only `pg_monitor`.
+
+With `log_fdw` instead, drop the export statement: the log is read over the
+database connection. The capture role then needs `rds_superuser`, which is the
+one case where log capture raises what that role needs.
+
+#### Enable once
+
+Add `pgaudit` to `shared_preload_libraries` in the parameter group (the
+cluster parameter group for Aurora), reboot, then `CREATE EXTENSION pgaudit;`.
+After that, a capture window is two `ALTER ROLE` statements and a reset, with
+no further restart.
+
+#### Export the log
+
+Audit lines land in the same database log files as everything else. In the
+console: RDS -> your database -> **Logs & events** -> download. With the CLI:
+
+```bash
+aws rds describe-db-log-files --db-instance-identifier YOUR_INSTANCE
+aws rds download-db-log-file-portion \
+    --db-instance-identifier YOUR_INSTANCE \
+    --log-file-name LOG_FILE_NAME > pgaudit-capture.log
+```
+
+Export every file covering the capture window.
+
+#### Read it
+
+Name the file in `config.yaml`, then run the usual `collect`.
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: pgaudit
+    capture_log_file: pgaudit-capture.log
+```
+
+    ps-discovery workload collect --session ./workload-session
+
+Or send the file to your PlanetScale migration engineer, the way you would
+[deliver a bundle](../workload_capture.md#deliver-the-bundle).
+
+#### Turn it off afterwards
+
+```sql
+ALTER ROLE app RESET pgaudit.log;
+ALTER ROLE app RESET pgaudit.log_parameter;
+```
+
+Then delete the log files you downloaded. They hold literal values from your
+queries. Watch `FreeStorageSpace` in CloudWatch level off to confirm the
+logging stopped.
+
+### Capturing over log_fdw instead
+
+Use this only after reading
+[log_fdw or pgAudit](#log_fdw-or-pgaudit) above.
+
+**Set up:** `CREATE EXTENSION log_fdw;` as a member of `rds_superuser`, and
+grant `rds_superuser` to the capture role, which needs it to create the foreign
+server and read the log files. Reconnect after the grant, since it does not
+reach an open session. Set `log_destination` to include `csvlog` in the
+parameter group, and `log_min_duration_statement = 0` for the window. Neither
+needs a reboot, and both need the parameter-group permissions listed under
+[Permissions for log capture](#permissions-for-log-capture).
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: log_fdw
+    capture_log_seconds: 600
+```
+
+Each `collect` then watches the log for `capture_log_seconds` and reads that
+window over its own connection. Keep the schedule interval longer than
+`capture_log_seconds`.
+
+**Turn it off afterwards:** return `log_min_duration_statement` to the value it
+had. RDS re-adds `stderr` alongside `csvlog`, so every event is written twice
+and the log directory grows at roughly double the rate you would expect;
+`rds.log_retention_period` bounds how long the files live.
+
+**Clean up:** each `collect` drops the work schema and the foreign server
+before it returns. To drop them at any point:
+
+    ps-discovery workload init --cleanup
+
+It leaves the `log_fdw` extension installed. Drop it with
+`DROP EXTENSION log_fdw;` if you do not want it.
+
 ## Additional Resources
 
 - [AWS RDS Documentation](https://docs.aws.amazon.com/rds/)

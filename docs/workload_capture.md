@@ -35,11 +35,16 @@ GRANT CONNECT ON DATABASE your_database TO planetscale_workload;
 GRANT pg_monitor TO planetscale_workload;
 ```
 
-`pg_monitor` is the whole permission requirement. Without it, PostgreSQL hides
-the statement text of every other role behind `<insufficient privilege>`, and
-the capture would describe only the statements your capture role ran itself.
-That result looks complete and is badly wrong, so the tool refuses it rather
-than reporting it.
+`pg_monitor` is the whole permission requirement for the capture role. Without
+it, PostgreSQL hides the statement text of every other role behind
+`<insufficient privilege>`, and the capture would describe only the statements
+your capture role ran itself. That result looks complete and is badly wrong, so
+the tool refuses it rather than reporting it.
+
+Turning on `capture_log` needs more, both in the database and in your cloud
+account, and the extra access belongs to whoever sets the capture up rather
+than to the capture role. See
+[Permissions for log capture](#permissions-for-log-capture).
 
 You can reuse the discovery role from the
 [Required PostgreSQL Privileges](../README.md#required-postgresql-privileges)
@@ -306,8 +311,15 @@ bundle then says so in its caveats, and no rate can be derived from it.
     # Check on a session, with no database connection
     ps-discovery workload status --session ./workload-session
 
+    # Report what this server can supply, and change nothing
+    ps-discovery workload init --check
+
 The tool finds `./config.yaml` on its own, as it does for a discovery run. Use
 `--config` only to point at a different file.
+
+There is no other command. Reading the query log, described in
+[Capturing transaction shapes and values](#capturing-transaction-shapes-and-values),
+is a config setting on this same flow, not a separate step.
 
 ### The session directory
 
@@ -319,12 +331,22 @@ commands the same directory. It holds:
       snapshots/
         snapshot-20260826T211338.json.gz    one file per collect
         snapshot-20260826T211522.json.gz
+      bursts/
+        burst-20260826T211400.json.gz       one per collect, with capture_log on
       workload-<capture id>/           the bundle, written by finalize
 
 You can name the directory anything and put it anywhere the cron user can write.
-The directory is mode `0700`. Delete it when you have the bundle. Nothing
-persists on the database server. To stop collection, remove the cron entry and
-delete the directory.
+The directory is mode `0700`. Delete it when you have the bundle. To stop
+collection, remove the cron entry and delete the directory.
+
+Nothing persists on the database server with `capture_log` off, and nothing
+persists with the default `pgaudit` source either, which reads a file you
+exported. Only `capture_log_source: log_fdw` writes to the server: each collect
+creates a work schema, a foreign server and the `log_fdw` extension to read the
+log, and drops all three when it finishes. If a collect is killed between the
+two, the next one clears what was left behind, and
+`ps-discovery workload init --cleanup` clears it on demand. See
+[Leave nothing behind](#leave-nothing-behind).
 
 ### Scheduling
 
@@ -407,9 +429,10 @@ system. Every file in it is mode `0600`, and the directory carries a
 `.gitignore` so it cannot be committed by accident.
 
 Treat it as you would any schema export. It holds table, column and index names,
-statement shapes and row counts, and a `manifest.json` recording when the
-capture ran and over which intervals. It holds no data from your tables and no
-literal values from your queries. See
+statement shapes, row counts, a distinct-value count and null fraction per
+indexed column, and a `manifest.json` recording when the capture ran and over
+which intervals. It holds no data from your tables and no literal values from
+your queries. See
 [Privacy](#privacy-what-leaves-your-database-and-what-never-does) below, which
 includes how to check the bundle yourself before you send it.
 
@@ -549,6 +572,296 @@ left out, and `finalize` reports how many of each.
 Nothing else is removed. Every query that touches one of your tables is kept,
 however rarely it ran, because how much a query matters depends on a cost model
 that the planning tools apply later.
+
+## Capturing transaction shapes and values
+
+The capture above is built on `pg_stat_statements`, and that view cannot answer
+two questions no matter how long you run it:
+
+- **Which tables you write together in one transaction.**
+  `pg_stat_statements` records statements, not transactions, so it cannot show
+  that an `INSERT` into `orders` and an `INSERT` into `order_items` happened
+  together. Two tables written in one transaction usually belong on the same
+  shard. Get this wrong and those writes become slower, more failure-prone
+  distributed transactions.
+- **How unevenly the values behind a candidate shard key are accessed.**
+  `pg_stat_statements` normalizes every literal to `$1`, so a query that filters
+  on `tenant_id` gives no way to tell that one tenant is 40% of the traffic.
+
+Both answers are in one place: the server's own query log. Unlike
+`pg_stat_statements`, it records each statement as it actually ran, values
+included, in the order and the transaction it ran in.
+
+So the capture can read the query log as well. It is off by default. A session
+that never reads the log still produces a complete bundle, with both gaps named
+in its caveats.
+
+### Turn it on in the config file
+
+This is a setting, not a command. Nothing about the flow changes: the same
+`init`, the same `collect` from the same cron entry, the same `finalize`.
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: pgaudit
+    capture_log_file: pgaudit-capture.log
+```
+
+`pgaudit` is the default source. You turn statement logging on for one role,
+export the window through your provider's own tooling, and name the file. Each
+`collect` takes its snapshot as before and then reads the file.
+
+With `capture_log_source: log_fdw`, the tool reads the server's log over its own
+connection instead, and each `collect` watches the log for
+`capture_log_seconds` after its snapshot, so the log window always falls inside
+the snapshot window around it. **Keep the schedule interval longer than
+`capture_log_seconds`**, or the next `collect` starts before this one returns.
+With the hourly crontab line `init` prints, anything up to about 45 minutes is
+safe.
+
+`capture_log_seconds` accepts 10 to 3600 and applies to `log_fdw` only. Keep it
+short and off-peak: the overhead is log I/O, roughly 150-300 bytes per
+statement, so 10k statements a second for ten minutes is 100-200 MB of log.
+
+If the log cannot be read, the `collect` still stores its snapshot, logs the
+reason as a warning and exits 0. A capture never fails because of this.
+
+### Where the log comes from
+
+`capture_log_source` selects how the log is read.
+
+**pgAudit is the default.** It logs one role's traffic, it needs no write of any
+kind to your database, and every setting it uses can be changed without a
+restart. Use another source only where pgAudit cannot run.
+
+| Platform | `capture_log_source` | Reads the log by |
+| --- | --- | --- |
+| RDS, Aurora | `pgaudit` | a file you export |
+| RDS, Aurora, no pgAudit available | `log_fdw` | SQL, over `log_fdw` |
+| Cloud SQL, AlloyDB | `pgaudit` or `pgaudit-json` | a file you export |
+| Supabase | `pgaudit` | a file you export |
+| Self-managed | `pgaudit`, or `stderr` with no extension | the log file on the host |
+| Neon, Heroku Postgres, PlanetScale | cannot supply a log | see the provider's guide |
+
+`ps-discovery workload init --check` reports which row your server is on. It
+opens a connection, prints what the server can supply, creates no session and
+changes nothing. Add `--json` to sweep an estate.
+
+`log_fdw` reads the log the server is already writing, over this tool's own
+connection, so it needs no export and no restart. It needs the `log_fdw`
+extension, csvlog output and a role holding `rds_superuser`, and it is the only
+source that creates objects in your database.
+[The AWS guide](providers/aws.md#log_fdw-or-pgaudit) compares it with pgAudit in
+full. To get statements into the log in the first place, set
+`log_min_duration_statement = 0` for the window; see
+[Set the logging up yourself](#set-the-logging-up-yourself).
+
+For the three file sources, export the log through the provider's own tooling
+and name the file:
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: pgaudit
+    capture_log_file: exported.log
+```
+
+A `collect` with a file source takes its snapshot as usual and then reads the
+file, so one schedule still produces both the measured window and the log. Point
+`capture_log_file` at the window you exported before each run: re-reading a file
+this session already read changes nothing, because that would double every
+count.
+
+If the machine running `collect` cannot reach the database, the file is still
+read and the run says that it took no snapshot. A session of nothing but
+imports has no window to measure the log against, so run at least two `collect`s
+that can connect.
+
+`pgaudit-json` reads Cloud SQL's and AlloyDB's JSON export, either one
+`PgAuditEntry` payload per line or a `gcloud logging read --format=json` array.
+`stderr` reads a plain server log, for hosts where pgAudit cannot be installed
+at all.
+
+Per-provider export steps:
+[RDS and Aurora](providers/aws.md#capturing-transaction-shapes-with-pgaudit),
+[Cloud SQL and AlloyDB](providers/gcp.md#capturing-transaction-shapes-with-pgaudit),
+[Supabase](providers/supabase.md#capturing-transaction-shapes-with-pgaudit).
+[Neon](providers/neon.md#capturing-transaction-shapes-with-pgaudit) and
+[Heroku](providers/heroku.md#capturing-transaction-shapes-with-pgaudit) cannot
+produce this source; their guides say why.
+
+### Permissions for log capture
+
+Log capture asks for access the aggregate capture does not. It splits in two,
+and the two usually belong to different people.
+
+**In the database.** The capture role still needs only `pg_monitor`, except
+with `log_fdw`:
+
+| Task | Needs |
+| --- | --- |
+| `ALTER ROLE app SET pgaudit.log`, and the reset afterwards | A superuser, `rds_superuser` on RDS and Aurora, or `cloudsqlsuperuser` on Cloud SQL. A role with `ADMIN OPTION` on `app` can also do it |
+| `CREATE EXTENSION pgaudit` | The same, once per instance |
+| `capture_log_source: log_fdw` | `rds_superuser` on the **capture role itself**, because it creates the foreign server and reads the log files. This is the one path that raises what the capture role needs |
+| `pg_ls_logdir()`, to watch the log volume | A superuser or `pg_monitor`, and RDS restricts it |
+
+A `GRANT` does not reach a session that is already open, so reconnect after
+granting.
+
+**In your cloud account.** The tool never touches your cloud API for this. You
+enable the logging and export the file yourself, so these are your permissions,
+not the ones in the discovery policy:
+
+| Platform | To enable pgAudit | To export the log |
+| --- | --- | --- |
+| RDS, Aurora | Modify the parameter group and reboot | `rds:DescribeDBLogFiles` and `rds:DownloadDBLogFilePortion`, or console access to **Logs & events** |
+| Cloud SQL, AlloyDB | Set the instance flag and restart | Read access to Cloud Logging, and the Data Access audit logs must be on for the project |
+| Supabase | Enable the extension in the dashboard | Dashboard access to **Postgres Logs**, or a Logflare API token |
+| Self-managed | Edit `postgresql.conf`, or `ALTER SYSTEM` and reload | Read access to the log directory on the host |
+
+`log_fdw` needs neither column: it reads the log over the database connection,
+so no export and no cloud permission. The parameter-group change to add `csvlog`
+and set `log_min_duration_statement` still applies.
+
+The provider guides carry the exact policy statements and the commands they go
+with: [RDS and Aurora](providers/aws.md#permissions-for-log-capture),
+[Cloud SQL and AlloyDB](providers/gcp.md#permissions-for-log-capture),
+[Supabase](providers/supabase.md#permissions-for-log-capture).
+
+### Set the logging up yourself
+
+This tool reads the log. It never turns logging on for you, because statement
+logging on a production role is your decision to make in your own console, and
+a setting this tool changed could outlive the process that changed it.
+
+With pgAudit, every setting is dynamic and settable per role. Turn it on, watch
+what it produces, and turn it off again:
+
+```sql
+-- 1. ON
+ALTER ROLE app SET pgaudit.log = 'read,write,misc';
+ALTER ROLE app SET pgaudit.log_parameter = 'on';
+
+-- 2. WATCH, at any point in the window
+SELECT count(*) AS files, pg_size_pretty(sum(size)) AS log_size
+FROM   pg_ls_logdir();
+--   files | log_size
+--       4 | 181 MB      <- run it twice and you have a growth rate
+
+-- 3. OFF
+ALTER ROLE app RESET pgaudit.log;
+ALTER ROLE app RESET pgaudit.log_parameter;
+```
+
+Run step 3 as soon as the last `collect` finishes. `finalize` prints the same
+two statements for that reason.
+
+Step 2 is for self-managed PostgreSQL. `pg_ls_logdir()` needs a superuser or
+`pg_monitor` and RDS restricts it, and Cloud SQL does not expose the log
+directory at all. Watch the platform's own metric instead: `FreeStorageSpace`
+in CloudWatch on RDS and Aurora, the log bucket or sink size on Cloud SQL and
+AlloyDB, the disk usage graph in the Supabase dashboard.
+
+Replace `app` with the role your application connects as. Role settings bind at
+connection time, so an already-open pooled connection keeps the old settings
+until it recycles. Plan the window around the pool's connection lifetime.
+
+Keep `pgaudit.log_relation` off: object logging emits several entries per
+statement and corrupts the record pairing. Keep `log_statement` at `'none'`
+during the window, or every statement is logged twice.
+
+Without pgAudit, set `log_min_duration_statement = 0` for the window instead,
+leave `log_line_prefix` as it is (the tool reads it from the file), and use
+`capture_log_source: stderr`. No extension is needed. The trade-off: the plain
+log carries durations and pgAudit does not, but a busy server logs a great deal
+at `log_min_duration_statement = 0`.
+
+### Enable pgAudit once
+
+Every provider needs one restart to enable pgAudit. After that, no capture
+needs another.
+
+| Provider | Enablement |
+| --- | --- |
+| RDS for PostgreSQL | `shared_preload_libraries` in the parameter group, reboot, `CREATE EXTENSION pgaudit;` |
+| Aurora PostgreSQL | same, in the cluster parameter group |
+| Cloud SQL for PostgreSQL | the `cloudsql.enable_pgaudit` database flag, restart, `CREATE EXTENSION pgaudit;` |
+| AlloyDB | the `alloydb.enable_pgaudit` flag, restart, `CREATE EXTENSION pgaudit;` |
+| Supabase | enable pgAudit in the dashboard, or `CREATE EXTENSION pgaudit;`; no preload step |
+
+Do this on RDS and Aurora too. A pgAudit capture writes nothing to your
+database and logs one role rather than the whole server. Use `log_fdw` where
+the reboot cannot be scheduled; see
+[log_fdw or pgAudit](providers/aws.md#log_fdw-or-pgaudit).
+
+Some limits carry into every pgAudit capture. None of them stops a capture
+being useful, but each one qualifies what a transaction shape proves.
+
+pgAudit does not reliably audit superusers, which is one more reason
+application traffic should not run as one. Its delivery is best-effort, so
+entries can be lost on a crash or a full log volume.
+
+An aborted transaction reads as open rather than rolled back. pgAudit logs no
+statement issued while a transaction is already in the aborted state, so the
+`ROLLBACK` that ends an errored transaction never appears, and the shape looks
+identical to one cut off at the edge of the capture.
+
+### Turn the logging back off
+
+Two things outlive the last `collect` unless you end them, and both cost you
+money or disk:
+
+1. **The statement logging you turned on.** Reset it on the role, as step 3 of
+   the recipe above. Without pgAudit, return `log_min_duration_statement` to
+   the value it had. `finalize` prints this reminder when the bundle holds a
+   log window.
+2. **The exported log files.** Delete them once the bundle is built and
+   delivered. They hold literal values from your queries.
+
+Confirm the log volume stops growing afterwards. On RDS, `FreeStorageSpace`
+levelling off is the signal; on a self-managed host, run the `pg_ls_logdir()`
+query once more.
+
+### Leave nothing behind
+
+`capture_log_source: log_fdw` is the only source that creates anything in your
+database. Each `collect` creates a work schema, a foreign server and, if it was
+not there already, the `log_fdw` extension, and drops all three before it
+returns. A `collect` that is killed can leave them behind.
+
+To drop them at any point:
+
+    ps-discovery workload init --cleanup
+
+It reports what it dropped and needs no `--session`. It leaves the `log_fdw`
+extension installed, since it may have been in use before the capture; remove
+it with `DROP EXTENSION log_fdw`.
+
+`ps-discovery workload init --check` reports the same objects without dropping
+anything.
+
+Delete the session directory on the machine running `collect` once you have the
+bundle. Remove the cron entry first.
+
+### The exception: burst.csv
+
+[Privacy](#privacy-what-leaves-your-database-and-what-never-does) above
+describes the capture with `capture_log` off. The log is different, which is why
+`capture_log` is opt-in: `burst.csv` keeps statement text **with its
+literal values**, exactly as the server logged them. Transaction shapes and
+per-value access skew are unanswerable without them.
+
+Treat a bundle that includes `burst.csv` the way you would treat a database
+log: read the file before the archive leaves your organization, and decide
+about it the way you would decide about log access. The bundle's own README
+says the same thing in its privacy section.
+
+A log window is matched against the snapshot window it was taken alongside. A
+window read by `collect` always falls inside it. An exported file might not;
+see [W215](#w215-burst_outside_window).
 
 ## Exit codes
 
@@ -787,6 +1100,19 @@ biased toward the statements this role happens to run, and the bias is invisible
 in the result. [W212](#w212-statement_text_masked) is the same problem observed
 after the fact, with a count.
 
+### W215 burst_outside_window
+
+The session holds a query log window whose own timestamps, earliest to latest,
+fall outside the snapshot window this bundle covers.
+
+The window was left out of `burst.csv` rather than mixed into a window it does
+not describe: a log read last Tuesday says nothing about a window measured this
+week. A window read by `collect` cannot land here, because it is taken between
+two snapshots. An exported file can, when it covers a different day.
+
+Export a file that covers the time the snapshots span, or finalize a session
+whose snapshot window already covers when the log was written.
+
 ## What the capture cannot see
 
 No measurement tool sees everything, and it is better to know the edges before
@@ -803,7 +1129,9 @@ transactions, which are slower and can fail in ways a single-shard write cannot.
 
 *What to do:* list the transactions that matter most to you — checkout, signup,
 whatever your critical write path is — and name the tables each one touches.
-Your migration engineer will use that list directly.
+Your migration engineer will use that list directly. Or set `capture_log`,
+which reads the transaction boundaries straight from the server's log. See
+[Capturing transaction shapes and values](#capturing-transaction-shapes-and-values).
 
 **The real values your queries search for.** The capture knows a query filters
 on `tenant_id`. It does not know that one tenant is 40% of your traffic. A shard
@@ -813,7 +1141,8 @@ shard.
 *What to do:* tell your migration engineer about any tenant, customer or region
 that is much larger than the rest. If you can run a `GROUP BY` on the candidate
 key yourself and share the top few counts, that answers the question
-completely.
+completely. Or set `capture_log`, which keeps the literal values a snapshot
+never can.
 
 **Anything that did not run during the capture window.** A weekly billing job
 that falls outside the window is invisible to the plan, and those jobs are often

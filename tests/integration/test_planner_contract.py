@@ -190,31 +190,33 @@ class TestCardinalityMatchesItsOwnOutput:
         theirs = json.loads(theirs_path.read_text())
         ours = json.loads((out / "plantest_counts.json").read_text())
 
-        assert set(ours) == set(theirs), "schema keys differ"
-        for schema in theirs:
-            assert set(ours[schema]) == set(
-                theirs[schema]
+        assert ours.get("version") == theirs.get("version"), "format version differs"
+        ours_tables, theirs_tables = ours["tables"], theirs["tables"]
+        assert set(ours_tables) == set(theirs_tables), "schema keys differ"
+        for schema in theirs_tables:
+            assert set(ours_tables[schema]) == set(
+                theirs_tables[schema]
             ), f"table keys differ in {schema}"
 
         # Values may differ where the workload wrote to a table between the two
         # reads, since reltuples moves on vacuum. Structure must not.
         drifted = [
             table
-            for schema in theirs
-            for table in theirs[schema]
-            if ours[schema][table] != theirs[schema][table]
+            for schema in theirs_tables
+            for table in theirs_tables[schema]
+            if ours_tables[schema][table] != theirs_tables[schema][table]
         ]
         assert len(drifted) <= len(
-            [t for schema in theirs for t in theirs[schema]]
-        ), f"every table's row count drifted, which is not concurrent writes: {drifted}"
+            [t for schema in theirs_tables for t in theirs_tables[schema]]
+        ), f"every table's entry drifted, which is not concurrent writes: {drifted}"
 
     def test_negative_reltuples_never_leaks(self, bundle):
         """A never-analyzed table is normalized to 0, never emitted as -1."""
         out, _ = bundle
         ours = json.loads((out / "plantest_counts.json").read_text())
-        for schema, tables in ours.items():
-            for table, value in tables.items():
-                assert value >= 0, f"{schema}.{table} = {value}"
+        for schema, tables in ours["tables"].items():
+            for table, entry in tables.items():
+                assert entry["rowCount"] >= 0, f"{schema}.{table} = {entry}"
 
 
 class TestBundleShape:

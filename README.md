@@ -290,27 +290,53 @@ nothing extra to install.
 `--session` names a directory that this tool creates and owns. It holds the
 snapshots and the captured schema. Give all four commands the same directory.
 You can name it anything and put it anywhere. Delete it when you are done.
-Nothing persists on the database server.
 
 Each `collect` takes one snapshot and exits. It does no scheduling of its own.
 Two snapshots are the minimum, because a window needs two readings to
 difference. More snapshots, spread across a peak, give a better result.
 
+`pg_stat_statements` records statements, not transactions, and normalizes every
+literal. So it cannot say which tables you write together in one transaction, or
+how unevenly a candidate shard key's values are accessed. Set `capture_log: true`
+under `database.workload` and each `collect` also reads the server's query log,
+which answers both. It is off by default, and
+`./ps-discovery workload init --check` reports whether your server can supply
+it. The default source is pgAudit: you export the window and name the file. A
+session that captures the log carries `burst.csv`, which holds statement text
+with its literal values: read it before the archive leaves your organization.
+See
+[Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
+
 Compress the bundle directory and send the archive to your PlanetScale migration
 engineer, who uses it to plan the sharding scheme. The bundle holds a query log,
-a schema file, table row counts, a `manifest.json` recording when the capture
-ran, and a README summarizing what was collected.
+a schema file, table row counts with per-column statistics, a `manifest.json`
+recording when the capture ran, and a README summarizing what was collected.
 
 `pg_stat_statements` is required: it is the only record of the query workload,
 and that workload is what a sharding scheme is planned from. It is not a trusted
 extension, so enabling it needs a superuser or the provider's admin role. The
 capture role also needs `pg_monitor`. `workload init` checks both and stops with
-exit code 5 when either is missing.
+exit code 5 when either is missing. Reading the query log needs more, in the
+database and in your cloud account; see
+[Permissions for log capture](docs/workload_capture.md#permissions-for-log-capture).
 
 The flow reads catalogs and statistics views only. It reads no user table, never
-runs `ANALYZE` and holds no table locks. Read
+runs `ANALYZE` and holds no table locks. Nothing persists on the database
+server. The one exception is `capture_log_source: log_fdw`, available on RDS and
+Aurora, where each `collect` creates the objects it needs to read the log and
+drops them again. Read
 [Workload Capture](docs/workload_capture.md) before you enable it on a
 production primary.
+
+**Clean up when the capture is over.** Reset the statement logging you turned
+on for the window, and delete the log files you exported, which hold literal
+values from your queries. `finalize` prints the reset for you. See
+[Turn the logging back off](docs/workload_capture.md#turn-the-logging-back-off).
+
+With `capture_log_source: log_fdw`, each `collect` also drops the objects it
+created to read the log. To drop them at any point, run
+`./ps-discovery workload init --cleanup`. See
+[Leave nothing behind](docs/workload_capture.md#leave-nothing-behind).
 
 ## Security & Data Privacy
 
@@ -318,9 +344,11 @@ This tool collects **metadata only** — never actual data from your tables.
 
 **What is collected:** Schema metadata (table names, column types, constraints), database configuration (version, settings, extensions), usage statistics (table sizes, row counts, cache ratios), infrastructure topology (cloud resources, networking), and user/role names.
 
-**What is NOT collected:** Table contents, customer records, literal values from queries, application code, or credentials. Passwords are used only for connection and are never stored in output.
+**What is NOT collected:** Table contents, customer records, application code, or credentials. Passwords are used only for connection and are never stored in output. Literal values from queries are not collected either, unless you turn on `capture_log`.
 
 **Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by `$N` placeholders, so `SELECT * FROM orders WHERE email = $1` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
+
+**`capture_log` is the one exception, and it is off by default.** A session that captures the query log writes `burst.csv`, which holds statement text with its literal values. Read that file before the archive leaves your organization.
 
 All analysis runs locally — no data is sent to external services.
 

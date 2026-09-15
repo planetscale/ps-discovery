@@ -186,3 +186,27 @@ class TestNewCollectorRowLimit:
     def test_statement_row_limit_reaches_the_collector(self, mocker):
         collector = _new_collector(mocker.Mock(), _RowLimitConfig(), mocker.Mock())
         assert collector.row_limit == 5000
+
+
+class TestLogCaptureSurface:
+    """Log capture is config-driven, so it adds no subcommand and no flag."""
+
+    def test_the_verbs_are_still_the_original_four(self):
+        choices = parser()._subparsers._group_actions[0].choices["workload"]
+        for action in choices._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                assert tuple(action.choices) == COMMANDS
+                return
+        raise AssertionError("workload subcommands not found")
+
+    @pytest.mark.parametrize("command", COMMANDS)
+    def test_no_log_capture_setting_is_a_flag(self, command):
+        """Config carries what the capture does; a flag targets one invocation."""
+        text = help_for(command)
+        for field in vars(WorkloadConfig()):
+            assert "--" + field.replace("_", "-") not in text
+
+    def test_check_reports_without_a_session(self):
+        args = parser().parse_args(["workload", "init", "--check"])
+        assert args.session is None
+        assert args.check is True

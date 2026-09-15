@@ -214,4 +214,4 @@ class TestSchemaSqlCarriesViews:
         """Row counts come from reltuples on ordinary tables only."""
         write_bundle(tmp_path, merged([]), SCHEMA, "t")
         counts = json.loads((tmp_path / "plantest_counts.json").read_text())
-        assert counts == {"public": {"orders": 1000}}
+        assert counts["tables"] == {"public": {"orders": {"rowCount": 1000}}}
