@@ -72,22 +72,22 @@ def three_hours():
 
 class TestTheContract:
     def test_the_key_set_is_exactly_what_the_consumer_reads(self):
-        manifest = render_manifest(three_hours(), "1.3.1")
+        manifest = render_manifest(three_hours(), "2.0.0")
         assert set(manifest) == TOP_LEVEL_KEYS
 
     def test_the_schema_version_is_declared(self):
-        assert render_manifest(three_hours(), "1.3.1")["schema_version"] == (
+        assert render_manifest(three_hours(), "2.0.0")["schema_version"] == (
             MANIFEST_SCHEMA_VERSION
         )
 
     def test_it_carries_no_findings(self):
         """Caveats, cardinality and prose belong to the files, not here."""
-        manifest = render_manifest(three_hours(), "1.3.1")
+        manifest = render_manifest(three_hours(), "2.0.0")
         for absent in ("caveats", "not_produced", "cardinality", "statements"):
             assert absent not in manifest
 
     def test_the_collector_version_is_recorded(self):
-        assert render_manifest(three_hours(), "1.3.1")["discovery_version"] == "1.3.1"
+        assert render_manifest(three_hours(), "2.0.0")["discovery_version"] == "2.0.0"
 
 
 class TestTheWindow:
@@ -198,7 +198,7 @@ class TestCapped:
 
 class TestItIsWrittenToTheBundle:
     def test_the_file_is_valid_json_with_the_contract_keys(self, tmp_path):
-        write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "1.3.1")
+        write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "2.0.0")
         payload = json.loads((tmp_path / "manifest.json").read_text())
         assert set(payload) == TOP_LEVEL_KEYS
 

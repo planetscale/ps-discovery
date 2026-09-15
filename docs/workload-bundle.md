@@ -146,7 +146,7 @@ here would be a second source that can disagree with them.
   "schema_version": 3,
   "capture_id": "b01d8e74",
   "generated_at": "2026-08-31T14:27:19Z",
-  "discovery_version": "1.3.1",
+  "discovery_version": "2.0.0",
   "window": { "start": "...", "end": "...", "tz": "UTC" },
   "intervals": [{ "start": "...", "end": "...", "calls": 146079 }],
   "intervals_skipped": [],

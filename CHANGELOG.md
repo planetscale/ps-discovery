@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-15
+
 ### Added
 
 - **Query workload capture.** A new opt-in `ps-discovery workload` subcommand records a PostgreSQL query workload over a few days from cron and writes a bundle for the PlanetScale migration team to plan a sharding scheme from. See [Workload Capture](docs/workload_capture.md) and [Workload Bundle Format](docs/workload-bundle.md).
