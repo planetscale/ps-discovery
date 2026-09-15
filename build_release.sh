@@ -119,6 +119,14 @@ fi
 if [ -z "${CHANGELOG_SECTION// }" ]; then
     echo "⚠️  No CHANGELOG.md section found for v${VERSION}; using fallback notes"
     CHANGELOG_SECTION="See CHANGELOG.md for changes in this release."
+else
+    # A release page resolves a relative link against /releases/, so it 404s.
+    REPO_BLOB="https://github.com/planetscale/ps-discovery/blob/main"
+    CHANGELOG_SECTION=$(printf '%s\n' "${CHANGELOG_SECTION}" | sed -E \
+        -e "s#\]\((docs/[^)]+)\)#](${REPO_BLOB}/\1)#g" \
+        -e "s#\]\((config-examples/[^)]+)\)#](${REPO_BLOB}/\1)#g" \
+        -e "s#\]\((README\.md[^)]*)\)#](${REPO_BLOB}/\1)#g" \
+        -e "s#\]\((CONTRIBUTING\.md[^)]*)\)#](${REPO_BLOB}/\1)#g")
 fi
 
 cat > "${RELEASE_DIR}/RELEASE_NOTES.txt" << EOF
