@@ -1,0 +1,28 @@
+{
+  "tables": {
+    "billing": {
+      "invoices": {
+        "rowCount": 0.0
+      }
+    },
+    "public": {
+      "orders": {
+        "rowCount": 99.0
+      },
+      "users": {
+        "columns": {
+          "email": {
+            "NDV": 4000.0,
+            "NullFrac": 0.25
+          },
+          "id": {
+            "NDV": 4242.0,
+            "NullFrac": 0.0
+          }
+        },
+        "rowCount": 4242.0
+      }
+    }
+  },
+  "version": 1
+}

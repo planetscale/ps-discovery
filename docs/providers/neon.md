@@ -413,6 +413,18 @@ caveats, so check that count before you quote any figure.
 `ps-discovery workload init` reports the exact state before you capture. See
 [Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
 
+### Capturing transaction shapes with pgAudit
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and which platforms can supply it.
+
+Neon ships pgAudit in its compute image but exposes it only for HIPAA-enabled
+projects, so this log source is unavailable on any other tier. If your
+project is HIPAA-enabled, enablement is coordinated with Neon's team.
+
 ## Additional Resources
 
 - [Neon API Reference](https://api-docs.neon.tech/reference/getting-started)

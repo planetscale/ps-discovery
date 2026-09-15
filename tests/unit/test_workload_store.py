@@ -3,6 +3,8 @@
 import gzip
 import json
 
+import pytest
+
 from planetscale_discovery.workload.store import WorkloadStore
 
 T0 = "2026-08-25 10:00:00+00:00"
@@ -114,3 +116,52 @@ class TestStatus:
 
     def test_an_uninitialized_directory_reports_so(self, tmp_path):
         assert WorkloadStore(tmp_path / "nope").status()["initialized"] is False
+
+
+def gust(start, end, **extra):
+    return {"status": "ok", "window_start": start, "window_end": end, **extra}
+
+
+class TestBursts:
+    def _store(self, tmp_path):
+        store = WorkloadStore(tmp_path / "wl")
+        store.create()
+        return store
+
+    def test_append_burst_writes_a_file(self, tmp_path):
+        store = self._store(tmp_path)
+        path = store.append_burst(gust(T0, T1))
+        assert path.is_file()
+        assert len(store.burst_paths()) == 1
+
+    def test_append_burst_requires_a_window(self, tmp_path):
+        store = self._store(tmp_path)
+        with pytest.raises(ValueError):
+            store.append_burst({"status": "ok"})
+
+    def test_read_bursts_are_sorted_by_window_start(self, tmp_path):
+        store = self._store(tmp_path)
+        store.append_burst(gust(T1, T1))
+        store.append_burst(gust(T0, T0))
+        starts = [b["window_start"] for b in store.read_bursts()]
+        assert starts == [T0, T1]
+
+    def test_log_files_read_collects_across_bursts(self, tmp_path):
+        store = self._store(tmp_path)
+        store.append_burst(gust(T0, T0, files_read=[{"file": "a.log"}]))
+        store.append_burst(gust(T1, T1, files_read=[{"file": "b.log"}]))
+        assert store.log_files_read() == ["a.log", "b.log"]
+
+    def test_the_bursts_directory_is_owner_only(self, tmp_path):
+        """The bug: bursts/ was created 0755 while it holds literal values."""
+        store = self._store(tmp_path)
+        store.append_burst(gust(T0, T1))
+        assert oct(store.bursts_dir.stat().st_mode)[-3:] == "700"
+
+    def test_total_bytes_sums_snapshots_and_bursts(self, tmp_path):
+        store = self._store(tmp_path)
+        store.write_schema({})
+        store.append_snapshot(snap(T0))
+        snapshot_only = store.total_bytes()
+        store.append_burst(gust(T0, T1))
+        assert store.total_bytes() > snapshot_only

@@ -385,6 +385,52 @@ GRANT pg_monitor TO planetscale_discovery;
 `ps-discovery workload init` reports the exact state before you capture. See
 [Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
 
+### Capturing transaction shapes with pgAudit
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and why you might want it. Supabase has no SQL path to
+the server's log, so it goes through pgAudit instead.
+
+#### Permissions for log capture
+
+Supabase has no IAM policy to change. You need project **Owner** or
+**Administrator** in the dashboard to enable the extension and to read Postgres
+Logs, or a Logflare API token for the log. In the database, `postgres` is the
+role that can run `CREATE EXTENSION pgaudit` and `ALTER ROLE app SET ...`. The
+capture role itself still needs only `pg_monitor`.
+
+#### Enable once
+
+Enable pgAudit in the dashboard, or with `CREATE EXTENSION pgaudit;`. There is
+no preload step on Supabase. After that, a capture window is two `ALTER ROLE`
+statements and a reset, with no further restart.
+
+#### Export the log
+
+Open the project dashboard -> **Logs** -> **Postgres Logs** and filter to the
+capture window, or use the Logflare API. The lines are raw text with `AUDIT:`
+records.
+
+#### Read it
+
+Name the file in `config.yaml`, then run the usual `collect`.
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: pgaudit
+    capture_log_file: exported.log
+```
+
+    ps-discovery workload collect --session ./workload-session
+
+Or send the file to your PlanetScale migration engineer, the way you would
+[deliver a bundle](../workload_capture.md#deliver-the-bundle).
+
 ## Additional Resources
 
 - [Supabase Management API Documentation](https://supabase.com/docs/reference/api)

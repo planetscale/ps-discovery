@@ -127,15 +127,57 @@ MCF_KEPT = 10
 # rows from the customer's tables and are never read. most_common_freqs is an
 # array of floats describing how often the values in that list occur, which is
 # what says whether a candidate shard key spreads evenly or piles onto one shard.
+# reltuples and the analyze timestamps ride along: n_distinct decodes against
+# a real row count, and a stale reading shows. in_index_or_constraint marks index keys and PK/FK/unique columns.
 COLUMN_SQL = """
-SELECT schemaname, tablename, attname,
-       n_distinct, null_frac, correlation,
-       most_common_freqs
-FROM pg_stats
-WHERE NOT (schemaname = ANY(%(excluded)s))
-  AND (%(schemas)s::text[] IS NULL OR schemaname = ANY(%(schemas)s))
-ORDER BY schemaname, tablename, attname
+SELECT s.schemaname, s.tablename, s.attname,
+       s.n_distinct, s.null_frac, s.correlation,
+       s.most_common_freqs,
+       GREATEST(c.reltuples, 0) AS row_count,
+       st.last_analyze, st.last_autoanalyze,
+       (icol.attname IS NOT NULL) AS in_index_or_constraint
+FROM pg_stats s
+JOIN pg_namespace n ON n.nspname = s.schemaname
+JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = s.tablename
+LEFT JOIN pg_stat_all_tables st ON st.relid = c.oid
+LEFT JOIN (
+    SELECT n.nspname AS schemaname, c.relname AS tablename, a.attname
+    FROM pg_index i
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+    WHERE c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    UNION
+    SELECT n.nspname, c.relname, a.attname
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+    WHERE con.contype IN ('p', 'f', 'u') AND a.attnum > 0 AND NOT a.attisdropped
+) icol ON icol.schemaname = s.schemaname
+      AND icol.tablename = s.tablename
+      AND icol.attname = s.attname
+WHERE NOT (s.schemaname = ANY(%(excluded)s))
+  AND (%(schemas)s::text[] IS NULL OR s.schemaname = ANY(%(schemas)s))
+  -- An inheritance parent emits a second, tree-wide row per column; both of
+  -- the consumer's collectors filter it, and an arbitrary winner is worse.
+  AND NOT s.inherited
+ORDER BY s.schemaname, s.tablename, s.attname
 """
+
+
+def _decode_ndv(
+    n_distinct: Optional[float], row_count: Optional[float]
+) -> Optional[float]:
+    """PostgreSQL's signed n_distinct as a distinct count, floored at 1;
+    unknown (0) or a fraction on zero rows decodes to absent instead."""
+    if n_distinct is None or row_count is None or n_distinct == 0:
+        return None
+    if n_distinct > 0:
+        return max(float(n_distinct), 1.0)
+    if row_count <= 0:
+        return None
+    return max(-float(n_distinct) * row_count, 1.0)
 
 
 class WorkloadCollector(DatabaseAnalyzer):
@@ -350,12 +392,19 @@ class WorkloadCollector(DatabaseAnalyzer):
     def _column_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """One column's distribution. Frequencies only, never the values."""
         freqs = list(row.get("most_common_freqs") or [])
+        n_distinct = _number(row.get("n_distinct"))
         return {
             "table": f"{row['schemaname']}.{row['tablename']}",
             "column": row["attname"],
-            "n_distinct": _number(row.get("n_distinct")),
+            "n_distinct": n_distinct,
             "null_frac": _number(row.get("null_frac")),
             "correlation": _number(row.get("correlation")),
+            # Decoded here, where n_distinct meets a real row count; the
+            # cardinality writer consumes ndv without decoding again.
+            "ndv": _decode_ndv(n_distinct, _number(row.get("row_count"))),
+            "in_index_or_constraint": bool(row.get("in_index_or_constraint")),
+            "last_analyze": _text(row.get("last_analyze")),
+            "last_autoanalyze": _text(row.get("last_autoanalyze")),
             # The head of the distribution, and how much of the table the whole
             # list accounts for. The tail is what is dropped, not the signal.
             "top_frequencies": [_number(f) for f in freqs[:MCF_KEPT]],

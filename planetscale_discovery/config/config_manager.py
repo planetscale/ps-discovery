@@ -44,6 +44,10 @@ class WorkloadConfig:
     max_session_mb: int = 512
     statement_text_max_chars: int = 8192
     statement_row_limit: int = 20000
+    capture_log: bool = False
+    capture_log_seconds: int = 600
+    capture_log_source: str = "pgaudit"
+    capture_log_file: Optional[str] = None
 
 
 @dataclass
@@ -645,10 +649,19 @@ class ConfigManager:
         "database.workload.max_session_mb": (1, 1000000),
         "database.workload.statement_text_max_chars": (256, 1048576),
         "database.workload.statement_row_limit": (1, 1000000),
+        "database.workload.capture_log_seconds": (10, 3600),
     }
 
     # Values restricted to a fixed set, as dotted paths.
-    _ENUMS: Dict[str, Tuple[str, ...]] = {}
+    _ENUMS: Dict[str, Tuple[str, ...]] = {
+        "database.workload.capture_log_source": (
+            "pgaudit",
+            "pgaudit-json",
+            "stderr",
+            "log_fdw",
+            "auto",
+        ),
+    }
 
     def _resolve_path(self, path: str) -> Any:
         """Walk a dotted path into the loaded config. Returns None if absent."""
@@ -816,6 +829,12 @@ database:
   #     - public
   #   max_snapshots: 500        # 168 = one week hourly
   #   max_session_mb: 512       # Hard stop; the session refuses to grow past it
+  #   capture_log: false        # Also read the query log. Puts literal values
+  #                             # in the bundle; see docs/workload_capture.md
+  #   capture_log_seconds: 600  # log_fdw only: each collect watches this long
+  #                             # (10 to 3600). Keep the schedule longer
+  #   capture_log_source: pgaudit   # pgaudit, pgaudit-json, stderr, log_fdw
+  #   capture_log_file:         # The exported log, for every source but log_fdw
 """
 
             if "mysql" in engines:

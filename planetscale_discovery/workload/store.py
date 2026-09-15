@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 SNAPSHOT_GLOB = "snapshot-*.json.gz"
+BURST_GLOB = "burst-*.json.gz"
 SCHEMA_FILE = "schema.json"
 
 
@@ -24,6 +25,10 @@ class WorkloadStore:
     @property
     def schema_path(self) -> Path:
         return self.directory / SCHEMA_FILE
+
+    @property
+    def bursts_dir(self) -> Path:
+        return self.directory / "bursts"
 
     @property
     def output_dir(self) -> Path:
@@ -80,8 +85,54 @@ class WorkloadStore:
                 )
         return sorted(snapshots, key=lambda s: str(s.get("captured_at_server") or ""))
 
+    def append_burst(self, burst: Dict[str, Any]) -> Path:
+        """Write one burst artifact. Never modifies an existing file."""
+        if not burst.get("window_start") or not burst.get("window_end"):
+            raise ValueError("a burst must carry window_start and window_end")
+        self.bursts_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.bursts_dir, 0o700)
+        stamp = _burst_stamp(burst)
+        path = self.bursts_dir / f"burst-{stamp}.json.gz"
+        suffix = 1
+        while path.exists():
+            path = self.bursts_dir / f"burst-{stamp}-{suffix}.json.gz"
+            suffix += 1
+        _atomic_write(path, gzip.compress(json.dumps(burst, default=str).encode()))
+        return path
+
+    def burst_paths(self) -> List[Path]:
+        if not self.bursts_dir.is_dir():
+            return []
+        return sorted(self.bursts_dir.glob(BURST_GLOB))
+
+    def read_bursts(self) -> List[Dict[str, Any]]:
+        """Every stored burst, ordered by window_start. Does not filter by window."""
+        bursts = []
+        for path in self.burst_paths():
+            try:
+                with gzip.open(path, "rt", encoding="utf-8") as handle:
+                    burst = json.load(handle)
+            except Exception as e:  # pragma: no cover - corrupt file
+                burst = {"status": "unreadable", "path": str(path), "error": str(e)}
+            burst.setdefault("path", str(path))
+            bursts.append(burst)
+        return sorted(bursts, key=lambda b: str(b.get("window_start") or ""))
+
+    def log_files_read(self) -> List[str]:
+        """Log files an earlier burst already collected."""
+        seen = []
+        for burst in self.read_bursts():
+            for entry in burst.get("files_read") or []:
+                name = entry.get("file") if isinstance(entry, dict) else entry
+                if name:
+                    seen.append(str(name))
+        return seen
+
     def total_bytes(self) -> int:
-        return sum(path.stat().st_size for path in self.snapshot_paths())
+        return sum(
+            path.stat().st_size
+            for path in (*self.snapshot_paths(), *self.burst_paths())
+        )
 
     def status(self) -> Dict[str, Any]:
         """Session state, with no database connection."""
@@ -97,6 +148,7 @@ class WorkloadStore:
             "usable_snapshots": len(usable),
             "first_snapshot": min(stamps) if stamps else None,
             "last_snapshot": max(stamps) if stamps else None,
+            "bursts": len(self.burst_paths()),
             "total_bytes": self.total_bytes(),
             "ready_to_finalize": len(usable) >= 2,
         }
@@ -121,6 +173,14 @@ def _stamp(snapshot: Dict[str, Any]) -> str:
     """A YYYYMMDDTHHMMSS stamp from the server clock, else the client's."""
     raw = snapshot.get("captured_at_server") or snapshot.get("captured_at_client")
     digits = re.sub(r"\D", "", str(raw or ""))
+    if len(digits) < 14:
+        return "unknown"
+    return f"{digits[:8]}T{digits[8:14]}"
+
+
+def _burst_stamp(burst: Dict[str, Any]) -> str:
+    """A YYYYMMDDTHHMMSS stamp from the burst's own window_start."""
+    digits = re.sub(r"\D", "", str(burst.get("window_start") or ""))
     if len(digits) < 14:
         return "unknown"
     return f"{digits[:8]}T{digits[8:14]}"

@@ -1,6 +1,7 @@
 """Tests for the bundle writer."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +10,7 @@ from planetscale_discovery.workload.bundle import (
     render_cardinality,
     render_workload_sql,
     write_bundle,
+    write_cardinality,
 )
 
 SCHEMA = {
@@ -139,9 +141,12 @@ class TestWorkloadSql:
 
 
 class TestCardinality:
-    def test_nested_by_schema_then_table(self):
-        stats, _ = render_cardinality(SCHEMA)
-        assert stats == {"public": {"orders": 1000.0}}
+    def test_version_1_nested_by_schema_then_table(self):
+        doc, _ = render_cardinality(SCHEMA)
+        assert doc == {
+            "version": 1,
+            "tables": {"public": {"orders": {"rowCount": 1000.0}}},
+        }
 
     def test_negative_reltuples_becomes_zero(self):
         schema = {
@@ -154,8 +159,8 @@ class TestCardinality:
                 }
             ]
         }
-        stats, meta = render_cardinality(schema)
-        assert stats["public"]["t"] == 0.0
+        doc, meta = render_cardinality(schema)
+        assert doc["tables"]["public"]["t"] == {"rowCount": 0.0}
         assert meta["never_analyzed"] == ["public.t"]
 
     def test_partitioned_parents_are_excluded(self):
@@ -169,8 +174,8 @@ class TestCardinality:
                 }
             ]
         }
-        stats, meta = render_cardinality(schema)
-        assert stats == {}
+        doc, meta = render_cardinality(schema)
+        assert doc["tables"] == {}
         assert meta["excluded_non_ordinary_tables"] == 1
 
     def test_system_schemas_are_excluded(self):
@@ -184,19 +189,156 @@ class TestCardinality:
                 }
             ]
         }
-        assert render_cardinality(schema)[0] == {}
+        assert render_cardinality(schema)[0]["tables"] == {}
+
+    def test_column_stats_nest_under_their_table(self):
+        """The consumer's coverage rule: indexed/constrained columns only."""
+        columns = [
+            {
+                "table": "public.orders",
+                "column": "id",
+                "ndv": 1000.0,
+                "null_frac": 0.0,
+                "in_index_or_constraint": True,
+            },
+            {
+                "table": "public.orders",
+                "column": "note",
+                "ndv": 12.0,
+                "null_frac": 0.5,
+                "in_index_or_constraint": False,
+            },
+            # n_distinct was unknown, so the collector left this undecoded.
+            {
+                "table": "public.orders",
+                "column": "tenant_id",
+                "ndv": None,
+                "null_frac": 0.0,
+                "in_index_or_constraint": True,
+            },
+        ]
+        doc, meta = render_cardinality(SCHEMA, columns=columns)
+        assert doc["tables"]["public"]["orders"] == {
+            "rowCount": 1000.0,
+            "columns": {"id": {"NDV": 1000.0, "NullFrac": 0.0}},
+        }
+        assert meta["column_count"] == 1
+
+    def test_columns_key_is_absent_not_null_when_empty(self):
+        doc, _ = render_cardinality(SCHEMA, columns=[])
+        assert "columns" not in doc["tables"]["public"]["orders"]
+
+    def test_analyze_timestamps_are_visible_in_the_meta(self):
+        tables = {
+            "public.orders": {
+                "table": "public.orders",
+                "last_analyze": None,
+                "last_autoanalyze": "2026-09-10 02:00:00+00",
+            }
+        }
+        _, meta = render_cardinality(SCHEMA, tables=tables)
+        assert meta["last_analyzed"] == {"public.orders": "2026-09-10 02:00:00+00"}
+
+    def test_meta_names_no_table_the_document_excludes(self):
+        tables = {
+            "pg_catalog.pg_class": {
+                "table": "pg_catalog.pg_class",
+                "last_analyze": "2026-09-10 02:00:00+00",
+                "last_autoanalyze": None,
+            },
+            "other.events": {
+                "table": "other.events",
+                "last_analyze": "2026-09-10 02:00:00+00",
+                "last_autoanalyze": None,
+            },
+        }
+        _, meta = render_cardinality(SCHEMA, target_schemas=["public"], tables=tables)
+        assert meta["last_analyzed"] == {}
 
     def test_no_extra_keys_reach_the_file(self, tmp_path):
         """A stray field risks a strict parse on the consumer's side."""
         write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
         payload = json.loads((tmp_path / "plantest_counts.json").read_text())
-        assert set(payload) == {"public"}
+        assert set(payload) == {"version", "tables"}
+        for tables in payload["tables"].values():
+            for entry in tables.values():
+                assert set(entry) <= {"rowCount", "columns"}
 
     def test_both_filenames_are_written_identically(self, tmp_path):
         write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
         base = (tmp_path / "plantest_counts.json").read_text()
         card = (tmp_path / "plantest_counts-card.json").read_text()
         assert base == card
+
+
+# The input behind tests/fixtures/cardinality/plantest_counts.json: two schemas,
+# a never-analyzed table, a non-indexed column (excluded), and an undecodable
+# one (dropped). Regenerate the golden by writing this input and reviewing the diff.
+GOLDEN_SCHEMA = {
+    "table_analysis": [
+        {
+            "schema_name": "public",
+            "table_name": "users",
+            "table_type": "r",
+            "estimated_rows": 4242,
+        },
+        {
+            "schema_name": "public",
+            "table_name": "orders",
+            "table_type": "r",
+            "estimated_rows": 99,
+        },
+        {
+            "schema_name": "billing",
+            "table_name": "invoices",
+            "table_type": "r",
+            "estimated_rows": -1,
+        },
+    ],
+}
+GOLDEN_COLUMNS = [
+    {
+        "table": "public.users",
+        "column": "id",
+        "ndv": 4242.0,
+        "null_frac": 0.0,
+        "in_index_or_constraint": True,
+    },
+    {
+        "table": "public.users",
+        "column": "email",
+        "ndv": 4000.0,
+        "null_frac": 0.25,
+        "in_index_or_constraint": True,
+    },
+    {
+        "table": "public.users",
+        "column": "bio",
+        "ndv": 100.0,
+        "null_frac": 0.6,
+        "in_index_or_constraint": False,
+    },
+    {
+        "table": "public.orders",
+        "column": "data",
+        "ndv": None,
+        "null_frac": 0.0,
+        "in_index_or_constraint": True,
+    },
+]
+
+
+class TestCardinalityGolden:
+    def test_the_writer_matches_the_golden_byte_for_byte(self, tmp_path):
+        """The consumer's loader pins this format; a byte diff is a contract change."""
+        golden = (
+            Path(__file__).parent.parent
+            / "fixtures"
+            / "cardinality"
+            / "plantest_counts.json"
+        )
+        write_cardinality(tmp_path, GOLDEN_SCHEMA, columns=GOLDEN_COLUMNS)
+        assert (tmp_path / "plantest_counts.json").read_text() == golden.read_text()
 
 
 class TestBundleFiles:
@@ -458,6 +600,23 @@ class TestTheFinalizeSummaryPrints:
         assert "Bundle written to" in out
         assert "queries:" in out
         assert "schema:" in out
+
+    def test_the_logging_reset_prints_when_no_window_was_read(self, tmp_path, capsys):
+        """The bug: the reminder was gated on a burst landing, so a capture
+        whose log could never be read left the logging on and said nothing."""
+        from planetscale_discovery.workload.cli_workload import _print_summary
+
+        summary = write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
+        assert not (summary.get("burst") or {}).get("used")
+        _print_summary(summary, tmp_path, capture_log=True)
+        assert "RESET pgaudit.log" in capsys.readouterr().out
+
+    def test_the_logging_reset_stays_quiet_with_capture_log_off(self, tmp_path, capsys):
+        from planetscale_discovery.workload.cli_workload import _print_summary
+
+        summary = write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
+        _print_summary(summary, tmp_path)
+        assert "RESET pgaudit.log" not in capsys.readouterr().out
 
 
 class TestAnIdleDatabaseSaysSo:

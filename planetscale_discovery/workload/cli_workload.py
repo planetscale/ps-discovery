@@ -7,6 +7,7 @@ lock. Nothing here writes into the discovery output.
 
 import argparse
 import json
+import signal
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -27,6 +28,11 @@ EXIT_CAP_REACHED = 3
 EXIT_CAPABILITY = 5
 
 WORKLOAD_COMMANDS = ("init", "collect", "finalize", "status")
+
+SOURCE_LIVE = "log_fdw"
+SOURCE_LIVE_ALIAS = "auto"
+SOURCE_PGAUDIT_JSON = "pgaudit-json"
+SOURCE_STDERR = "stderr"
 
 # The reuse boundary: the schema comes from the existing analyzer, not a new query.
 CATALOG_MODULES = ["schema"]
@@ -51,16 +57,26 @@ Typical use, over two or three days:
 
   ps-discovery workload status   --session ./workload-session  (no connection)
 
+  ps-discovery workload init --check                 (reports, changes nothing)
+  ps-discovery workload init --cleanup               (drops what a kill left)
+
 ./config.yaml is found on its own. Pass --config only for a different file.
 
 --session names a directory this tool creates and owns, holding the snapshots
 and the captured schema. Give every command the same one. Name it whatever you
-like. It is safe to delete once you have the bundle, and nothing persists on
-the server.
+like. It is safe to delete once you have the bundle.
 
 Each 'collect' takes one snapshot and exits; it does no scheduling of its own.
 Two snapshots are the minimum, since a window needs two readings to difference.
 'init' prints a crontab line that collects hourly.
+
+Set 'capture_log: true' under database.workload to also read the server's query
+log, which carries the transaction shapes and the literal values that
+pg_stat_statements does not record. The default source is pgAudit: you export
+the window and name the file in capture_log_file. On RDS and Aurora,
+capture_log_source: log_fdw reads the log over this connection instead, and
+each collect then watches it for capture_log_seconds. 'init --check' reports
+whether this server can supply it.
 """
 
 
@@ -134,10 +150,11 @@ def add_workload_parser(subparsers) -> None:
         _add_run_args(command)
         command.add_argument(
             "--session",
-            required=True,
+            required=name != "init",
             help=(
-                "Directory holding this capture's snapshots and schema, created "
-                "by 'workload init'. Give every command the same one."
+                "Directory holding this capture's snapshots, any query log it "
+                "read, and the schema, created by 'workload init'. Give every "
+                "command the same one."
             ),
         )
         if name != "status":
@@ -145,6 +162,30 @@ def add_workload_parser(subparsers) -> None:
 
         group = command.add_argument_group("Workload Options")
         if name == "init":
+            group.add_argument(
+                "--check",
+                action="store_true",
+                default=argparse.SUPPRESS,
+                help=(
+                    "Report what this server can supply and exit. Creates no "
+                    "session and changes nothing. Needs no --session."
+                ),
+            )
+            group.add_argument(
+                "--json",
+                action="store_true",
+                default=argparse.SUPPRESS,
+                help="With --check, emit the report as JSON, for sweeping an estate",
+            )
+            group.add_argument(
+                "--cleanup",
+                action="store_true",
+                default=argparse.SUPPRESS,
+                help=(
+                    "Drop the objects an interrupted log_fdw collect left on "
+                    "the server, then exit. Needs no --session."
+                ),
+            )
             group.add_argument(
                 "--force",
                 action="store_true",
@@ -211,7 +252,10 @@ def _workload_config(config) -> WorkloadConfig:
     """The workload block, or its defaults for a config that predates it."""
     # Type-checked, or a stub config answers getattr for every field.
     candidate = getattr(getattr(config, "database", None), "workload", None)
-    return candidate if isinstance(candidate, WorkloadConfig) else WorkloadConfig()
+    workload = candidate if isinstance(candidate, WorkloadConfig) else WorkloadConfig()
+    if workload.capture_log_source == SOURCE_LIVE_ALIAS:
+        workload.capture_log_source = SOURCE_LIVE
+    return workload
 
 
 def _connect(config, logger):
@@ -300,6 +344,17 @@ def _new_collector(connection, config, logger) -> WorkloadCollector:
 
 
 def _init(args, config, logger) -> int:
+    if getattr(args, "cleanup", False):
+        return _cleanup(args, config, logger)
+    if getattr(args, "check", False):
+        return _check(args, config, logger)
+    if not getattr(args, "session", None):
+        logger.error(
+            "give --session to initialize a capture, or --check to report on "
+            "the server without creating one."
+        )
+        return EXIT_USAGE
+
     store = WorkloadStore(args.session)
     if store.exists() and not getattr(args, "force", False):
         logger.error(
@@ -361,6 +416,10 @@ def _init(args, config, logger) -> int:
                 detail += ". Continuing because --allow-replica was given"
             logger.warning(f"{label(gap['code'])}: {detail}")
 
+        workload = _workload_config(config)
+        if workload.capture_log:
+            _report_log_readiness(connection, workload, logger)
+
         store.create()
         store.write_schema(_collect_schema(connection, config, logger))
 
@@ -371,10 +430,46 @@ def _init(args, config, logger) -> int:
             f"{snapshot['status']}, {len(snapshot['statements'])} statements, "
             f"{len(snapshot['tables'])} tables"
         )
-        _print_cron_hint(args.session)
+        _print_cron_hint(args.session, workload)
         return EXIT_OK
     finally:
         connection.close()
+
+
+def _report_log_readiness(connection, workload, logger) -> None:
+    """Say at init whether this server can supply what capture_log asks for."""
+    if workload.capture_log_source != SOURCE_LIVE:
+        if not workload.capture_log_file:
+            logger.warning(
+                f"capture_log is on and capture_log_source is "
+                f"'{workload.capture_log_source}', which reads an exported "
+                "log, but capture_log_file names no file. Every collect will "
+                "stop with a usage error until it does. Export the window "
+                "first; see docs/workload_capture.md."
+            )
+            return
+        logger.info(
+            f"capture_log is on, reading {workload.capture_log_source} records "
+            f"from {workload.capture_log_file}"
+        )
+        return
+
+    from planetscale_discovery.workload.burst import LogCaptureProbe
+
+    log = LogCaptureProbe(connection, logger=logger).run()
+    if log["tiers"]["collectable_over_sql"]:
+        logger.info(
+            "capture_log is on and this server's log is readable over this "
+            f"connection; each collect will watch it for "
+            f"{workload.capture_log_seconds}s"
+        )
+        return
+    logger.warning(
+        "capture_log is on, but this server's log cannot be read over this "
+        "connection, so every collect will record a snapshot only. Run "
+        "'workload init --check' for what would have to change, or export the "
+        "log and set capture_log_source and capture_log_file."
+    )
 
 
 def _collect(args, config, logger) -> int:
@@ -404,7 +499,29 @@ def _collect(args, config, logger) -> int:
         )
         return EXIT_CAP_REACHED
 
-    connection = _connect(config, logger)
+    from_file = workload.capture_log and workload.capture_log_source != SOURCE_LIVE
+    _snapshot(store, config, logger, optional=from_file)
+
+    # The snapshot is stored, so an unreadable log is never a non-zero exit.
+    if from_file:
+        return _collect_exported_log(store, workload, logger)
+    if workload.capture_log:
+        _capture_log_window(store, config, workload, logger)
+    return EXIT_OK
+
+
+def _snapshot(store, config, logger, optional: bool) -> None:
+    """Append one snapshot. When optional, a dead connection is a warning."""
+    try:
+        connection = _connect(config, logger)
+    except Exception as exc:
+        if not optional:
+            raise
+        logger.warning(
+            f"no database connection, so this collect records the query log "
+            f"only and takes no snapshot: {exc}"
+        )
+        return
     try:
         snapshot = _new_collector(connection, config, logger).collect()
         path = store.append_snapshot(snapshot)
@@ -416,9 +533,148 @@ def _collect(args, config, logger) -> int:
             f"{len(snapshot['tables'])} tables, "
             f"{len(snapshot['indexes'])} indexes, {snapshot.get('duration_ms')}ms"
         )
-        return EXIT_OK
     finally:
         connection.close()
+
+
+def _capture_log_window(store, config, workload, logger) -> None:
+    """Watch the server's log for capture_log_seconds, then read that window."""
+    from planetscale_discovery.workload.burst import STATUS_FAILED, BurstCollector
+
+    seconds = workload.capture_log_seconds
+    since = _utc_now()
+    logger.info(f"watching the query log for {seconds}s")
+    if _wait(seconds):
+        logger.warning(
+            "interrupted, so the log window is shorter than "
+            f"{seconds}s. Storing what it holds"
+        )
+    until = _utc_now()
+
+    try:
+        connection = _connect(config, logger)
+    except Exception as exc:
+        logger.warning(f"could not reconnect to read the query log: {exc}")
+        return
+    try:
+        burst = BurstCollector(
+            connection,
+            config=vars(workload),
+            logger=logger,
+            already_read=store.log_files_read(),
+            since=since,
+            until=until,
+        ).collect()
+    except Exception as exc:
+        logger.warning(f"the query log could not be read: {exc}")
+        return
+    finally:
+        connection.close()
+
+    if burst["status"] == STATUS_FAILED:
+        logger.warning(
+            "the query log could not be read, so this collect recorded a "
+            "snapshot only. Run 'workload init --check' for what this server "
+            "would need; log_fdw and csvlog are the usual gaps"
+        )
+        for warning in burst.get("warnings") or []:
+            logger.warning(f"  {warning}")
+        return
+    _report_burst(burst, store.append_burst(burst), logger)
+
+
+def _collect_exported_log(store, workload, logger) -> int:
+    """Read a log the operator exported. Opens no database connection."""
+    from planetscale_discovery.workload.burst import (
+        ObjectLoggingError,
+        collect_pgaudit_file,
+        collect_stderr_file,
+    )
+
+    path = workload.capture_log_file
+    if not path:
+        logger.error(
+            f"capture_log_source is '{workload.capture_log_source}', which "
+            "reads an exported log, but capture_log_file names no file."
+        )
+        return EXIT_USAGE
+
+    try:
+        if workload.capture_log_source == SOURCE_STDERR:
+            burst = collect_stderr_file(
+                path, already_read=store.log_files_read(), logger=logger
+            )
+        else:
+            burst = collect_pgaudit_file(
+                path,
+                json_export=workload.capture_log_source == SOURCE_PGAUDIT_JSON,
+                already_read=store.log_files_read(),
+                logger=logger,
+            )
+    except ObjectLoggingError as exc:
+        logger.warning(f"{path} cannot be used, so no log window was recorded: {exc}")
+        return EXIT_OK
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            f"could not read {path}, so this collect recorded a snapshot "
+            f"only: {exc}"
+        )
+        return EXIT_OK
+
+    for warning in burst.get("warnings") or []:
+        logger.warning(warning)
+    # Storing a burst with no file read reports a used window covering nothing.
+    if not burst.get("files_read"):
+        logger.warning(
+            f"no new log records were read: {path} was already read in this "
+            "session, and re-reading it would double every count."
+        )
+        return EXIT_OK
+    _report_burst(burst, store.append_burst(burst), logger)
+    return EXIT_OK
+
+
+def _report_burst(burst: Dict[str, Any], path, logger) -> None:
+    summary = burst.get("sessions") or {}
+    logger.info(
+        f"query log {path.name}: {summary.get('statements', 0)} statements "
+        f"across {summary.get('sessions', 0)} sessions, "
+        f"{summary.get('closed_transactions', 0)} complete transactions"
+    )
+    if summary.get("open_transactions"):
+        logger.warning(
+            f"{summary['open_transactions']} transaction(s) were still open at "
+            "the edge of the window and are marked incomplete. A shape missing "
+            "its write reads as read-only, so they are not counted as complete."
+        )
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _wait(seconds: int) -> bool:
+    """Sleep, returning True when a signal cut the wait short."""
+    stopped = []
+
+    def stop(signum, frame):
+        stopped.append(signum)
+
+    previous = [
+        (number, signal.signal(number, stop))
+        for number in (signal.SIGINT, signal.SIGTERM)
+    ]
+    try:
+        deadline = time.monotonic() + seconds
+        while not stopped:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1.0, remaining))
+    finally:
+        for number, handler in previous:
+            signal.signal(number, handler)
+    return bool(stopped)
 
 
 def _finalize(args, config, logger) -> int:
@@ -452,12 +708,15 @@ def _finalize(args, config, logger) -> int:
         store.read_schema(),
         collector_version=__version__,
         target_schemas=workload.schemas or getattr(config.database, "schemas", None),
+        bursts=store.read_bursts(),
     )
-    _print_summary(manifest, out_dir)
+    _print_summary(manifest, out_dir, capture_log=workload.capture_log)
     return EXIT_OK
 
 
-def _print_summary(manifest: Dict[str, Any], out_dir: Path) -> None:
+def _print_summary(
+    manifest: Dict[str, Any], out_dir: Path, capture_log: bool = False
+) -> None:
     print("")
     print(f"Bundle written to {out_dir}")
     if manifest["covered_seconds"]:
@@ -483,6 +742,23 @@ def _print_summary(manifest: Dict[str, Any], out_dir: Path) -> None:
             f"  ! {manifest['schema']['parse_failures']} schema statement(s) "
             "could not be re-read and were left out"
         )
+    burst = manifest.get("burst") or {}
+    if burst.get("used") or burst.get("outside_window"):
+        print(
+            f"  query log:      {burst['used']} window(s) used, "
+            f"{burst['outside_window']} outside this capture"
+        )
+    # Printed even when no window was read: the logging is on either way.
+    if capture_log:
+        print("")
+        print("  The capture is over, so turn the logging back off:")
+        print("")
+        print("    ALTER ROLE app RESET pgaudit.log;")
+        print("    ALTER ROLE app RESET pgaudit.log_parameter;")
+        print("")
+        print("  Without pgAudit, reset log_min_duration_statement instead,")
+        print("  and run 'workload init --cleanup' to drop the objects a")
+        print("  log_fdw capture creates on the server.")
     if manifest["caveats"]:
         print("")
         print("  Worth knowing about these numbers:")
@@ -498,6 +774,140 @@ def _print_summary(manifest: Dict[str, Any], out_dir: Path) -> None:
     print(f"See {out_dir / 'README.md'} for what the bundle holds.")
 
 
+def _cleanup(args, config, logger) -> int:
+    """Drop the log_fdw objects an interrupted collect left behind."""
+    from planetscale_discovery.workload.burst import drop_leftovers
+
+    connection = _connect(config, logger)
+    try:
+        result = drop_leftovers(connection, logger=logger)
+    finally:
+        connection.close()
+
+    print("")
+    if not result["found"]:
+        print("Nothing to clean up. This server holds no objects from a capture.")
+        print("")
+        _print_customer_cleanup()
+        return EXIT_OK
+
+    for item in result["dropped"]:
+        print(f"dropped {item['kind']} {item['name']}")
+    for item in result["failed"]:
+        print(f"could not drop {item['kind']} {item['name']}: {item['why']}")
+    print("")
+    print("The log_fdw extension is left installed. Drop it with")
+    print("DROP EXTENSION log_fdw if you do not want it.")
+    print("")
+    _print_customer_cleanup()
+    return EXIT_USAGE if result["failed"] else EXIT_OK
+
+
+def _print_customer_cleanup() -> None:
+    """Print the logging reset, which this tool never runs itself."""
+    print("Turn the statement logging back off in your own console:")
+    print("")
+    print("  ALTER ROLE app RESET pgaudit.log;")
+    print("  ALTER ROLE app RESET pgaudit.log_parameter;")
+    print("")
+    print("Without pgAudit, reset log_min_duration_statement instead. Then")
+    print("confirm the log volume stops growing. See")
+    print("docs/workload_capture.md#turn-the-logging-back-off.")
+    print("")
+
+
+def _check(args, config, logger) -> int:
+    """Report what this server can supply. Creates nothing, changes nothing."""
+    from planetscale_discovery.workload.burst import LogCaptureProbe, find_leftovers
+
+    connection = _connect(config, logger)
+    try:
+        capability = CapabilityProbe(connection, logger=logger).run()
+        log = LogCaptureProbe(connection, logger=logger).run()
+        leftovers = find_leftovers(connection, logger=logger)
+    finally:
+        connection.close()
+
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "capability": capability,
+                    "log_capture": log,
+                    "leftovers": leftovers,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return EXIT_OK
+
+    server = capability["server"]
+    print("")
+    print(
+        f"server:    PostgreSQL {server['version_num']} on {log['provider']}, "
+        f"database {server['database']}, role {server['role']}"
+    )
+    pgss = capability["pg_stat_statements"]
+    print(f"aggregate: pg_stat_statements is {pgss['state']}")
+    if pgss["state"] != "ok":
+        print(f"           -> {pgss['remediation']}")
+
+    print("")
+    print("Query log capture: what this server can supply today")
+    for name, label_text in (
+        ("transaction_shapes", "which statements share a transaction"),
+        ("unbiased_transactions", "whole transactions, not sampled statements"),
+        ("access_skew", "the values queries carried"),
+        ("collectable_over_sql", "the log readable over this connection"),
+        ("coverage_against_aggregate", "log coverage measurable against totals"),
+    ):
+        mark = "yes" if log["tiers"][name] else "no "
+        print(f"  {mark}  {label_text}")
+
+    missing = [
+        (name, req) for name, req in log["requirements"].items() if not req["available"]
+    ]
+    if missing:
+        print("")
+        print("What would have to change")
+        for name, req in missing:
+            print(f"  {name}: {req['detail']}")
+            print(f"    -> {req['remediation']}")
+
+    if log["notes"]:
+        print("")
+        print("Worth knowing")
+        for note in log["notes"]:
+            print(f"  ! {note['code']}: {note['detail']}")
+
+    if log["retention"]["known"]:
+        print("")
+        print(f"Retention: {log['retention']['detail']}")
+
+    pgaudit = log["pgaudit"]
+    print("")
+    print(f"pgAudit:   {pgaudit['state']} (the default source)")
+    for name, value in pgaudit["settings"].items():
+        if value is not None:
+            print(f"           {name} = {value}")
+    if pgaudit["recommendation"]:
+        print(f"           -> {pgaudit['recommendation']}")
+
+    if leftovers:
+        print("")
+        print("Leftovers: an interrupted capture left these on the server")
+        for item in leftovers:
+            print(f"           {item['kind']} {item['name']}")
+        print("           -> run 'workload init --cleanup' to drop them")
+
+    print("")
+    print("This command changed nothing. Every setting above is yours to")
+    print("change, in your own console.")
+    print("")
+    return EXIT_OK
+
+
 def _status(args, logger) -> int:
     store = WorkloadStore(args.session)
     status = store.status()
@@ -508,7 +918,7 @@ def _status(args, logger) -> int:
     return EXIT_OK
 
 
-def _print_cron_hint(session: str) -> None:
+def _print_cron_hint(session: str, workload: WorkloadConfig) -> None:
     """Print a ready-to-paste crontab line."""
     # cron starts in the home directory, so a relative --session and the
     # auto-discovery of ./config.yaml both need the cd to resolve.
@@ -516,9 +926,22 @@ def _print_cron_hint(session: str) -> None:
     command = (
         "./ps-discovery" if (workdir / "ps-discovery").exists() else "ps-discovery"
     )
+    watching = workload.capture_log and workload.capture_log_source == SOURCE_LIVE
     # Minute 17, not the top of the hour when every other agent wakes up.
     print("")
-    print("Each 'collect' takes one snapshot and exits. To collect hourly, add")
+    if watching:
+        print(
+            f"Each 'collect' takes one snapshot, then watches the query log for "
+            f"{workload.capture_log_seconds}s. To collect hourly, add"
+        )
+    elif workload.capture_log:
+        print(
+            f"Each 'collect' takes one snapshot and reads "
+            f"{workload.capture_log_file}. Point that at the window you exported"
+        )
+        print("before each run. To collect hourly, add")
+    else:
+        print("Each 'collect' takes one snapshot and exits. To collect hourly, add")
     print("this to the crontab of a user that can write the session directory:")
     print("")
     print(
@@ -530,5 +953,12 @@ def _print_cron_hint(session: str) -> None:
     print("difference. Hourly for two or three days is the intended shape, and")
     print("it should span a peak: a workload measured only at 03:00 is not the")
     print("one you have to shard.")
+    if watching:
+        print("")
+        print(
+            f"Keep the interval longer than capture_log_seconds "
+            f"({workload.capture_log_seconds}s), or the next collect starts"
+        )
+        print("before this one returns.")
     print("")
     print(f"Then: {command} workload finalize --session {session}")

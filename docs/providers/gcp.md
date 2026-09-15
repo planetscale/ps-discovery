@@ -483,6 +483,110 @@ silently drop one.
 so run it before you change anything. See
 [Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
 
+### Capturing transaction shapes with pgAudit
+
+Beyond the query counts above, the capture can also read the server's own
+query log, to see which statements ran in the same transaction and the literal
+values they carried. See
+[Capturing transaction shapes and values](../workload_capture.md#capturing-transaction-shapes-and-values)
+for what it collects and why you might want it. Cloud SQL and AlloyDB have no
+SQL path to the server's log, so they go through pgAudit instead. What follows
+is enable-and-export for each engine.
+
+#### Permissions for log capture
+
+The discovery role above is read-only, so it does not cover this. Enabling the
+logging and exporting the entries are yours to do:
+
+| Task | Permissions | Predefined role |
+| --- | --- | --- |
+| Set the instance flag and restart | `cloudsql.instances.update`, `cloudsql.instances.restart` | `roles/cloudsql.admin` |
+| The same on AlloyDB | `alloydb.instances.update`, `alloydb.clusters.update` | `roles/alloydb.admin` |
+| Turn Data Access audit logs on | Edit the project's audit configuration | `roles/owner`, or a role with `resourcemanager.projects.setIamPolicy` |
+| Read the exported entries | `logging.logEntries.list` **and** `logging.privateLogEntries.list` | `roles/logging.viewer` plus `roles/logging.privateLogViewer` |
+
+`logging.privateLogEntries.list` is the one that gets missed. pgAudit records
+arrive as Data Access audit logs, and Logs Explorer returns nothing for them
+with only `roles/logging.viewer`, which looks the same as a capture window with
+no traffic in it.
+
+Grant these for the capture and remove them afterwards. In the database you
+also need a role that can run `CREATE EXTENSION pgaudit` and
+`ALTER ROLE app SET ...`, which on Cloud SQL means `cloudsqlsuperuser`. The
+capture role itself still needs only `pg_monitor`.
+
+#### Cloud SQL
+
+**Enable once:** set the `cloudsql.enable_pgaudit` database flag on the
+instance, restart it, then `CREATE EXTENSION pgaudit;`. After that, a capture
+window is two `ALTER ROLE` statements and a reset, with no further restart.
+
+**Export the log:** audit records go to Cloud Logging as structured
+`PgAuditEntry` payloads, sent as **Data Access audit logs**. Those are off by
+default and need a one-time, project-level opt-in: IAM & Admin -> Audit Logs
+-> Cloud SQL -> enable Data Read and Data Write. Until that is on, the
+instance records the audit lines but nothing reaches Cloud Logging.
+
+In Logs Explorer, query the capture window:
+
+```
+resource.type="cloudsql_database"
+resource.labels.database_id="PROJECT:INSTANCE"
+jsonPayload."@type"="type.googleapis.com/google.cloud.sql.audit.v1.PgAuditEntry"
+timestamp>="..." timestamp<="..."
+```
+
+Export with **Download results** (JSON) in Logs Explorer, or:
+
+```bash
+gcloud logging read 'QUERY_FROM_ABOVE' --format=json --freshness=WINDOW > pgaudit-capture.json
+```
+
+For a very large export, stream one entry per line instead:
+
+```bash
+gcloud logging read 'QUERY_FROM_ABOVE' --format=json --freshness=WINDOW | jq -c '.[]' > pgaudit-capture.jsonl
+```
+
+Cloud SQL splits a long statement across several log entries; the tool
+reassembles them, so export the entries as they are rather than joining them
+yourself.
+
+**Read it:** name the file in `config.yaml`, then run the usual `collect`.
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_source: pgaudit-json
+    capture_log_file: pgaudit-capture.jsonl
+```
+
+    ps-discovery workload collect --session ./workload-session
+
+Or send the file to your PlanetScale migration engineer, the way you would
+[deliver a bundle](../workload_capture.md#deliver-the-bundle).
+
+#### AlloyDB
+
+**Enable once:** set the `alloydb.enable_pgaudit` flag on the primary
+instance, restart it, then `CREATE EXTENSION pgaudit;`.
+
+**Export the log:** the same Cloud Logging path as Cloud SQL, with the
+AlloyDB resource type:
+
+```
+resource.type="alloydb.googleapis.com/Instance"
+jsonPayload."@type"="type.googleapis.com/google.cloud.sql.audit.v1.PgAuditEntry"
+timestamp>="..." timestamp<="..."
+```
+
+The payload is the same `PgAuditEntry`, and chunking is reassembled by the
+tool the same way.
+
+**Read it:** the same `capture_log_source: pgaudit-json` config block as
+Cloud SQL, above.
+
 ## Additional Resources
 
 - [Cloud SQL Documentation](https://cloud.google.com/sql/docs)

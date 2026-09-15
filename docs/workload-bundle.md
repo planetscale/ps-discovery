@@ -36,12 +36,19 @@ a customer.
 | --- | --- |
 | `workload.sql` | the query log: one statement per record, `;`-terminated, with `-- neki:` metric headers |
 | `schema.sql` | sequences, tables, indexes, constraints, views, and foreign keys last |
-| `plantest_counts.json` | row count per table |
+| `plantest_counts.json` | row count per table, plus NDV and null fraction for indexed and constrained columns |
 | `plantest_counts-card.json` | identical bytes, under the second name the planning tools open |
 | `manifest.json` | when the capture ran, and over which intervals |
 | `column_stats.json` | per-column value distribution, for judging a shard key |
 | `table_activity.json` | writes, index use, size and growth per table, over the measured window |
 | `README.md` | a summary of what was collected, regenerated for each bundle |
+
+Two more files appear only when the query log was captured:
+
+| File | Contents |
+| --- | --- |
+| `burst.csv` | the query log: every statement the server logged, **with literal values in the `parameters` column**, the one file in the bundle that holds real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
+| `coverage.json` | how much of the aggregate workload the log windows observed, and whether they landed on ordinary traffic |
 
 The first four are the planning tools' input. `manifest.json` and
 `column_stats.json` are read by the migration tooling rather than the planning
@@ -276,22 +283,26 @@ most of the size of the file this replaces.
 
 ## Cardinality format
 
-The file is a JSON object nested by schema, then table, then row count as a
-number.
-
     {
-      "public": { "orders": 812004993, "order_items": 3910244001 },
-      "billing": { "invoices": 90210 }
+      "version": 1,
+      "tables": {
+        "public": {
+          "users": {
+            "rowCount": 4242,
+            "columns": { "email": { "NDV": 4000, "NullFrac": 0.25 } }
+          },
+          "orders": { "rowCount": 99 }
+        }
+      }
     }
 
-Row counts come from `reltuples`, which is PostgreSQL's own estimate for each
-table rather than an exact count. This tool never runs `ANALYZE` to refresh them. `finalize` names
-any table that has never been analyzed, whose estimate you should not rely on.
-
-Four behaviours match the consumer exactly. The file holds ordinary tables only,
-so it excludes partitioned parents and materialized views. It normalizes a
-negative `reltuples` to `0`. It excludes system schemas. It carries no extra
-keys, because a stray field risks a strict parse.
+`tables` nests by schema, then table. `rowCount` is PostgreSQL's `reltuples`
+estimate (never refreshed by this tool; `finalize` names never-analyzed
+tables, which report 0 rows and no columns). `columns` appears only for
+columns in an index or a PK/FK/unique constraint; `NDV` is `n_distinct`
+decoded (a negative value is a fraction of the rows) and floored at 1, and a
+column with an unknown or undecodable count is dropped. Ordinary tables only,
+no extra keys.
 
 Both filenames carry identical bytes, because the planning tools open the
 `-card` name.
@@ -305,7 +316,7 @@ template deduplication. The test also compares this tool's cardinality file
 against the same figures read independently from the database.
 
 Every other test asserts that the output matches a format documented in this
-repository, which cannot catch a misreading of the consumer. Run the contract
+repository, which cannot catch a misreading by the planning tools. Run the contract
 test before you trust a release. It needs the planner binary and a database, and
 skips without either:
 
