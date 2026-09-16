@@ -242,6 +242,36 @@ class TestMySQLSchemaAnalyzer:
         assert len(analyzer.errors) == 1
 
     # ---------------------------------------------------------------
+    # _get_db_object_counts - ONLY_FULL_GROUP_BY compatibility
+    # ---------------------------------------------------------------
+
+    def test_db_object_counts_aggregates_joined_counts(self, analyzer):
+        """Joined counts must be aggregated to satisfy ONLY_FULL_GROUP_BY.
+
+        The query groups by t.table_schema, so the routine/trigger counts
+        pulled in from the LEFT JOIN subqueries are not functionally
+        dependent on the grouping column as far as the server is concerned.
+        Selecting them bare fails with error 1055 under ONLY_FULL_GROUP_BY,
+        which is in the default sql_mode on MySQL 5.7+ and 8.0+.
+        """
+        with patch.object(analyzer, "execute_query", return_value=[]) as execute_query:
+            analyzer._get_db_object_counts()
+
+        query = execute_query.call_args.args[0]
+        assert "MAX(r.routine_count)" in query
+        assert "MAX(tr.trigger_count)" in query
+
+    def test_db_object_counts_error_records_gap(self, analyzer):
+        """Failures should be recorded as analysis gaps, not raised."""
+        with patch.object(
+            analyzer, "execute_query", side_effect=Exception("connection lost")
+        ):
+            result = analyzer._get_db_object_counts()
+
+        assert result == []
+        assert len(analyzer.errors) == 1
+
+    # ---------------------------------------------------------------
     # _get_index_analysis - cardinality and prefix_lengths
     # ---------------------------------------------------------------
 
