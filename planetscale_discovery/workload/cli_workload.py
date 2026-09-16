@@ -231,13 +231,6 @@ def handle_workload(args, config, logger) -> int:
         )
         return EXIT_USAGE
 
-    if not _workload_config(config).enabled:
-        logger.error(
-            "workload capture is disabled. Set database.workload.enabled: "
-            "true in the config file to run this command."
-        )
-        return EXIT_USAGE
-
     if command == "init":
         return _init(args, config, logger)
     if command == "collect":

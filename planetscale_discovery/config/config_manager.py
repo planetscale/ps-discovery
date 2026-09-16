@@ -35,7 +35,6 @@ class WorkloadConfig:
     same server; a capture against a different host needs its own config file.
     """
 
-    enabled: bool = False
     # None means every non-system schema, matching the rest of the tool. An
     # explicit list narrows it.
     schemas: Optional[List[str]] = None
@@ -824,7 +823,6 @@ database:
   # any statistics.
   # See docs/workload_capture.md before enabling this on a production primary.
   # workload:
-  #   enabled: false
   #   schemas:                  # Leave unset for every non-system schema
   #     - public
   #   max_snapshots: 500        # 168 = one week hourly
