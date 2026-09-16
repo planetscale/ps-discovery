@@ -275,6 +275,16 @@ Nothing here runs during a normal discovery run, and nothing here writes into
 the discovery output. `./setup.sh` installs what the flow needs, so there is
 nothing extra to install.
 
+Capture is off until you switch it on. Set `enabled: true` under
+`database.workload` in your config file, or every command below stops with exit
+code 1 and says so:
+
+```yaml
+database:
+  workload:
+    enabled: true
+```
+
 ```bash
 # 1. Prepare a session directory and take the first snapshot
 ./ps-discovery workload init --session ./workload-session
