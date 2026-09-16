@@ -23,6 +23,7 @@ class MySQLReplicationAnalyzer(DatabaseAnalyzer):
 
     def _get_replica_status(self) -> Dict[str, Any]:
         """Get replica status. Try modern syntax first, fall back for older versions."""
+        failures: List[str] = []
         # Try SHOW REPLICA STATUS (MySQL 8.0.22+), then SHOW SLAVE STATUS
         for query in ["SHOW REPLICA STATUS", "SHOW SLAVE STATUS"]:
             try:
@@ -41,13 +42,22 @@ class MySQLReplicationAnalyzer(DatabaseAnalyzer):
                         status[col] = str(val) if val is not None else None
                     return status
                 return {}
-            except Exception:
+            except Exception as e:
+                failures.append(f"{query}: {e}")
                 continue
 
+        # Every syntax raised: the empty dict below would otherwise read as
+        # "not a replica" when the real cause is a rejected query.
+        if failures:
+            self.add_error(
+                "Failed to get replica status, no supported syntax could be run "
+                f"({'; '.join(failures)})"
+            )
         return {}
 
     def _get_binary_logs(self) -> List[Dict[str, Any]]:
         """Get binary log files. Try modern syntax first."""
+        failures: List[str] = []
         for query in ["SHOW BINARY LOGS", "SHOW MASTER LOGS"]:
             try:
                 cursor = self.connection.cursor()
@@ -69,13 +79,22 @@ class MySQLReplicationAnalyzer(DatabaseAnalyzer):
                         }
                     )
                 return logs
-            except Exception:
+            except Exception as e:
+                failures.append(f"{query}: {e}")
                 continue
 
+        # Every syntax raised: the empty list below would otherwise read as
+        # "no binary logs" when the real cause is a rejected query.
+        if failures:
+            self.add_error(
+                "Failed to get binary logs, no supported syntax could be run "
+                f"({'; '.join(failures)})"
+            )
         return []
 
     def _get_binary_log_status(self) -> Dict[str, Any]:
         """Get current binary log position. Try modern syntax first."""
+        failures: List[str] = []
         for query in ["SHOW BINARY LOG STATUS", "SHOW MASTER STATUS"]:
             try:
                 cursor = self.connection.cursor()
@@ -92,9 +111,17 @@ class MySQLReplicationAnalyzer(DatabaseAnalyzer):
                         for i, col in enumerate(columns)
                     }
                 return {}
-            except Exception:
+            except Exception as e:
+                failures.append(f"{query}: {e}")
                 continue
 
+        # Every syntax raised: the empty dict below would otherwise read as
+        # "binary logging disabled" when the real cause is a rejected query.
+        if failures:
+            self.add_error(
+                "Failed to get binary log status, no supported syntax could be run "
+                f"({'; '.join(failures)})"
+            )
         return {}
 
     def _get_binlog_retention(self) -> Dict[str, Any]:
