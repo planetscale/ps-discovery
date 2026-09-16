@@ -481,7 +481,7 @@ silently drop one.
 
 `ps-discovery workload init` reports the exact state and prints the remediation,
 so run it before you change anything. See
-[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+[Workload Capture](../workload_capture.md#3-enable-pg_stat_statements).
 
 ### Capturing transaction shapes with pgAudit
 
