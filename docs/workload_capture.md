@@ -24,7 +24,22 @@ Work through this list once. `workload init` checks every item and tells you
 what is missing, so run it early: it is a read-only check and it is safe to run
 before you commit to a capture.
 
-### 1. Create a role for the capture
+### 1. Switch the capture on
+
+Capture is off by default, so the flow cannot start by accident. Set
+`enabled: true` under `database.workload` in your config file:
+
+```yaml
+database:
+  workload:
+    enabled: true
+```
+
+Without it, `init`, `collect` and `finalize` stop with exit code 1 and name the
+setting. Only `status` runs, because it reads the session and never touches the
+server.
+
+### 2. Create a role for the capture
 
 Workload capture needs less access than a discovery run. It reads no user table,
 so it needs no `SELECT` on your data:
@@ -50,7 +65,7 @@ You can reuse the discovery role from the
 [Required PostgreSQL Privileges](../README.md#required-postgresql-privileges)
 section instead. Add `pg_monitor` to it if it does not have it.
 
-### 2. Enable pg_stat_statements
+### 3. Enable pg_stat_statements
 
 **This step is required.** `pg_stat_statements` is the only place PostgreSQL
 records the query workload, and a sharding scheme is planned from that workload.
@@ -185,7 +200,7 @@ or accept that the window covers only active periods. Capture handles the resets
 correctly rather than reporting negative numbers, and `finalize` counts them in
 the caveats, so check that count before you quote any figure.
 
-### 3. Check the extension's own settings
+### 4. Check the extension's own settings
 
 These affect what the capture can see. All are optional. `init` reports each one
 that will limit the result, so you do not have to check them by hand.
@@ -200,7 +215,7 @@ Raising `pg_stat_statements.max` needs a restart. The other two are runtime
 settings, and both add measurement overhead, so change them with the same care
 as any other production setting.
 
-### 4. Decide where the capture runs
+### 5. Decide where the capture runs
 
 Run it against the **primary**. A standby counts only the statements that
 executed on it, and the write workload is what decides a shard key. `init`

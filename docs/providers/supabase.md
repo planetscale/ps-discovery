@@ -383,7 +383,7 @@ GRANT pg_monitor TO planetscale_discovery;
 ```
 
 `ps-discovery workload init` reports the exact state before you capture. See
-[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+[Workload Capture](../workload_capture.md#3-enable-pg_stat_statements).
 
 ### Capturing transaction shapes with pgAudit
 

@@ -824,7 +824,7 @@ database:
   # any statistics.
   # See docs/workload_capture.md before enabling this on a production primary.
   # workload:
-  #   enabled: false
+  #   enabled: true             # Required. Every workload command stops without it
   #   schemas:                  # Leave unset for every non-system schema
   #     - public
   #   max_snapshots: 500        # 168 = one week hourly
