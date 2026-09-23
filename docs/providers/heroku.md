@@ -445,7 +445,7 @@ the grant is refused, run capture with the database's default credential and let
 `init` report what it can reach.
 
 `ps-discovery workload init` reports the exact state before you capture. See
-[Workload Capture](../workload_capture.md#2-enable-pg_stat_statements).
+[Workload Capture](../workload_capture.md#3-enable-pg_stat_statements).
 
 ### Capturing transaction shapes with pgAudit
 
