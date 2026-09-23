@@ -232,6 +232,22 @@ class TestEachStepIsLogged:
             for m in messages
         )
 
+    def test_a_missing_info_view_is_not_logged_as_a_warning(self, caplog):
+        logger = logging.getLogger("test_workload_collect_transactions")
+        with caplog.at_level(logging.INFO, logger=logger.name):
+            snapshot = collect(FakeConnection(fails_on="dealloc"), logger=logger)
+        failed = [r for r in caplog.records if "pg_stat_statements_info" in r.message]
+        assert [r.levelno for r in failed if "failed" in r.message] == [logging.INFO]
+        assert snapshot["pgss"]["dealloc"] is None
+        assert snapshot["status"] == "ok"
+
+    def test_a_lost_connection_on_the_info_view_is_a_warning(self, caplog):
+        logger = logging.getLogger("test_workload_collect_transactions")
+        with caplog.at_level(logging.INFO, logger=logger.name):
+            collect(FakeConnection(dies_on="dealloc"), logger=logger)
+        failed = [r for r in caplog.records if "failed after" in r.message]
+        assert [r.levelno for r in failed] == [logging.WARNING]
+
 
 class TestTheSchemaStepRunsInAutocommit:
     def test_autocommit_is_on_during_the_schema_and_off_after(self, mocker):

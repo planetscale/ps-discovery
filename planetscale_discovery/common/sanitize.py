@@ -7,9 +7,9 @@ through here.
 """
 
 import re
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
-import sqlparse
+from sqlparse import lexer
 from sqlparse import tokens as T
 
 # $N, not ?, because ? is not a PostgreSQL placeholder and does not parse.
@@ -42,23 +42,34 @@ def redact_sql(sql: Optional[str]) -> Optional[str]:
 
     text = _empty_dollar_quotes(str(sql))
     try:
-        statements = sqlparse.parse(sqlparse.format(text, strip_comments=True))
         # Continue after the highest placeholder the server already assigned.
         next_number = _highest_placeholder(text) + 1
         pieces = []
-        for statement in statements:
-            for token in statement.flatten():
-                if token.ttype in LITERAL_TOKENS:
-                    pieces.append(f"${next_number}")
-                    next_number += 1
-                else:
-                    pieces.append(token.value)
+        tokens = list(lexer.tokenize(text))
+        for index, (ttype, value) in enumerate(tokens):
+            if ttype is T.Error and value == "'":
+                pieces.append(f"${next_number}")
+                break
+            if value == "/" and _opens_comment(tokens, index):
+                break
+            if ttype in T.Comment:
+                pieces.append(" ")
+            elif ttype in LITERAL_TOKENS:
+                pieces.append(f"${next_number}")
+                next_number += 1
+            else:
+                pieces.append(value)
     except Exception:
         # Fail closed: returning the input would defeat the point.
         return FALLBACK_PLACEHOLDER
 
     redacted = _PREFIXED_PLACEHOLDER.sub(r"\1", "".join(pieces))
     return " ".join(redacted.split()) or FALLBACK_PLACEHOLDER
+
+
+def _opens_comment(tokens: List[Tuple[Any, str]], index: int) -> bool:
+    following = tokens[index + 1][1] if index + 1 < len(tokens) else ""
+    return following.startswith("*")
 
 
 def _empty_dollar_quotes(text: str) -> str:
@@ -82,12 +93,36 @@ def _empty_dollar_quotes(text: str) -> str:
 
 def statement_kind(sql: Optional[str]) -> Optional[str]:
     """The leading keyword, e.g. SELECT or UPDATE."""
-    if not sql:
+    if not sql or not str(sql).strip():
         return None
-    parsed = sqlparse.parse(str(sql))
-    if not parsed:
-        return None
-    return (parsed[0].get_type() or "UNKNOWN").upper()
+    try:
+        return _leading_keyword(str(sql))
+    except Exception:
+        return "UNKNOWN"
+
+
+def _leading_keyword(sql: str) -> str:
+    tokens = (
+        (ttype, value)
+        for ttype, value in lexer.tokenize(sql)
+        if ttype not in T.Whitespace and ttype not in T.Comment
+    )
+    ttype, value = next(tokens, (None, ""))
+    if ttype in (T.Keyword.DML, T.Keyword.DDL):
+        return value.upper()
+    if ttype != T.Keyword.CTE:
+        return "UNKNOWN"
+    depth = 0
+    for ttype, value in tokens:
+        if ttype == T.Punctuation and value == "(":
+            depth += 1
+        elif ttype == T.Punctuation and value == ")":
+            depth -= 1
+        elif depth == 0 and ttype == T.Punctuation and value == ";":
+            break
+        elif depth == 0 and ttype == T.Keyword.DML:
+            return value.upper()
+    return "UNKNOWN"
 
 
 def _highest_placeholder(text: str) -> int:
