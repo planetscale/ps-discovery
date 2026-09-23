@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `workload init` and `collect` no longer fail with `connection already closed` on a large `pg_stat_statements`.
+
 ## [2.0.0] - 2026-09-15
 
 ### Added

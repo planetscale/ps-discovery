@@ -18,11 +18,99 @@ a capture and how long to run one.
 The tool measures your workload and hands the measurements to the migration
 team, whose planning tools work out the sharding scheme from them.
 
+## How a capture works over time
+
+A capture is not one reading. It is a series of readings, and what you hand over
+is the difference between them.
+
+`pg_stat_statements` counts forward from the moment it started collecting. A
+single reading tells you a statement has run 4 million times, but not whether
+that took a week or a year. Two readings, an hour apart, tell you it ran 12,000
+times in that hour. The second answer is the one a sharding scheme needs, so the
+tool takes many readings and differences each consecutive pair.
+
+    hour 0        hour 1        hour 2        hour 3
+    ────┬─────────────┬─────────────┬─────────────┬────────►  time
+        │             │             │             │
+      init         collect       collect       collect
+        │             │             │             │
+      snap #1       snap #2       snap #3       snap #4
+        │             │             │             │
+        └── delta ────┴── delta ────┴── delta ────┘
+             1h            1h            1h
+                           │
+                           ▼
+                    finalize sums every interval
+                    into one measured window
+
+Three properties follow from this shape, and they are what make the capture safe
+to leave running:
+
+- **Every snapshot is a separate file, written once and never modified.** A tick
+  that fails, or two ticks that overlap, cost you nothing but that interval.
+- **The capture holds no state on the server.** Nothing is reset, nothing is
+  written, and stopping is deleting a cron line.
+- **You can stop whenever you like.** `finalize` differences whatever snapshots
+  exist. More snapshots mean a longer window, not a different format.
+
+### Choosing the capture period
+
+The window you measure is the whole workload the sharding scheme is designed
+against. Anything that did not
+run during the capture does not exist as far as the sharding scheme is
+concerned, so the goal is to cover a representative slice of real life rather
+than to run for as long as possible.
+
+Start from what you know about your own traffic:
+
+| If your workload has | Capture for | Because |
+| --- | --- | --- |
+| A daily peak, and nothing unusual otherwise | 24 hours, hourly | One full daily cycle, peak and trough |
+| Nightly batch jobs, reports, or ETL | 2 to 3 days, hourly | The batch window plus the days on either side |
+| Weekly jobs: billing runs, weekend reports, Monday backfills | A full 7 days, hourly | A weekly job that runs once is invisible in a 3-day capture |
+| Month-end or quarter-end processing | Cover the boundary itself | Those jobs often touch tables nothing else touches |
+
+Two or three days is the usual answer. A week is better when you know something
+important happens weekly, and the cost of the longer capture is small: hourly
+snapshots are roughly 80 KiB each, so a week is around 13 MiB on disk.
+
+**Name the jobs you know about before you start.** A nightly reconciliation that
+rewrites a large table, a weekly export that reads across every tenant, a
+month-end billing run — each of these can be the query that decides a shard key,
+and each is easy to miss. Write the list down, check the capture covered them,
+and tell your migration engineer which ones fell inside the window and which did
+not. A capture that missed the weekly job is still useful, as long as everyone
+knows it was missed.
+
+      Mon      Tue      Wed      Thu      Fri      Sat      Sun
+    ──────────────────────────────────────────────────────────────
+      ███      ███      ███      ███      ███      ██       ██       daily peak
+         ▒        ▒        ▒        ▒        ▒        ▒        ▒     nightly batch
+                                                    ████            weekly billing
+    ──────────────────────────────────────────────────────────────
+    [───── 3-day capture ─────]
+     sees the daily peak and the nightly batch, never sees the billing run
+
+    [────────────────── 7-day capture ───────────────────────────]
+     sees every recurring job above
+
+### If you cannot capture for that long
+
+A short capture is still worth having. Two snapshots an hour apart give a real
+window, just a narrow one. Say so when you hand the bundle over, because a
+one-hour window measured at 14:00 on a Tuesday describes exactly that and
+nothing else.
+
+What you should not do is finalize a session with a single snapshot and treat
+the result as traffic. `finalize` refuses that by default, and `--allow-partial`
+exists for the case where lifetime totals are genuinely all you can get. The
+bundle then says so in its caveats, and no rate can be derived from it.
+
 ## Before you start
 
-Work through this list once. `workload init` checks every item and tells you
-what is missing, so run it early: it is a read-only check and it is safe to run
-before you commit to a capture.
+Work through this list once. `workload init --check` checks every item and
+tells you what is missing. It is read-only and creates no session, so run it
+early, before you commit to a capture.
 
 ### 1. Switch the capture on
 
@@ -224,95 +312,14 @@ refuses a standby unless you pass `--allow-replica`.
 The host that runs the capture needs cron, the tool installed, and a writable
 directory for the session. It does not need to be the database host.
 
-## How a capture works over time
-
-A capture is not one reading. It is a series of readings, and what you hand over
-is the difference between them.
-
-`pg_stat_statements` counts forward from the moment it started collecting. A
-single reading tells you a statement has run 4 million times, but not whether
-that took a week or a year. Two readings, an hour apart, tell you it ran 12,000
-times in that hour. The second answer is the one a sharding scheme needs, so the
-tool takes many readings and differences each consecutive pair.
-
-    hour 0        hour 1        hour 2        hour 3
-    ────┬─────────────┬─────────────┬─────────────┬────────►  time
-        │             │             │             │
-      init         collect       collect       collect
-        │             │             │             │
-      snap #1       snap #2       snap #3       snap #4
-        │             │             │             │
-        └── delta ────┴── delta ────┴── delta ────┘
-             1h            1h            1h
-                           │
-                           ▼
-                    finalize sums every interval
-                    into one measured window
-
-Three properties follow from this shape, and they are what make the capture safe
-to leave running:
-
-- **Every snapshot is a separate file, written once and never modified.** A tick
-  that fails, or two ticks that overlap, cost you nothing but that interval.
-- **The capture holds no state on the server.** Nothing is reset, nothing is
-  written, and stopping is deleting a cron line.
-- **You can stop whenever you like.** `finalize` differences whatever snapshots
-  exist. More snapshots mean a longer window, not a different format.
-
-### Choosing the capture period
-
-The window you measure is the whole workload the sharding scheme is designed
-against. Anything that did not
-run during the capture does not exist as far as the sharding scheme is
-concerned, so the goal is to cover a representative slice of real life rather
-than to run for as long as possible.
-
-Start from what you know about your own traffic:
-
-| If your workload has | Capture for | Because |
-| --- | --- | --- |
-| A daily peak, and nothing unusual otherwise | 24 hours, hourly | One full daily cycle, peak and trough |
-| Nightly batch jobs, reports, or ETL | 2 to 3 days, hourly | The batch window plus the days on either side |
-| Weekly jobs: billing runs, weekend reports, Monday backfills | A full 7 days, hourly | A weekly job that runs once is invisible in a 3-day capture |
-| Month-end or quarter-end processing | Cover the boundary itself | Those jobs often touch tables nothing else touches |
-
-Two or three days is the usual answer. A week is better when you know something
-important happens weekly, and the cost of the longer capture is small: hourly
-snapshots are roughly 80 KiB each, so a week is around 13 MiB on disk.
-
-**Name the jobs you know about before you start.** A nightly reconciliation that
-rewrites a large table, a weekly export that reads across every tenant, a
-month-end billing run — each of these can be the query that decides a shard key,
-and each is easy to miss. Write the list down, check the capture covered them,
-and tell your migration engineer which ones fell inside the window and which did
-not. A capture that missed the weekly job is still useful, as long as everyone
-knows it was missed.
-
-      Mon      Tue      Wed      Thu      Fri      Sat      Sun
-    ──────────────────────────────────────────────────────────────
-      ███      ███      ███      ███      ███      ██       ██       daily peak
-         ▒        ▒        ▒        ▒        ▒        ▒        ▒     nightly batch
-                                                    ████            weekly billing
-    ──────────────────────────────────────────────────────────────
-    [───── 3-day capture ─────]
-     sees the daily peak and the nightly batch, never sees the billing run
-
-    [────────────────── 7-day capture ───────────────────────────]
-     sees every recurring job above
-
-### If you cannot capture for that long
-
-A short capture is still worth having. Two snapshots an hour apart give a real
-window, just a narrow one. Say so when you hand the bundle over, because a
-one-hour window measured at 14:00 on a Tuesday describes exactly that and
-nothing else.
-
-What you should not do is finalize a session with a single snapshot and treat
-the result as traffic. `finalize` refuses that by default, and `--allow-partial`
-exists for the case where lifetime totals are genuinely all you can get. The
-bundle then says so in its caveats, and no rate can be derived from it.
-
 ## Usage
+
+Start with `init --check`. It reports every problem the server has before you
+create a session, and it changes nothing. Fix what it reports, then run it
+again until it reports no problem.
+
+    # Report what this server can supply, and change nothing
+    ps-discovery workload init --check
 
     # Check the server, store the schema, take the baseline snapshot
     ps-discovery workload init --session ./workload-session
@@ -325,9 +332,6 @@ bundle then says so in its caveats, and no rate can be derived from it.
 
     # Check on a session, with no database connection
     ps-discovery workload status --session ./workload-session
-
-    # Report what this server can supply, and change nothing
-    ps-discovery workload init --check
 
 The tool finds `./config.yaml` on its own, as it does for a discovery run. Use
 `--config` only to point at a different file.
@@ -1127,6 +1131,21 @@ two snapshots. An exported file can, when it covers a different day.
 
 Export a file that covers the time the snapshots span, or finalize a session
 whose snapshot window already covers when the log was written.
+
+### W216 connection_lost
+
+The database connection closed while a snapshot was being read. The detail
+names the read that was in progress.
+
+The snapshot is kept with everything read before the connection closed. The
+reads after it were skipped. A skipped read that has its own code, such as
+[W210](#w210-statement_read_failed), also reports that code.
+
+Check the PostgreSQL server log for the time of the snapshot. Look for a line
+that says why the server ended the session, such as a restart, a failover, or
+`terminating connection due to administrator command`. A connection pooler or a
+proxy between the tool and the server can also close the connection. If every
+snapshot reports this code, check the pooler's query and transaction timeouts.
 
 ## What the capture cannot see
 
