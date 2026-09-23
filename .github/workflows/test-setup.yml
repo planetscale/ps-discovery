@@ -75,6 +75,13 @@ jobs:
           source venv/bin/activate
           python3 -c "import requests; print('Supabase dependencies OK')"
 
+      - name: Test with workload capture selected
+        run: |
+          rm -rf venv config.yaml
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=none PSDISCOVERY_WORKLOAD=yes bash setup.sh
+          source venv/bin/activate
+          python3 -c "import pglast; print('Workload parser OK')"
+
   test-linux-containers:
     name: Test on Linux (Docker)
     runs-on: ubuntu-latest

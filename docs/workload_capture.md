@@ -127,6 +127,18 @@ Without it, `init`, `collect` and `finalize` stop with exit code 1 and name the
 setting. Only `status` runs, because it reads the session and never touches the
 server.
 
+`setup.sh` asks whether you will run a workload capture. Answer yes, and it
+installs the optional SQL parser `pglast`. If you answered no, or you set up the
+tool another way, install the parser now:
+
+```bash
+pip install 'pglast>=7,<9'
+```
+
+The parser only checks that the rendered `schema.sql` parses. Without it,
+`finalize` still writes the complete bundle and records the skipped check as a
+caveat.
+
 ### 2. Create a role for the capture
 
 Workload capture needs less access than a discovery run. It reads no user table,

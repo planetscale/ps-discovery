@@ -804,16 +804,6 @@ database:
   # schemas:  # Leave unset to analyze every non-system schema
   #   - public
 
-  # Optional: large column and LOB analysis. Off by default because it reads
-  # sampled rows from your tables, unlike the rest of discovery.
-  # data_size:
-  #   enabled: false
-  #   sample_percent: 10        # 1-100
-  #   max_table_size_gb: 10     # Skip tables larger than this
-  #   target_schemas:
-  #     - public
-  #   target_tables: []         # Empty means every table in target_schemas
-
   # Optional: query workload capture, for PlanetScale Neki sharding design.
   # Off by default. Nothing here runs during a normal discovery run -- it is
   # driven by `ps-discovery workload init | collect | finalize`.
