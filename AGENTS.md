@@ -59,9 +59,10 @@ pip install black flake8 mypy    # Dev tools
 ```
 
 Or use `./setup.sh`, which creates the venv, installs dependencies, and uses
-arrow-key selectors (or the `PSDISCOVERY_ENGINE` / `PSDISCOVERY_PROVIDER`
-environment variables in CI) to pick the database engine and cloud provider,
-then writes a starter `config.yaml`.
+arrow-key selectors (or the `PSDISCOVERY_ENGINE`, `PSDISCOVERY_PROVIDER` and
+`PSDISCOVERY_WORKLOAD` environment variables in CI) to pick the database
+engine, the cloud provider and whether you will run a workload capture, then
+writes a starter `config.yaml`.
 
 ## Testing
 
