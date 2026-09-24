@@ -17,7 +17,7 @@ Both tools can be used independently or together for a complete environment asse
 
 ```bash
 # Download and extract the release
-tar -xzf ps-discovery-2.0.1.tar.gz
+unzip ps-discovery-2.0.1.zip
 cd ps-discovery-2.0.1
 
 # Run the interactive setup script

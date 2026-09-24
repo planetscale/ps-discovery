@@ -114,7 +114,7 @@ git push origin main --tags
 
 Once the tag is pushed, GitHub Actions will **automatically**:
 
-1. ✅ Build the release tarball (`ps-discovery-X.Y.Z.tar.gz`)
+1. ✅ Build the release zip file (`ps-discovery-X.Y.Z.zip`)
 2. ✅ Generate SHA256 checksum
 3. ✅ Create a GitHub Release with release notes
 4. ✅ Attach release artifacts for download
@@ -130,23 +130,23 @@ After the GitHub Action completes:
 1. Go to: https://github.com/planetscale/ps-discovery/releases
 2. Verify the release is published with:
    - Release notes
-   - `ps-discovery-X.Y.Z.tar.gz`
-   - `ps-discovery-X.Y.Z.tar.gz.sha256`
+   - `ps-discovery-X.Y.Z.zip`
+   - `ps-discovery-X.Y.Z.zip.sha256`
 
 ### 8. Test the Release Artifact
 
-Download and test the release tarball:
+Download and test the release zip file:
 
 ```bash
 # Download the release
-wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz
-wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.tar.gz.sha256
+wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.zip
+wget https://github.com/planetscale/ps-discovery/releases/download/vX.Y.Z/ps-discovery-X.Y.Z.zip.sha256
 
 # Verify checksum
-sha256sum -c ps-discovery-X.Y.Z.tar.gz.sha256
+sha256sum -c ps-discovery-X.Y.Z.zip.sha256
 
 # Extract and test
-tar -xzf ps-discovery-X.Y.Z.tar.gz
+unzip ps-discovery-X.Y.Z.zip
 cd ps-discovery-X.Y.Z
 ./setup.sh
 source venv/bin/activate
