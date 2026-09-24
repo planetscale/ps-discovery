@@ -99,8 +99,34 @@ class TestRedactSql:
         def boom(*args, **kwargs):
             raise RuntimeError("tokenizer exploded")
 
-        monkeypatch.setattr(module.sqlparse, "format", boom)
+        monkeypatch.setattr(module.lexer, "tokenize", boom)
         assert redact_sql("SELECT 'secret'") == FALLBACK_PLACEHOLDER
+
+    @pytest.mark.parametrize(
+        "sql,expected",
+        [
+            ("SELECT * FROM t WHERE a = 'secret", "SELECT * FROM t WHERE a = $1"),
+            (
+                "SELECT * FROM t WHERE a = 'x' AND b = 'sec ret",
+                "SELECT * FROM t WHERE a = $1 AND b = $2",
+            ),
+            ("SELECT * FROM t WHERE a IN ('it''s", "SELECT * FROM t WHERE a IN ($1$2"),
+            ("SELECT 1 /* user 'secret' id=42", "SELECT $1"),
+            ("SELECT 1/*secret", "SELECT $1"),
+        ],
+    )
+    def test_text_cut_inside_a_literal_or_comment_is_dropped(self, sql, expected):
+        assert redact_sql(sql) == expected
+
+    def test_division_by_a_star_is_not_a_comment(self):
+        assert redact_sql("SELECT a / 2 * 3 FROM t") == "SELECT a / $1 * $2 FROM t"
+
+    def test_statement_over_the_sqlparse_token_limit_keeps_its_shape(self):
+        rows = ", ".join(f"({i}, 'secret-{i}')" for i in range(3000))
+        out = redact_sql(f"INSERT INTO t (a, b) VALUES {rows}")
+        assert out.startswith("INSERT INTO t (a, b) VALUES ($1, $2), ($3, $4)")
+        assert out.endswith("($5999, $6000)")
+        assert "secret" not in out
 
 
 class TestQuotedIdentifiersSurvive:
@@ -135,10 +161,20 @@ class TestStatementKind:
             ("INSERT INTO t VALUES (1)", "INSERT"),
             ("DELETE FROM t", "DELETE"),
             ("CREATE INDEX i ON t (a)", "CREATE"),
+            ("-- note\n/* more */ select 1", "SELECT"),
+            ("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "INSERT"),
+            ("WITH RECURSIVE x AS (SELECT 1) SELECT * FROM x", "SELECT"),
+            ("WITH x AS (SELECT 1); UPDATE t SET a = 1", "UNKNOWN"),
+            ("(SELECT 1) UNION (SELECT 2)", "UNKNOWN"),
         ],
     )
     def test_leading_keyword(self, sql, kind):
         assert statement_kind(sql) == kind
 
-    def test_no_input(self):
-        assert statement_kind(None) is None
+    @pytest.mark.parametrize("sql", ["", "   ", None])
+    def test_no_input(self, sql):
+        assert statement_kind(sql) is None
+
+    def test_statement_over_the_sqlparse_token_limit(self):
+        rows = ", ".join(f"(${i})" for i in range(1, 6000))
+        assert statement_kind(f"INSERT INTO t (a) VALUES {rows}") == "INSERT"

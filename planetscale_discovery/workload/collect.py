@@ -265,7 +265,11 @@ class WorkloadCollector(DatabaseAnalyzer):
         return snapshot
 
     def _read(
-        self, what: str, sql: str, params: Optional[Dict[str, Any]] = None
+        self,
+        what: str,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        optional: bool = False,
     ) -> Tuple[Optional[List[Any]], Optional[str]]:
         if self._lost_during:
             return None, (
@@ -279,7 +283,8 @@ class WorkloadCollector(DatabaseAnalyzer):
         except Exception as e:
             if self.connection.closed:
                 self._lost_during = what
-            self.logger.warning(
+            quiet = optional and not self._lost_during
+            (self.logger.info if quiet else self.logger.warning)(
                 f"reading {what}: failed after "
                 f"{time.monotonic() - started:.1f}s: {e}"
             )
@@ -502,7 +507,9 @@ class WorkloadCollector(DatabaseAnalyzer):
         if version is not None and version < 140000:
             return info
         relation = self._pgss_relation(f"{PGSS_VIEW}_info")
-        rows, _ = self._read(f"{PGSS_VIEW}_info", f"SELECT dealloc FROM {relation}")
+        rows, _ = self._read(
+            f"{PGSS_VIEW}_info", f"SELECT dealloc FROM {relation}", optional=True
+        )
         if rows:
             info["dealloc"] = _number(dict(rows[0]).get("dealloc"))
         return info
