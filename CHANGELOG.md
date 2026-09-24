@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-24
+
 ### Changed
 
 - `AGENTS.md` is now a guide for an agent that runs the tool. It says which files to send to PlanetScale, and it limits error correction to `config.yaml`. Contributor guidance is in `CONTRIBUTING.md`.
@@ -14,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `workload init` and `collect` no longer fail with `connection already closed` on a large `pg_stat_statements`.
+- *Documentation* Corrections and clarifications for workload capture.
 
 ## [2.0.0] - 2026-09-15
 
