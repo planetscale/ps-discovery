@@ -1,192 +1,205 @@
-# AGENTS.md - PlanetScale Discovery Tools
+# AGENTS.md - Using the PlanetScale Discovery Tools
 
-## Project Overview
+This file is for an agent that **runs** the PlanetScale Discovery Tools to
+collect a database and infrastructure report. It is not a guide to changing the
+tool. For that, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
-PlanetScale Discovery Tools analyze PostgreSQL and MySQL databases and cloud infrastructure (AWS, GCP, Supabase, Heroku, Neon) to assess migration complexity to PlanetScale. The tool collects metadata only -- never actual customer data. It runs locally in customer environments with minimal permissions.
+The tool analyzes a PostgreSQL or MySQL/Vitess environment and its hosting
+provider, then writes a report that a PlanetScale migration engineer reads. It
+collects **metadata only**. It never reads the contents of a user table.
 
-## Project Structure
+## The config file is the source of truth
 
-```
-planetscale_discovery/
-  cli.py                          # Entry point (ps-discovery command)
-  __main__.py                     # Python -m execution
-  __init__.py                     # Package version (__version__)
-  common/
-    base_analyzer.py              # Abstract base classes (BaseAnalyzer, DatabaseAnalyzer, CloudAnalyzer)
-    utils.py                      # Shared helpers
-  config/
-    config_manager.py             # YAML config loading and validation
-  database/
-    discovery.py                  # Orchestrates database analyzers
-    report_generator.py           # JSON and Markdown report generation
-    analyzers/
-      config_analyzer.py          # PostgreSQL version and server settings
-      schema_analyzer.py          # Tables, indexes, constraints, views, functions
-      performance_analyzer.py     # pg_stat_* views, cache ratios, slow queries
-      security_analyzer.py        # Users, roles, grants, RLS policies
-      feature_analyzer.py         # Extensions, custom types, advanced features
-      data_size_analyzer.py       # Large column and LOB analysis
-  cloud/
-    discovery.py                  # Orchestrates cloud analyzers
-    report_generator.py           # Cloud infrastructure reports
-    analyzers/
-      aws_analyzer.py             # RDS, Aurora, VPC, security groups
-      gcp_analyzer.py             # Cloud SQL, AlloyDB, VPC networks
-      supabase_analyzer.py        # Supabase managed PostgreSQL
-      heroku_analyzer.py          # Heroku Postgres add-ons
-      neon_analyzer.py            # Neon serverless Postgres projects, branches, endpoints
-  database/mysql_analyzers/       # MySQL/Vitess analyzers (config, schema, performance, replication, security, features)
-tests/
-  conftest.py                     # Shared pytest fixtures
-  fixtures/                       # Mock data (database_responses.py, aws_responses.py)
-  unit/                           # Unit tests (no external deps required)
-  integration/                    # Integration tests (require real credentials)
-```
-
-Key top-level files: `VERSION`, `setup.py`, `pyproject.toml`, `requirements.txt`, `setup.sh`, `build_release.sh`, `bump_version.sh`, `run_tests.py`, `Makefile`.
-
-## Development Setup
-
-Requires Python 3.10+.
+`config.yaml` holds every setting for a run. Put the settings there and run the
+tool with no flags:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e ".[all]"          # Editable install with all cloud providers
-pip install pytest pytest-cov pytest-mock moto responses  # Test deps
-pip install black flake8 mypy    # Dev tools
+./ps-discovery                      # reads ./config.yaml
+./ps-discovery --config other.yaml  # reads a named file
 ```
 
-Or use `./setup.sh`, which creates the venv, installs dependencies, and uses
-arrow-key selectors (or the `PSDISCOVERY_ENGINE`, `PSDISCOVERY_PROVIDER` and
-`PSDISCOVERY_WORKLOAD` environment variables in CI) to pick the database
-engine, the cloud provider and whether you will run a workload capture, then
-writes a starter `config.yaml`.
+The `database`, `cloud`, and `both` subcommands and their flags exist for a
+single explicit run. Prefer the config file. It is reproducible, it keeps
+credentials off the command line, and it records what was collected.
 
-## Testing
+Generate a starting file with `./ps-discovery config-template`.
 
-CI runs tests across Python 3.10-3.14 via `.github/workflows/tests.yml`.
+Do not invent flags. Read `./ps-discovery --help` and the guides below.
+
+## Running a discovery
+
+1. **Set up.** Run `./setup.sh`. It needs Python 3.10 or higher. It creates the
+   virtual environment, installs dependencies, asks for the database engine,
+   the cloud provider and whether you will run a workload capture, and writes a
+   starting `config.yaml`. In an automated environment, set
+   `PSDISCOVERY_ENGINE`, `PSDISCOVERY_PROVIDER` and `PSDISCOVERY_WORKLOAD`
+   instead of answering the prompts.
+2. **Grant privileges.** Create a read-only discovery user. The SQL is in the
+   README under Required PostgreSQL Privileges and Required MySQL Privileges.
+   Use a dedicated user, not an application user.
+3. **Fill in `config.yaml`.** Set the engine, the database connection, and any
+   cloud provider. Put the database and the cloud provider in the same file,
+   so that one run writes one report.
+4. **Run it.** `./ps-discovery`. The wrapper script activates the virtual
+   environment, so do not activate it yourself.
+5. **Collect the output.** The report is
+   `planetscale_discovery_results_<timestamp>.json`. It goes to
+   `./discovery_output/`, or to `output.output_dir` when `config.yaml` sets
+   it. Send it as described in [What to send to PlanetScale](#what-to-send-to-planetscale).
+
+Review a report before it leaves the customer's organization.
+
+## What to send to PlanetScale
+
+PlanetScale reads the report with tools that expect the exact file the CLI
+wrote. A file in a different shape cannot be read.
+
+Send only these files:
+
+- The `planetscale_discovery_results_<timestamp>.json` file from one run.
+- The archive that `workload finalize` tells you to make, if a PlanetScale
+  engineer asked for a workload capture.
+
+Rules for the files you send:
+
+- **Do not change a report.** Do not rename it, split it, merge it, reformat
+  it, or remove sections from it.
+- **Do not make your own files.** Do not add a summary, a README, notes, or
+  data that you collected with other tools or provider APIs. The report is the
+  complete result.
+- **Do not fill a gap yourself.** The report lists each section that the tool
+  could not collect, for example under `database_results.analysis_gaps`. Leave
+  the gap in the report. Tell the
+  PlanetScale point of contact about the gap, or fix the cause and run the tool
+  again.
+- **Send one run.** When you run the tool again, send only the newest report.
+  Do not combine sections from different runs.
+
+The `--local-summary` flag writes a Markdown summary for local debugging. Do not
+send it.
+
+## Scope of a run
+
+| Choice | Where to set it | Guide |
+| --- | --- | --- |
+| Database engine (`postgres` or `mysql`) | `engine:` in `config.yaml` | [MySQL Setup](docs/mysql.md) for MySQL/Vitess |
+| Cloud or hosting provider | `providers:` in `config.yaml` | [Provider guides](docs/providers/) |
+| Large column and LOB analysis | optional module | [Data Size Analysis](docs/data_size_analysis.md) |
+
+Supported providers: AWS, GCP, Supabase, Heroku, Neon, and PlanetScale.
+
+## Query workload capture (optional)
+
+Designing a sharding scheme for [PlanetScale Neki](https://neki.dev) needs the
+query workload, not only the schema. This flow records `pg_stat_statements` over
+a few days and writes the files a sharding planner reads.
+
+Run it only when a PlanetScale engineer asks for it. It does not run during a
+normal discovery, and it never writes into `./discovery_output/`.
+
+Workload capture is for PostgreSQL only. It stops with an error when the
+config file sets `engine: mysql`.
+
+Turn it on in `config.yaml` first. Without this setting, every `workload`
+command stops with exit code 1.
+
+```yaml
+database:
+  workload:
+    enabled: true
+```
+
+Then check the server, start the session, collect snapshots, and write the
+bundle. `init --check` reports what the server can supply and changes nothing.
 
 ```bash
-# Run all tests
-python -m pytest tests/ -v --tb=short
-
-# Unit tests only (fast, no external deps)
-python -m pytest tests/unit/
-
-# With coverage
-python -m pytest tests/ --cov=planetscale_discovery --cov-report=term-missing
-
-# Integration tests (require cloud credentials)
-python -m pytest tests/integration/ -m integration
-
-# Or use the helper script
-python run_tests.py
+./ps-discovery workload init --check
+./ps-discovery workload init     --session ./workload-session
+./ps-discovery workload collect  --session ./workload-session   # repeat from cron
+./ps-discovery workload finalize --session ./workload-session
 ```
 
-Test fixtures live in `tests/fixtures/`. Unit tests mock all external connections using pytest-mock and moto (for AWS). Integration tests are marked with `@pytest.mark.integration` and skip gracefully when credentials are unavailable.
+Rules that a run must follow:
 
-## Code Style
+- **Give every command the same `--session` directory.** The tool creates and
+  owns it. Delete it when the capture is finished.
+- **`collect` takes one snapshot and exits.** It does no scheduling. `init`
+  prints a crontab line that runs it every hour.
+- **Two snapshots are the minimum**, because a window needs two readings.
+  Snapshots spread across a peak give a better result.
+- **`pg_stat_statements` is required**, and the capture role needs `pg_monitor`.
+  `init` checks both and stops with exit code 5 when either is missing.
+  `pg_stat_statements` is not a trusted extension, so enabling it needs a
+  superuser or the provider's admin role.
+- **Check the exit code.** A cron wrapper must tell a fault from a finished
+  capture: 0 success, 1 usage or config error, 2 no session at that path,
+  3 volume cap reached, 5 the server cannot support collection.
+- **End the capture cleanly.** Reset the statement logging that was turned on
+  for the window, and delete the exported log files. With
+  `capture_log_source: log_fdw`, `workload init --cleanup` drops the objects a
+  capture creates to read the log.
 
-- **Formatter**: `black` -- run `python -m black planetscale_discovery tests` before committing
-- **Linter**: `flake8` -- run `python -m flake8 planetscale_discovery tests`
-- **Type checker**: `mypy` -- run `python -m mypy planetscale_discovery` (config in `mypy.ini`)
-- **Security**: `bandit` -- run `python -m bandit -r planetscale_discovery/ -ll -c .bandit`
+The flow reads catalogs and statistics views only. It reads no user table, it
+never runs `ANALYZE`, and it takes no table locks. Nothing persists on the
+database server, except with `capture_log_source: log_fdw`, where each
+`collect` creates the objects it needs to read the query log and drops them
+again. Read
+[Workload Capture](docs/workload_capture.md) before enabling it on a production
+primary. [Workload Bundle Format](docs/workload-bundle.md) describes what
+`finalize` writes and how to hand it over.
 
-CI enforces all of the above on every push and PR to main.
+## What the tool collects
 
-## Architecture
+**Collected:** schema metadata, database configuration and extensions, usage
+statistics, infrastructure topology, and user and role names.
 
-### Analyzer Pattern
+**Never collected:** table contents, application code, and credentials. A
+password is used for the connection and is never written to the output. Literal
+values from queries are not collected either, unless you turn on `capture_log`.
 
-All analyzers inherit from `BaseAnalyzer` (in `common/base_analyzer.py`), which provides:
-- `analyze()` -- abstract method each analyzer implements
-- `execute_query()` -- runs SQL and returns list of dicts
-- `add_error()` / `add_warning()` -- structured error collection
-- `get_analysis_metadata()` -- timestamps, error counts
+Where the tool reports a statement, it replaces every literal value with a
+placeholder and removes comments. It records the shape of a query, not the data
+in it.
 
-Database analyzers extend `DatabaseAnalyzer` (adds a psycopg2 connection). Cloud analyzers extend `CloudAnalyzer` (adds `authenticate()` and `discover_resources()` methods).
+`capture_log` is the one exception, and it is off by default. A session that
+captures the query log writes `burst.csv`, which holds statement text with its
+literal values. No other file in the bundle holds one.
 
-### Discovery Orchestration
+All analysis runs locally. The tool sends nothing to an external service.
 
-`DatabaseDiscovery.run_discovery()` and `CloudDiscovery.run_discovery()` iterate over their respective analyzers. Each analyzer runs independently -- if one fails, the others continue. Errors are captured in metadata, not raised.
+## Error handling
 
-### CLI Layer
+Permission errors are expected on a managed service, and the tool continues with
+what it can read. A warning in the report is normal and is not a failed run.
 
-The config file is the source of truth. Running `ps-discovery` with no subcommand
-loads `./config.yaml` (or the file passed to `--config`) and runs whatever database
-and/or cloud modules it declares. `cli.py` also provides explicit subcommands for
-running a single scope directly: `database`, `cloud`, `both`, and `config-template`
-(generates a YAML template). The `ps-discovery` wrapper script (shell script at
-project root) activates the venv automatically.
+Read [Troubleshooting](docs/troubleshooting.md) first. It covers Python
+installation, common errors, and managed database environments.
 
-### Graceful Degradation
+**Correct errors in `config.yaml`.** When the error points to a setting, fix
+the setting and run the tool again. Examples:
 
-This is a core design principle. Permission errors produce warnings, not failures. Missing extensions (e.g., pg_stat_statements) are noted and skipped. Managed database environments (RDS, Cloud SQL) have limited privileges by design, and the tool adapts. Every sub-analysis returns an empty result on error rather than raising an exception.
+- A wrong host, port, database name, username, or password
+- A wrong `ssl_mode`
+- The wrong `engine:` for the server
+- A provider that is not enabled, or a wrong region or project ID
+- `database.workload.enabled` not set for a workload capture
 
-## Adding New Analyzers
+If a provider module is not installed, run `./setup.sh` again and select that
+provider.
 
-### Database Analyzer
+**Never change the code.** Do not edit, patch, or add files in the tool's
+directory, other than `config.yaml`. This includes `planetscale_discovery/`,
+the `ps-discovery` wrapper, `setup.sh`, and the requirements files. Do not
+install, upgrade, or remove packages in the virtual environment by hand. When
+the error is not in `config.yaml`, stop. Send the error and the log output to
+the PlanetScale point of contact.
 
-Create a file in `planetscale_discovery/database/analyzers/`, inherit from `DatabaseAnalyzer`:
+Do not work around a permission error by granting write access or by using a
+superuser. Report the missing privilege instead.
 
-```python
-from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+## More documentation
 
-class NewAnalyzer(DatabaseAnalyzer):
-    def analyze(self):
-        results = {}
-        results['feature'] = self._analyze_feature()
-        results['metadata'] = self.get_analysis_metadata()
-        return results
-
-    def _analyze_feature(self):
-        try:
-            return self.execute_query("SELECT ... FROM ...")
-        except Exception as e:
-            self.add_error("Feature analysis failed", e)
-            return []
-```
-
-Then register it in `database/discovery.py` and add tests in `tests/unit/`.
-
-### Cloud Analyzer
-
-Create a file in `planetscale_discovery/cloud/analyzers/`, inherit from `CloudAnalyzer`:
-
-```python
-from planetscale_discovery.common.base_analyzer import CloudAnalyzer
-
-class NewProviderAnalyzer(CloudAnalyzer):
-    def __init__(self, config, logger=None):
-        super().__init__(config, "new_provider", logger)
-
-    def authenticate(self):
-        # Return True on success, False on failure
-        ...
-
-    def analyze(self):
-        if not self.authenticate():
-            return {"error": "Authentication failed"}
-        return self._discover_resources()
-```
-
-Register in `cloud/discovery.py` and add tests.
-
-## Releasing
-
-See [RELEASING.md](RELEASING.md) for the full process. Summary:
-
-1. Ensure tests, black, flake8, and mypy all pass
-2. Update `CHANGELOG.md`
-3. Bump version with `./bump_version.sh patch|minor|major` -- this updates `VERSION` and `setup.py`
-4. Manually verify `pyproject.toml` and `planetscale_discovery/__init__.py` also match the new version
-5. Commit, tag (`git tag -a vX.Y.Z`), and push with `--tags`
-6. GitHub Actions builds the release tarball and creates the GitHub Release automatically
-
-Version is tracked in four places that must stay in sync:
-- `VERSION`
-- `setup.py` (version field)
-- `pyproject.toml` (project.version)
-- `planetscale_discovery/__init__.py` (`__version__`)
+- [Advanced Usage](docs/advanced-usage.md) - CLI reference, focused analysis, automation
+- [Output Format](docs/output-format.md) - report structure
+- [Performance Considerations](docs/performance_considerations.md) - impact and timing
+- [Cleanup Procedures](docs/cleanup.md) - removing the discovery user afterwards
