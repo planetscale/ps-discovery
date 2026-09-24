@@ -16,7 +16,11 @@ from planetscale_discovery import __version__
 from planetscale_discovery.config.config_manager import WorkloadConfig
 from planetscale_discovery.workload.bundle import bundle_dir_name, write_bundle
 from planetscale_discovery.workload.codes import label
-from planetscale_discovery.workload.collect import WorkloadCollector
+from planetscale_discovery.workload.collect import (
+    WorkloadCollector,
+    end_transaction,
+    logged_step,
+)
 from planetscale_discovery.workload.merge import merge_snapshots
 from planetscale_discovery.workload.probe import CapabilityProbe
 from planetscale_discovery.workload.store import WorkloadStore
@@ -327,8 +331,14 @@ def _collect_schema(connection, config, logger) -> Dict[str, Any]:
         statement_timeout=getattr(config.database, "statement_timeout", "300s"),
     )
     discovery.connection = connection
-    logger.info("collecting the schema with the existing schema analyzer")
-    results = discovery.run_analysis(CATALOG_MODULES, reuse_connection=True)
+    end_transaction(connection)
+    connection.autocommit = True
+    try:
+        with logged_step(logger, "collecting the schema"):
+            results = discovery.run_analysis(CATALOG_MODULES, reuse_connection=True)
+    finally:
+        if not connection.closed:
+            connection.autocommit = False
     return (results.get("analysis_results") or {}).get("schema") or {}
 
 
@@ -369,7 +379,9 @@ def _init(args, config, logger) -> int:
 
     connection = _connect(config, logger)
     try:
-        probe = CapabilityProbe(connection, logger=logger).run()
+        with logged_step(logger, "checking what this server supports"):
+            probe = CapabilityProbe(connection, logger=logger).run()
+        end_transaction(connection)
 
         if not probe["can_collect_relations"]:
             logger.error(
@@ -418,18 +430,19 @@ def _init(args, config, logger) -> int:
 
         workload = _workload_config(config)
         if workload.capture_log:
-            _report_log_readiness(connection, workload, logger)
+            with logged_step(logger, "checking whether the query log can be read"):
+                _report_log_readiness(connection, workload, logger)
+            end_transaction(connection)
 
         store.create()
-        store.write_schema(_collect_schema(connection, config, logger))
+        schema = _collect_schema(connection, config, logger)
+        with logged_step(logger, f"writing the schema to {store.schema_path}"):
+            store.write_schema(schema)
 
-        snapshot = _new_collector(connection, config, logger).collect()
-        path = store.append_snapshot(snapshot)
-        logger.info(
-            f"session initialized at {args.session}; baseline {path.name}: "
-            f"{snapshot['status']}, {len(snapshot['statements'])} statements, "
-            f"{len(snapshot['tables'])} tables"
-        )
+        with logged_step(logger, "taking the baseline snapshot"):
+            snapshot = _new_collector(connection, config, logger).collect()
+        _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
+        logger.info(f"session initialized at {args.session}")
         _print_cron_hint(args.session, workload)
         return EXIT_OK
     finally:
@@ -523,18 +536,22 @@ def _snapshot(store, config, logger, optional: bool) -> None:
         )
         return
     try:
-        snapshot = _new_collector(connection, config, logger).collect()
-        path = store.append_snapshot(snapshot)
-        for warning in snapshot.get("warnings") or []:
-            logger.warning(f"{label(warning['code'])}: {warning['detail']}")
-        logger.info(
-            f"snapshot {path.name}: {snapshot['status']}, "
-            f"{len(snapshot['statements'])} statements, "
-            f"{len(snapshot['tables'])} tables, "
-            f"{len(snapshot['indexes'])} indexes, {snapshot.get('duration_ms')}ms"
-        )
+        with logged_step(logger, "taking a snapshot"):
+            snapshot = _new_collector(connection, config, logger).collect()
+        _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
     finally:
         connection.close()
+
+
+def _report_snapshot(snapshot: Dict[str, Any], path, logger) -> None:
+    for warning in snapshot.get("warnings") or []:
+        logger.warning(f"{label(warning['code'])}: {warning['detail']}")
+    logger.info(
+        f"snapshot {path.name}: {snapshot['status']}, "
+        f"{len(snapshot['statements'])} statements, "
+        f"{len(snapshot['tables'])} tables, "
+        f"{len(snapshot['indexes'])} indexes, {snapshot.get('duration_ms')}ms"
+    )
 
 
 def _capture_log_window(store, config, workload, logger) -> None:

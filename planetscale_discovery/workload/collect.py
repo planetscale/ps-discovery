@@ -7,7 +7,8 @@ because the columns move across majors, so one code path covers 12 through 18.
 """
 
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
 from planetscale_discovery.common.sanitize import redact_sql, statement_kind
@@ -81,6 +82,23 @@ INDEX_GAUGES = ("size_bytes",)
 
 # Excluded rather than allowlisted, matching what the schema analyzer does.
 EXCLUDED_SCHEMAS = ("information_schema", "pg_catalog", "pg_toast", "__neki")
+
+SERVER_SQL = (
+    "SELECT current_database() AS database,"
+    " current_setting('server_version_num') AS version_num,"
+    " pg_is_in_recovery() AS is_replica,"
+    " (SELECT oid FROM pg_database WHERE datname = current_database())"
+    "   AS database_oid"
+)
+
+CLOCK_SQL = "SELECT clock_timestamp() AS captured_at_server"
+
+PGSS_COLUMNS_SQL = (
+    "SELECT column_name FROM information_schema.columns"
+    " WHERE table_name = 'pg_stat_statements'"
+)
+
+PGSS_MAX_SQL = "SELECT current_setting('pg_stat_statements.max', true) AS m"
 
 TABLE_SQL = """
 SELECT s.schemaname, s.relname,
@@ -193,6 +211,7 @@ class WorkloadCollector(DatabaseAnalyzer):
         statement_text_max_chars: int = 8192,
     ):
         super().__init__(connection, config, logger)
+        self._lost_during: Optional[str] = None
         # None means every non-system schema.
         self.schemas = list(schemas) if schemas else None
         self.row_limit = row_limit
@@ -221,13 +240,20 @@ class WorkloadCollector(DatabaseAnalyzer):
             "columns": [],
         }
 
-        snapshot["server"] = self._server_identity()
-
-        # Relations first: they need no extension, so a snapshot still carries data and.
-        self._collect_relations(snapshot)
-        self._collect_statements(snapshot)
-        self._collect_column_stats(snapshot)
-        snapshot["pgss"] = self._pgss_info()
+        self._lost_during = None
+        reads = self._read_all(snapshot)
+        if self._lost_during:
+            snapshot["warnings"].append(
+                {
+                    "code": "connection_lost",
+                    "detail": (
+                        f"the connection closed during the {self._lost_during} "
+                        "read, so the reads after it were skipped. The snapshot "
+                        "keeps everything read before it"
+                    ),
+                }
+            )
+        self._process_all(snapshot, reads)
 
         snapshot["duration_ms"] = int((time.monotonic() - started) * 1000)
         if snapshot["captured_at_server"] is None:
@@ -238,18 +264,79 @@ class WorkloadCollector(DatabaseAnalyzer):
             snapshot["status"] = STATUS_OK
         return snapshot
 
-    def _server_identity(self) -> Dict[str, Any]:
-        """Enough to refuse to merge snapshots from two different servers."""
-        rows = self._rows(
-            "SELECT current_database() AS database,"
-            " current_setting('server_version_num') AS version_num,"
-            " pg_is_in_recovery() AS is_replica,"
-            " (SELECT oid FROM pg_database WHERE datname = current_database())"
-            "   AS database_oid"
+    def _read(
+        self,
+        what: str,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        optional: bool = False,
+    ) -> Tuple[Optional[List[Any]], Optional[str]]:
+        if self._lost_during:
+            return None, (
+                f"not read, because the connection closed during the "
+                f"{self._lost_during} read"
+            )
+        self.logger.info(f"reading {what}")
+        started = time.monotonic()
+        try:
+            rows = self._rows(sql, params)
+        except Exception as e:
+            if self.connection.closed:
+                self._lost_during = what
+            quiet = optional and not self._lost_during
+            (self.logger.info if quiet else self.logger.warning)(
+                f"reading {what}: failed after "
+                f"{time.monotonic() - started:.1f}s: {e}"
+            )
+            return None, str(e)
+        self.logger.info(
+            f"reading {what}: {len(rows)} rows in {time.monotonic() - started:.1f}s"
         )
-        if not rows:
+        return rows, None
+
+    def _read_all(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        scope = {"excluded": list(EXCLUDED_SCHEMAS), "schemas": self.schemas}
+        reads: Dict[str, Any] = {"clock": None}
+
+        rows, _ = self._read("server identity", SERVER_SQL)
+        reads["server"] = dict(rows[0]) if rows else None
+
+        reads["tables"], error = self._read("table statistics", TABLE_SQL, scope)
+        reads["indexes"] = None
+        if error is None:
+            reads["indexes"], error = self._read("index statistics", INDEX_SQL, scope)
+        if error is not None:
+            snapshot["warnings"].append(
+                {"code": "relation_read_failed", "detail": error}
+            )
+            reads["tables"] = reads["indexes"] = None
+        elif not reads["tables"]:
+            rows, _ = self._read("server clock", CLOCK_SQL)
+            if rows:
+                reads["clock"] = _text(dict(rows[0])["captured_at_server"])
+
+        reads["statements"] = self._read_statements(snapshot)
+
+        reads["columns"], error = self._read("column statistics", COLUMN_SQL, scope)
+        if error is not None:
+            snapshot["warnings"].append(
+                {"code": "column_stats_read_failed", "detail": error}
+            )
+
+        reads["pgss"] = self._read_pgss_info(reads["server"])
+        return reads
+
+    def _process_all(self, snapshot: Dict[str, Any], reads: Dict[str, Any]) -> None:
+        snapshot["server"] = self._server_row(reads["server"])
+        self._process_relations(snapshot, reads)
+        self._process_statements(snapshot, reads["statements"])
+        self._process_columns(snapshot, reads["columns"])
+        snapshot["pgss"] = reads["pgss"]
+
+    def _server_row(self, row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Enough to refuse to merge snapshots from two different servers."""
+        if not row:
             return {}
-        row = dict(rows[0])
         return {
             "database": row.get("database"),
             "database_oid": row.get("database_oid"),
@@ -257,15 +344,11 @@ class WorkloadCollector(DatabaseAnalyzer):
             "is_replica": bool(row.get("is_replica")),
         }
 
-    def _collect_relations(self, snapshot: Dict[str, Any]) -> None:
-        params = {"excluded": list(EXCLUDED_SCHEMAS), "schemas": self.schemas}
-        try:
-            tables = self._rows(TABLE_SQL, params)
-            indexes = self._rows(INDEX_SQL, params)
-        except Exception as e:
-            snapshot["warnings"].append(
-                {"code": "relation_read_failed", "detail": str(e)}
-            )
+    def _process_relations(
+        self, snapshot: Dict[str, Any], reads: Dict[str, Any]
+    ) -> None:
+        tables, indexes = reads["tables"], reads["indexes"]
+        if tables is None or indexes is None:
             return
 
         if tables:
@@ -273,7 +356,7 @@ class WorkloadCollector(DatabaseAnalyzer):
                 dict(tables[0]).get("captured_at_server")
             )
         else:
-            snapshot["captured_at_server"] = self._clock()
+            snapshot["captured_at_server"] = reads["clock"]
             snapshot["notes"].append(
                 {
                     "code": "no_tables_in_scope",
@@ -281,8 +364,11 @@ class WorkloadCollector(DatabaseAnalyzer):
                 }
             )
 
-        snapshot["tables"] = [self._table_row(dict(r)) for r in tables]
-        snapshot["indexes"] = [self._index_row(dict(r)) for r in indexes]
+        with logged_step(
+            self.logger, f"processing {len(tables)} tables and {len(indexes)} indexes"
+        ):
+            snapshot["tables"] = [self._table_row(dict(r)) for r in tables]
+            snapshot["indexes"] = [self._index_row(dict(r)) for r in indexes]
 
         # A NULL scan count means the role cannot read another backend's statistics.
         blind = [t for t in snapshot["tables"] if t["counters"]["idx_scan"] is None]
@@ -297,9 +383,15 @@ class WorkloadCollector(DatabaseAnalyzer):
                 }
             )
 
-    def _collect_statements(self, snapshot: Dict[str, Any]) -> None:
-        present = self._pgss_columns()
-        if present is None:
+    def _read_statements(self, snapshot: Dict[str, Any]) -> Optional[List[Any]]:
+        rows, error = self._read("pg_stat_statements columns", PGSS_COLUMNS_SQL)
+        present = [str(dict(r)["column_name"]) for r in rows or []]
+        if not present:
+            if error is not None and self._lost_during:
+                snapshot["warnings"].append(
+                    {"code": "statement_read_failed", "detail": error}
+                )
+                return None
             snapshot["notes"].append(
                 {
                     "code": "pg_stat_statements_unavailable",
@@ -309,7 +401,7 @@ class WorkloadCollector(DatabaseAnalyzer):
                     ),
                 }
             )
-            return
+            return None
 
         select, canonical, missing = build_statement_query(
             present, self.row_limit, self._pgss_relation()
@@ -327,15 +419,20 @@ class WorkloadCollector(DatabaseAnalyzer):
                 }
             )
 
-        try:
-            rows = self._rows(select)
-        except Exception as e:
+        rows, error = self._read("pg_stat_statements", select)
+        if error is not None:
             snapshot["warnings"].append(
-                {"code": "statement_read_failed", "detail": str(e)}
+                {"code": "statement_read_failed", "detail": error}
             )
-            return
+        return rows
 
-        snapshot["statements"] = [self._statement_row(dict(r)) for r in rows]
+    def _process_statements(
+        self, snapshot: Dict[str, Any], rows: Optional[List[Any]]
+    ) -> None:
+        if rows is None:
+            return
+        with logged_step(self.logger, f"redacting {len(rows)} statements"):
+            snapshot["statements"] = [self._statement_row(dict(r)) for r in rows]
         if len(rows) >= self.row_limit:
             snapshot["warnings"].append(
                 {
@@ -359,35 +456,18 @@ class WorkloadCollector(DatabaseAnalyzer):
                 }
             )
 
-    def _pgss_columns(self) -> Optional[List[str]]:
-        """The pg_stat_statements columns this server has, or None if absent."""
-        try:
-            rows = self._rows(
-                "SELECT column_name FROM information_schema.columns"
-                " WHERE table_name = 'pg_stat_statements'"
-            )
-        except Exception:
-            return None
-        names = [str(dict(r)["column_name"]) for r in rows]
-        return names or None
-
-    def _collect_column_stats(self, snapshot: Dict[str, Any]) -> None:
+    def _process_columns(
+        self, snapshot: Dict[str, Any], rows: Optional[List[Any]]
+    ) -> None:
         """Per-column distribution, which is what says whether a key spreads.
 
         Taken every snapshot rather than once, so a key that is even today and
         lopsided next week is visible as a change rather than a single reading.
         """
-        try:
-            rows = self._rows(
-                COLUMN_SQL,
-                {"excluded": list(EXCLUDED_SCHEMAS), "schemas": self.schemas},
-            )
-        except Exception as e:
-            snapshot["warnings"].append(
-                {"code": "column_stats_read_failed", "detail": str(e)}
-            )
+        if rows is None:
             return
-        snapshot["columns"] = [self._column_row(dict(r)) for r in rows]
+        with logged_step(self.logger, f"processing {len(rows)} column statistics"):
+            snapshot["columns"] = [self._column_row(dict(r)) for r in rows]
 
     def _column_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """One column's distribution. Frequencies only, never the values."""
@@ -411,7 +491,7 @@ class WorkloadCollector(DatabaseAnalyzer):
             "mcv_coverage": _number(sum(freqs)) if freqs else None,
         }
 
-    def _pgss_info(self) -> Dict[str, Any]:
+    def _read_pgss_info(self, server: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """The extension's capacity and how much it has discarded.
 
         ``dealloc`` counts statements evicted because the table filled, and it
@@ -420,14 +500,16 @@ class WorkloadCollector(DatabaseAnalyzer):
         unknown rather than zero, because zero would claim nothing was lost.
         """
         info: Dict[str, Any] = {"max": None, "dealloc": None}
-        rows = self._rows("SELECT current_setting('pg_stat_statements.max', true) AS m")
+        rows, _ = self._read("pg_stat_statements.max", PGSS_MAX_SQL)
         if rows:
             info["max"] = _int(dict(rows[0]).get("m"))
-        try:
-            relation = self._pgss_relation(f"{PGSS_VIEW}_info")
-            rows = self._rows(f"SELECT dealloc FROM {relation}")
-        except Exception:
+        version = _int((server or {}).get("version_num"))
+        if version is not None and version < 140000:
             return info
+        relation = self._pgss_relation(f"{PGSS_VIEW}_info")
+        rows, _ = self._read(
+            f"{PGSS_VIEW}_info", f"SELECT dealloc FROM {relation}", optional=True
+        )
         if rows:
             info["dealloc"] = _number(dict(rows[0]).get("dealloc"))
         return info
@@ -507,14 +589,28 @@ class WorkloadCollector(DatabaseAnalyzer):
             "definition": row.get("definition"),
         }
 
-    def _clock(self) -> Optional[str]:
-        rows = self._rows("SELECT clock_timestamp() AS captured_at_server")
-        return _text(dict(rows[0])["captured_at_server"]) if rows else None
-
     def _rows(self, sql: str, params: Optional[Dict[str, Any]] = None):
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, params) if params else cursor.execute(sql)
-            return cursor.fetchall()
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql, params) if params else cursor.execute(sql)
+                return cursor.fetchall()
+        finally:
+            end_transaction(self.connection)
+
+
+def end_transaction(connection) -> None:
+    try:
+        connection.rollback()
+    except Exception:
+        pass
+
+
+@contextmanager
+def logged_step(logger, what: str) -> Iterator[None]:
+    logger.info(what)
+    started = time.monotonic()
+    yield
+    logger.info(f"{what}: done in {time.monotonic() - started:.1f}s")
 
 
 # Counters differenced at merge time.

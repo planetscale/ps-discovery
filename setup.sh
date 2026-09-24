@@ -304,6 +304,29 @@ fi
 
 add_provider_deps "$provider_choice"
 
+workload_choice="no"
+if [ "$engine_choice" != "mysql" ]; then
+    echo ""
+    echo "📋 Query Workload Capture"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    if [ -n "$PSDISCOVERY_WORKLOAD" ]; then
+        case "$PSDISCOVERY_WORKLOAD" in
+            yes | Yes | YES | true | True | TRUE | 1) workload_choice="yes" ;;
+            *) workload_choice="no" ;;
+        esac
+    elif [ -t 0 ] && [ -t 1 ]; then
+        workload_idx=$(select_one "Will you run query workload capture for PlanetScale Neki?" \
+            "No (standard discovery only)" \
+            "Yes (adds the workload SQL parser)")
+        case "$workload_idx" in
+            1) workload_choice="yes" ;;
+            *) workload_choice="no" ;;
+        esac
+    fi
+fi
+
 # Install the engine, provider, and core dependencies in a single pass.
 echo ""
 echo "📥 Installing dependencies (this can take a minute)..."
@@ -315,8 +338,8 @@ if ! $PIP_CMD install $PIP_FLAGS "${DEPS[@]}" 2>&1; then
     cleanup_on_error
 fi
 
-if [ "$engine_choice" != "mysql" ]; then
-    echo "📥 Installing the workload SQL parser (optional)..."
+if [ "$workload_choice" = "yes" ]; then
+    echo "📥 Installing the workload SQL parser..."
     if ! $PIP_CMD install $PIP_FLAGS "pglast>=7,<9" 2>/dev/null; then
         echo "⚠️  pglast did not install; no wheel for this platform or Python."
         echo "   Everything else works. 'workload finalize' still writes the"

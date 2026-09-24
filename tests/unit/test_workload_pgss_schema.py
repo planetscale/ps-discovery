@@ -86,6 +86,8 @@ class TestTheCollectorResolvesIt:
     def test_info_relation_falls_back_to_the_bare_name(self):
         queries = []
         collector = self._collector([])
-        collector._rows = MagicMock(side_effect=lambda sql: queries.append(sql) or [])
-        collector._pgss_info()
+        collector._rows = MagicMock(
+            side_effect=lambda sql, params=None: queries.append(sql) or []
+        )
+        collector._read_pgss_info(None)
         assert f"FROM {PGSS_VIEW}_info" in queries[-1]

@@ -266,87 +266,89 @@ ps-discovery config-template --output config.yaml --engines postgres,mysql --pro
 
 ## Query Workload Capture (optional, for Neki sharding design)
 
-Designing a sharding scheme for [PlanetScale Neki](https://neki.dev) needs the
-query workload, not only the schema. This optional flow records
-`pg_stat_statements` over a few days from cron. It writes the input files that a
-sharding planner reads.
+[PlanetScale Neki](https://neki.dev) spreads your data across shards by a shard
+key. A good shard key keeps most queries on one shard. To choose that key, the
+PlanetScale migration team must know how your application uses the database.
+This includes which queries run, how often they run, which columns they filter
+on, and which tables each transaction writes together.
 
-Nothing here runs during a normal discovery run, and nothing here writes into
-the discovery output. `./setup.sh` installs what the flow needs, so there is
-nothing extra to install.
+The schema from a discovery run does not show this. Workload capture measures
+it over a few days and writes a bundle. The migration team plans the sharding
+scheme from that bundle.
 
-Capture is off until you switch it on. Set `enabled: true` under
-`database.workload` in your config file, or every command below stops with exit
-code 1 and says so:
+Workload capture is optional and separate from a discovery run. It reads
+catalogs and statistics views only. It reads no user table, runs no `ANALYZE`
+and takes no table locks.
 
-```yaml
-database:
-  workload:
-    enabled: true
-```
+### Levels of data
 
-```bash
-# 1. Prepare a session directory and take the first snapshot
-./ps-discovery workload init --session ./workload-session
+Each level adds to the level before it. More levels give the migration team a
+more accurate sharding plan.
 
-# 2. Take one more snapshot. Run this repeatedly over a few days.
-#    init prints a crontab line that runs it every hour.
-./ps-discovery workload collect --session ./workload-session
+| Level | Source | What it adds | Required |
+|-------|--------|--------------|----------|
+| 1 | `pg_stat_statements` and the statistics views | Each query shape, how often it runs and what it costs. Table activity, table sizes and column value distributions. | Yes |
+| 2 | The server query log, read through pgAudit | Which tables each transaction writes together. How unevenly the values of a candidate shard key are accessed. | No, but recommended |
 
-# 3. Turn the snapshots into the bundle
-./ps-discovery workload finalize --session ./workload-session
-```
-
-`--session` names a directory that this tool creates and owns. It holds the
-snapshots and the captured schema. Give all four commands the same directory.
-You can name it anything and put it anywhere. Delete it when you are done.
-
-Each `collect` takes one snapshot and exits. It does no scheduling of its own.
-Two snapshots are the minimum, because a window needs two readings to
-difference. More snapshots, spread across a peak, give a better result.
-
-`pg_stat_statements` records statements, not transactions, and normalizes every
-literal. So it cannot say which tables you write together in one transaction, or
-how unevenly a candidate shard key's values are accessed. Set `capture_log: true`
-under `database.workload` and each `collect` also reads the server's query log,
-which answers both. It is off by default, and
-`./ps-discovery workload init --check` reports whether your server can supply
-it. The default source is pgAudit: you export the window and name the file. A
-session that captures the log carries `burst.csv`, which holds statement text
-with its literal values: read it before the archive leaves your organization.
-See
+Level 1 alone gives a complete bundle, and the bundle names what level 2 would
+add. To add level 2, set `capture_log: true` under `database.workload`. pgAudit
+is the default source. Platforms without pgAudit can use `log_fdw` (RDS and
+Aurora) or `stderr` (self-managed hosts). See
 [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
 
-Compress the bundle directory and send the archive to your PlanetScale migration
-engineer, who uses it to plan the sharding scheme. The bundle holds a query log,
-a schema file, table row counts with per-column statistics, a `manifest.json`
-recording when the capture ran, and a README summarizing what was collected.
+Level 2 records literal values from your queries in `burst.csv`. Review that
+file before the bundle leaves your organization.
 
-`pg_stat_statements` is required: it is the only record of the query workload,
-and that workload is what a sharding scheme is planned from. It is not a trusted
-extension, so enabling it needs a superuser or the provider's admin role. The
-capture role also needs `pg_monitor`. `workload init` checks both and stops with
-exit code 5 when either is missing. Reading the query log needs more, in the
-database and in your cloud account; see
-[Permissions for log capture](docs/workload_capture.md#permissions-for-log-capture).
+### Steps
 
-The flow reads catalogs and statistics views only. It reads no user table, never
-runs `ANALYZE` and holds no table locks. Nothing persists on the database
-server. The one exception is `capture_log_source: log_fdw`, available on RDS and
-Aurora, where each `collect` creates the objects it needs to read the log and
-drops them again. Read
-[Workload Capture](docs/workload_capture.md) before you enable it on a
-production primary.
+1. Switch the capture on in your config file. Without this setting, the
+   commands stop with exit code 1.
 
-**Clean up when the capture is over.** Reset the statement logging you turned
-on for the window, and delete the log files you exported, which hold literal
-values from your queries. `finalize` prints the reset for you. See
-[Turn the logging back off](docs/workload_capture.md#turn-the-logging-back-off).
+   ```yaml
+   database:
+     workload:
+       enabled: true
+   ```
 
-With `capture_log_source: log_fdw`, each `collect` also drops the objects it
-created to read the log. To drop them at any point, run
-`./ps-discovery workload init --cleanup`. See
-[Leave nothing behind](docs/workload_capture.md#leave-nothing-behind).
+2. Check the server. `init --check` reports what the server can supply for
+   each level and what you must change. It creates no session and changes
+   nothing.
+
+   ```bash
+   ./ps-discovery workload init --check
+   ```
+
+3. Start the session. `init` checks the requirements, stores the schema and
+   takes the first snapshot. It stops with exit code 5 if `pg_stat_statements`
+   cannot be read or the role does not have `pg_monitor`.
+
+   ```bash
+   ./ps-discovery workload init --session ./workload-session
+   ```
+
+4. Collect snapshots. `init` prints a crontab line that runs `collect` every
+   hour. Run it for two to three days, over a traffic peak.
+
+   ```bash
+   ./ps-discovery workload collect --session ./workload-session
+   ```
+
+5. Write the bundle. `finalize` prints the command that compresses it. Send the
+   archive to your PlanetScale migration engineer.
+
+   ```bash
+   ./ps-discovery workload finalize --session ./workload-session
+   ```
+
+After you send the archive, delete the session directory. If you used level 2,
+also reset the statement logging and delete the log files you exported.
+`finalize` prints the reset commands. With `log_fdw`, run
+`./ps-discovery workload init --cleanup` to drop the objects the capture made.
+See [Turn the logging back off](docs/workload_capture.md#turn-the-logging-back-off).
+
+For the role setup, the capture period, the permissions and the message codes,
+see [Workload Capture](docs/workload_capture.md). For the bundle contents, see
+[Workload Bundle Format](docs/workload-bundle.md).
 
 ## Security & Data Privacy
 

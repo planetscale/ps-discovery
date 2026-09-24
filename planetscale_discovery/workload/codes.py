@@ -48,6 +48,7 @@ WARNING_CODES: Dict[str, str] = {
     "row_cap_reached": "W211",
     "statement_text_masked": "W212",
     "column_stats_read_failed": "W214",
+    "connection_lost": "W216",
     # A stored query log window that finalize could not place in this capture.
     "burst_outside_window": "W215",
 }
