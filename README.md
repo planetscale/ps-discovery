@@ -13,6 +13,8 @@ Both tools can be used independently or together for a complete environment asse
 
 ## Quick Start
 
+Agents must follow instructions in `AGENTS.md`.
+
 ### 1. Extract and Run Setup
 
 ```bash
