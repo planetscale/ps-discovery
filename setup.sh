@@ -23,6 +23,8 @@ select_one() {
     local selected=0 key rest first=1 i
 
     printf '\e[?25l' >&2  # hide cursor
+    # Trap SIGINT (Ctrl+C) to restore cursor and exit with error code 130
+    trap 'printf "\e[?25h" >&2; exit 130' INT
     while true; do
         if [ "$first" -eq 0 ]; then
             printf '\e[%dA' "$((count + 1))" >&2  # move up to redraw
@@ -213,7 +215,7 @@ engine_choice=""
 if [ -n "$PSDISCOVERY_ENGINE" ]; then
     engine_choice="$PSDISCOVERY_ENGINE"
 elif [ -t 0 ] && [ -t 1 ]; then
-    engine_idx=$(select_one "Which database are you discovering?" "PostgreSQL" "MySQL")
+    engine_idx=$(select_one "Which database are you discovering?" "PostgreSQL" "MySQL") || exit 130
     case "$engine_idx" in
         1) engine_choice="mysql" ;;
         *) engine_choice="postgres" ;;
@@ -288,7 +290,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         "Heroku Postgres" \
         "Neon" \
         "PlanetScale Postgres" \
-        "None (self-managed / direct connection)")
+        "None (self-managed / direct connection)") || exit 130
     case "$provider_idx" in
         0) provider_choice="aws" ;;
         1) provider_choice="gcp" ;;
@@ -319,7 +321,7 @@ if [ "$engine_choice" != "mysql" ]; then
     elif [ -t 0 ] && [ -t 1 ]; then
         workload_idx=$(select_one "Will you run query workload capture for PlanetScale Neki?" \
             "No (standard discovery only)" \
-            "Yes (adds the workload SQL parser)")
+            "Yes (adds the SQL parser dependency, you must still enable workload capture in the config)") || exit 130
         case "$workload_idx" in
             1) workload_choice="yes" ;;
             *) workload_choice="no" ;;

@@ -290,7 +290,7 @@ more accurate sharding plan.
 | Level | Source | What it adds | Required |
 |-------|--------|--------------|----------|
 | 1 | `pg_stat_statements` and the statistics views | Each query shape, how often it runs and what it costs. Table activity, table sizes and column value distributions. | Yes |
-| 2 | The server query log, read through pgAudit | Which tables each transaction writes together. How unevenly the values of a candidate shard key are accessed. | No, but recommended |
+| 2 | Statement log or pgAudit records, read from the standard server log | Which tables each transaction writes together. How unevenly the values of a candidate shard key are accessed. | No, but recommended |
 
 Level 1 alone gives a complete bundle, and the bundle names what level 2 would
 add. To add level 2, set `capture_log: true` under `database.workload`. pgAudit

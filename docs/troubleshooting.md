@@ -48,31 +48,48 @@ sudo apt install python3.12 python3.12-venv python3-pip
 <details>
 <summary><b>Amazon Linux 2023</b></summary>
 
-```bash
-# Amazon Linux 2023 ships Python 3.9 as the default python3, which is no
-# longer supported. Install Python 3.11 (or newer) explicitly:
-sudo dnf install python3.11 python3.11-pip
+Amazon Linux 2023 ships Python 3.9 as the default python3, which is no longer
+supported. Install Python 3.11 (or newer) explicitly:
 
-# Run setup.sh with the newer interpreter, e.g.:
-python3.11 -m venv venv  # or ensure python3.11 is first on PATH
+```bash
+sudo dnf install python3.11 python3.11-pip
 
 # Verify installation
 python3.11 --version
 ```
+
+Prepare a virtual environment with the newer interpreter, for example:
+
+```bash
+python3.11 -m venv venv
+```
+
+Run setup.sh with temporary path pointing at the virtual environment:
+
+```bash
+PATH="$PWD/venv/bin:$PATH" ./setup.sh
+```
+
+This custom path is only needed for the setup. Subsequent invocations of 
+`ps-discovery` use the Python version from the virtual environment.
 
 </details>
 
 <details>
 <summary><b>RHEL/Rocky Linux/CentOS</b></summary>
 
+RHEL 9 / Rocky Linux 9 ship Python 3.9 as the default python3, which is no longer
+supported. Install Python 3.11 (or newer) explicitly:
+
 ```bash
-# RHEL 9 / Rocky Linux 9 ship Python 3.9 as the default python3, which is no
-# longer supported. Install Python 3.11 (or newer) explicitly:
 sudo dnf install python3.11 python3.11-pip
 
 # Verify installation
 python3.11 --version
 ```
+
+Now prepare a virtual environment and run `setup.sh` using a temporary path as
+described in the Amazon Linux 2023 instructions above.
 
 </details>
 
