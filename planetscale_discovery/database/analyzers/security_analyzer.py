@@ -13,6 +13,18 @@ class SecurityAnalyzer(DatabaseAnalyzer):
 
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
+        self._version_num = None
+
+    def _get_server_version_num(self) -> int:
+        if self._version_num is None:
+            try:
+                with self.connection.cursor() as cursor:
+                    cursor.execute("SHOW server_version_num")
+                    self._version_num = int(cursor.fetchone()["server_version_num"])
+            except Exception as e:
+                self.logger.warning(f"Could not get server version: {e}")
+                self._version_num = 0
+        return self._version_num
 
     def analyze(self) -> Dict[str, Any]:
         """Run complete security analysis."""
@@ -58,20 +70,29 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                 roles = [role for role in all_roles if not role["rolcanlogin"]]
 
                 # Get role memberships
-                cursor.execute("""
-                    SELECT
-                        r.rolname as role_name,
-                        m.rolname as member_name,
-                        grantor.rolname as grantor_name,
-                        pgr.admin_option,
-                        pgr.inherit_option
-                    FROM pg_auth_members pgr
-                    JOIN pg_roles r ON pgr.roleid = r.oid
-                    JOIN pg_roles m ON pgr.member = m.oid
-                    JOIN pg_roles grantor ON pgr.grantor = grantor.oid
-                    ORDER BY r.rolname, m.rolname
-                """)
-                role_memberships = [dict(row) for row in cursor.fetchall()]
+                inherit_option_col = (
+                    "pgr.inherit_option"
+                    if self._get_server_version_num() >= 160000
+                    else "NULL as inherit_option"
+                )
+                try:
+                    cursor.execute(f"""
+                        SELECT
+                            r.rolname as role_name,
+                            m.rolname as member_name,
+                            grantor.rolname as grantor_name,
+                            pgr.admin_option,
+                            {inherit_option_col}
+                        FROM pg_auth_members pgr
+                        JOIN pg_roles r ON pgr.roleid = r.oid
+                        JOIN pg_roles m ON pgr.member = m.oid
+                        JOIN pg_roles grantor ON pgr.grantor = grantor.oid
+                        ORDER BY r.rolname, m.rolname
+                    """)
+                    role_memberships = [dict(row) for row in cursor.fetchall()]
+                except Exception as e:
+                    self.add_warning(f"Role memberships unavailable: {e}")
+                    role_memberships = []
 
                 # Identify superusers and high-privilege users
                 superusers = [role for role in all_roles if role["rolsuper"]]
