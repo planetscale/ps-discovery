@@ -16,7 +16,12 @@ T1 = "2026-08-25 10:10:00+00:00"
 def stmt(query, calls, total=None, queryid="1", **counters):
     base = {"calls": calls, "total_exec_time": total if total is not None else calls}
     base.update(counters)
-    return {"queryid": queryid, "query": query, "query_kind": "SELECT", "counters": base}
+    return {
+        "queryid": queryid,
+        "query": query,
+        "query_kind": "SELECT",
+        "counters": base,
+    }
 
 
 def snap(statements=(), tables=(), indexes=(), at=T0, status="ok", server=None):
