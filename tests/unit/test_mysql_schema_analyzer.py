@@ -241,6 +241,23 @@ class TestMySQLSchemaAnalyzer:
         assert result == []
         assert len(analyzer.errors) == 1
 
+    def test_db_object_counts_aggregates_joined_counts(self, analyzer):
+        with patch.object(analyzer, "execute_query", return_value=[]) as execute_query:
+            analyzer._get_db_object_counts()
+
+        query = execute_query.call_args.args[0]
+        assert "MAX(r.routine_count)" in query
+        assert "MAX(tr.trigger_count)" in query
+
+    def test_db_object_counts_error_records_gap(self, analyzer):
+        with patch.object(
+            analyzer, "execute_query", side_effect=Exception("connection lost")
+        ):
+            result = analyzer._get_db_object_counts()
+
+        assert result == []
+        assert len(analyzer.errors) == 1
+
     # ---------------------------------------------------------------
     # _get_index_analysis - cardinality and prefix_lengths
     # ---------------------------------------------------------------

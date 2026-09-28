@@ -535,8 +535,8 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                     t.table_schema AS schema_name,
                     SUM(CASE WHEN t.table_type = 'BASE TABLE' THEN 1 ELSE 0 END) AS table_count,
                     SUM(CASE WHEN t.table_type = 'VIEW' THEN 1 ELSE 0 END) AS view_count,
-                    COALESCE(r.routine_count, 0) AS routine_count,
-                    COALESCE(tr.trigger_count, 0) AS trigger_count
+                    COALESCE(MAX(r.routine_count), 0) AS routine_count,
+                    COALESCE(MAX(tr.trigger_count), 0) AS trigger_count
                 FROM information_schema.tables t
                 LEFT JOIN (
                     SELECT routine_schema, COUNT(*) AS routine_count
