@@ -13,10 +13,10 @@ T0 = "2026-08-25 10:00:00+00:00"
 T1 = "2026-08-25 10:10:00+00:00"
 
 
-def stmt(query, calls, total=None, **counters):
+def stmt(query, calls, total=None, queryid="1", **counters):
     base = {"calls": calls, "total_exec_time": total if total is not None else calls}
     base.update(counters)
-    return {"queryid": "1", "query": query, "query_kind": "SELECT", "counters": base}
+    return {"queryid": queryid, "query": query, "query_kind": "SELECT", "counters": base}
 
 
 def snap(statements=(), tables=(), indexes=(), at=T0, status="ok", server=None):
@@ -41,6 +41,31 @@ def table(name, idx_scan=0, rows=100, **gauges):
 
 
 class TestWindow:
+    def test_a_statement_idle_since_the_baseline_is_omitted(self):
+        merged = merge_snapshots(
+            [
+                snap(
+                    [
+                        stmt("SELECT old", 100, queryid="old"),
+                        stmt("SELECT new", 0, queryid="new"),
+                    ],
+                    at=T0,
+                ),
+                snap(
+                    [
+                        stmt("SELECT old", 100, queryid="old"),
+                        stmt("SELECT new", 40, queryid="new"),
+                    ],
+                    at=T1,
+                ),
+            ]
+        )
+        queries = {entry["query"] for entry in merged["statements"].values()}
+        kept = merged["statements"][statement_id("SELECT new")]
+        assert queries == {"SELECT new"}
+        assert kept["counters"]["calls"] == 40
+        assert merged["totals"]["distinct_statements"] == 1
+
     def test_counters_are_differenced(self):
         merged = merge_snapshots(
             [snap([stmt("SELECT 1", 100)], at=T0), snap([stmt("SELECT 1", 250)], at=T1)]

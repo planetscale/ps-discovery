@@ -450,7 +450,8 @@ def render_workload_sql(
     if identity:
         lines.append(f"-- neki:capture {identity}")
     lines += [
-        "-- Every observed statement is included; nothing is ranked or dropped.",
+        "-- Every statement that ran during the window is included.",
+        "-- A statement whose counters did not move is omitted. Nothing is ranked.",
     ]
     if covered_seconds:
         lines.append(f"-- Observed over {covered_seconds:.0f} seconds of traffic.")
