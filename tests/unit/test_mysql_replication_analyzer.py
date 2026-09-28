@@ -158,3 +158,75 @@ class TestMySQLReplicationAnalyzer:
         result = analyzer.analyze()
 
         assert "binlog_retention" in result
+
+
+class TestReplicationAccessDenied:
+    @pytest.fixture
+    def mock_connection(self):
+        connection = MagicMock()
+        cursor = MagicMock()
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    @pytest.fixture
+    def analyzer(self, mock_connection):
+        connection, _ = mock_connection
+        return MySQLReplicationAnalyzer(connection)
+
+    DENIED = Exception(
+        "(1227, 'Access denied; you need (at least one of) the SUPER, "
+        "REPLICATION CLIENT privilege(s) for this operation')"
+    )
+
+    def test_replica_status_denied_records_gap(self, analyzer, mock_connection):
+        _, cursor = mock_connection
+        cursor.execute.side_effect = self.DENIED
+
+        result = analyzer._get_replica_status()
+
+        assert result == {}
+        assert len(analyzer.errors) == 1
+        assert "REPLICATION CLIENT" in analyzer.errors[0]["message"]
+
+    def test_binary_logs_denied_records_gap(self, analyzer, mock_connection):
+        _, cursor = mock_connection
+        cursor.execute.side_effect = self.DENIED
+
+        result = analyzer._get_binary_logs()
+
+        assert result == []
+        assert len(analyzer.errors) == 1
+        assert "Failed to get binary logs" in analyzer.errors[0]["message"]
+
+    def test_binary_log_status_denied_records_gap(self, analyzer, mock_connection):
+        _, cursor = mock_connection
+        cursor.execute.side_effect = self.DENIED
+
+        result = analyzer._get_binary_log_status()
+
+        assert result == {}
+        assert len(analyzer.errors) == 1
+
+    def test_not_a_replica_records_no_gap(self, analyzer, mock_connection):
+        _, cursor = mock_connection
+        cursor.description = [("Replica_IO_State",)]
+        cursor.fetchone.return_value = None
+
+        result = analyzer._get_replica_status()
+
+        assert result == {}
+        assert len(analyzer.errors) == 0
+
+    def test_legacy_syntax_fallback_records_no_gap(self, analyzer, mock_connection):
+        _, cursor = mock_connection
+        cursor.execute.side_effect = [
+            Exception("(1064, 'You have an error in your SQL syntax')"),
+            None,
+        ]
+        cursor.description = [("Slave_IO_State",)]
+        cursor.fetchone.return_value = ("Waiting for master to send event",)
+
+        result = analyzer._get_replica_status()
+
+        assert result["Slave_IO_State"] == "Waiting for master to send event"
+        assert len(analyzer.errors) == 0
