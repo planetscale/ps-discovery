@@ -162,6 +162,24 @@ class PlanetScaleConfig:
 
 
 @dataclass
+class SnowflakeConfig:
+    """Snowflake Postgres provider configuration."""
+
+    enabled: bool = False
+    account: str = ""
+    user: Optional[str] = None
+    role: Optional[str] = None
+    warehouse: Optional[str] = None
+    authentication: str = "key_pair"
+    private_key_path: Optional[str] = None
+    private_key_passphrase: Optional[str] = None
+    password: Optional[str] = None
+    discover_all: bool = True
+    account_inventory: bool = True
+    resources: Dict[str, List[str]] = field(default_factory=dict)
+
+
+@dataclass
 class OutputConfig:
     """Output configuration."""
 
@@ -181,6 +199,7 @@ class DiscoveryConfig:
     heroku: HerokuConfig = field(default_factory=HerokuConfig)
     neon: NeonConfig = field(default_factory=NeonConfig)
     planetscale: PlanetScaleConfig = field(default_factory=PlanetScaleConfig)
+    snowflake: SnowflakeConfig = field(default_factory=SnowflakeConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     # None means "unspecified" — the config file did not declare `modules:`.
     # resolve_modules() then infers what to run from the config contents.
@@ -238,11 +257,24 @@ def resolve_modules(
             config.heroku,
             config.neon,
             config.planetscale,
+            config.snowflake,
         )
     ):
         modules.append("cloud")
 
     return modules
+
+
+def apply_providers_override(config: DiscoveryConfig, providers: List[str]) -> None:
+    """Enable only the named cloud providers (CLI --providers)."""
+    enabled = {name.strip().lower() for name in providers if name and name.strip()}
+    config.aws.enabled = "aws" in enabled
+    config.gcp.enabled = "gcp" in enabled
+    config.supabase.enabled = "supabase" in enabled
+    config.heroku.enabled = "heroku" in enabled
+    config.neon.enabled = "neon" in enabled
+    config.planetscale.enabled = "planetscale" in enabled
+    config.snowflake.enabled = "snowflake" in enabled
 
 
 def _database_is_configured(config: DiscoveryConfig) -> bool:
@@ -308,7 +340,8 @@ class ConfigManager:
                     f"  Supabase: {docs_base}/docs/providers/supabase.md\n"
                     f"  Heroku:   {docs_base}/docs/providers/heroku.md\n"
                     f"  Neon:     {docs_base}/docs/providers/neon.md\n"
-                    f"  PlanetScale: {docs_base}/docs/providers/planetscale.md"
+                    f"  PlanetScale: {docs_base}/docs/providers/planetscale.md\n"
+                    f"  Snowflake: {docs_base}/docs/providers/snowflake.md"
                 ) from e
         else:
             # Load from environment or use defaults
@@ -500,6 +533,41 @@ class ConfigManager:
                 "discover_all", planetscale_config.discover_all
             )
 
+        # Parse Snowflake config
+        snowflake_config = SnowflakeConfig()
+        if "providers" in config_data and "snowflake" in (
+            config_data["providers"] or {}
+        ):
+            sf_data = config_data["providers"]["snowflake"] or {}
+            snowflake_config.enabled = sf_data.get("enabled", snowflake_config.enabled)
+            snowflake_config.account = sf_data.get("account", snowflake_config.account)
+            snowflake_config.user = sf_data.get("user", snowflake_config.user)
+            snowflake_config.role = sf_data.get("role", snowflake_config.role)
+            snowflake_config.warehouse = sf_data.get(
+                "warehouse", snowflake_config.warehouse
+            )
+            snowflake_config.authentication = sf_data.get(
+                "authentication", snowflake_config.authentication
+            )
+            snowflake_config.private_key_path = sf_data.get(
+                "private_key_path", snowflake_config.private_key_path
+            )
+            snowflake_config.private_key_passphrase = sf_data.get(
+                "private_key_passphrase", snowflake_config.private_key_passphrase
+            )
+            snowflake_config.password = sf_data.get(
+                "password", snowflake_config.password
+            )
+            snowflake_config.discover_all = sf_data.get(
+                "discover_all", snowflake_config.discover_all
+            )
+            snowflake_config.account_inventory = sf_data.get(
+                "account_inventory", snowflake_config.account_inventory
+            )
+            snowflake_config.resources = sf_data.get(
+                "resources", snowflake_config.resources
+            )
+
         # Parse output config
         output_config = OutputConfig()
         if "output" in config_data:
@@ -518,6 +586,7 @@ class ConfigManager:
             heroku=heroku_config,
             neon=neon_config,
             planetscale=planetscale_config,
+            snowflake=snowflake_config,
             output=output_config,
             # Absent key -> None (unspecified); resolve_modules() will infer.
             modules=config_data.get("modules"),
@@ -610,6 +679,20 @@ class ConfigManager:
             target_database=os.getenv("PLANETSCALE_TARGET_DATABASE"),
         )
 
+        # Snowflake configuration. Password stays in the environment; the
+        # analyzer also reads SNOWFLAKE_PASSWORD if the YAML field is empty.
+        snowflake_config = SnowflakeConfig(
+            enabled=os.getenv("SNOWFLAKE_ENABLED", "false").lower() == "true",
+            account=os.getenv("SNOWFLAKE_ACCOUNT", ""),
+            user=os.getenv("SNOWFLAKE_USER"),
+            role=os.getenv("SNOWFLAKE_ROLE"),
+            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+            authentication=os.getenv("SNOWFLAKE_AUTHENTICATION", "key_pair"),
+            private_key_path=os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH"),
+            private_key_passphrase=os.getenv("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
+            password=os.getenv("SNOWFLAKE_PASSWORD"),
+        )
+
         # Output configuration
         output_config = OutputConfig(
             output_dir=os.getenv("DISCOVERY_OUTPUT_DIR", "./discovery_output"),
@@ -625,6 +708,7 @@ class ConfigManager:
             heroku=heroku_config,
             neon=neon_config,
             planetscale=planetscale_config,
+            snowflake=snowflake_config,
             output=output_config,
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_file=os.getenv("LOG_FILE"),
@@ -738,12 +822,14 @@ class ConfigManager:
                 or self.config.heroku.enabled
                 or self.config.neon.enabled
                 or self.config.planetscale.enabled
+                or self.config.snowflake.enabled
             ):
                 errors.append(
                     "At least one cloud provider must be enabled for cloud discovery.\n"
                     "  Enable a provider in your config file (e.g. providers.aws.enabled: true)\n"
                     "  or pass --providers on the command line (e.g. --providers heroku).\n"
-                    "  Supported providers: aws, gcp, supabase, heroku, neon, planetscale"
+                    "  Supported providers: aws, gcp, supabase, heroku, neon, "
+                    "planetscale, snowflake"
                 )
 
         if errors:
@@ -757,7 +843,7 @@ class ConfigManager:
         Args:
             output_path: Path where the template should be saved
             providers: List of cloud providers to include (aws, gcp, supabase, heroku,
-                      neon, planetscale).
+                      neon, planetscale, snowflake).
                       If None or empty, no cloud provider sections are generated.
             engines: List of database engines to include (postgres, mysql).
                     Defaults to ["postgres"].
@@ -941,6 +1027,26 @@ mysql:
     # Optional: analyze a specific database only
     # target_database: my-database
     discover_all: true  # Discover all Postgres databases.
+
+"""
+
+                if "snowflake" in providers:
+                    template_yaml += """  snowflake:
+    enabled: true
+    account: ${SNOWFLAKE_ACCOUNT}
+    user: ${SNOWFLAKE_USER}
+    role: DISCOVERY_READONLY
+    # Preferred: key pair (path outside this file). Password/SSO are alternatives.
+    authentication: key_pair
+    private_key_path: ${SNOWFLAKE_PRIVATE_KEY_PATH}
+    # For password auth, set authentication: password and SNOWFLAKE_PASSWORD.
+    discover_all: true
+    account_inventory: true  # SHOW / DESCRIBE POSTGRES INSTANCE
+    # Optional: limit to named instances when discover_all is false
+    # resources:
+    #   postgres_instances:
+    #     - your_primary_instance
+    #     - your_replica_instance
 
 """
 

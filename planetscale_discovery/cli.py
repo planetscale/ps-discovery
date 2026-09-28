@@ -11,7 +11,11 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List
 
-from .config.config_manager import ConfigManager, resolve_modules
+from .config.config_manager import (
+    ConfigManager,
+    apply_providers_override,
+    resolve_modules,
+)
 from .cloud.discovery import CloudDiscoveryTool
 from .common.utils import setup_logging, generate_timestamp
 from . import __version__
@@ -91,7 +95,7 @@ may be used with no subcommand: `ps-discovery --config config.yaml`.
     )
     config_parser.add_argument(
         "--providers",
-        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon,planetscale). If not specified, only database and output sections are generated.",
+        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon,planetscale,snowflake). If not specified, only database and output sections are generated.",
         default=None,
     )
     config_parser.add_argument(
@@ -164,7 +168,7 @@ def add_shared_run_args(
         "--providers",
         default=default(None),
         help=(
-            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon,planetscale). "
+            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon,planetscale,snowflake). "
             "Overrides the enabled providers in the config file."
         ),
     )
@@ -283,6 +287,26 @@ def add_cloud_args(parser: argparse.ArgumentParser) -> None:
         help="Target specific PlanetScale database for focused analysis",
     )
 
+    cloud_group.add_argument(
+        "--snowflake-account",
+        help="Snowflake account locator for Postgres inventory",
+    )
+
+    cloud_group.add_argument(
+        "--snowflake-user",
+        help="Snowflake user for account inventory",
+    )
+
+    cloud_group.add_argument(
+        "--snowflake-role",
+        help="Snowflake role used for SHOW / DESCRIBE POSTGRES INSTANCE",
+    )
+
+    cloud_group.add_argument(
+        "--snowflake-private-key-path",
+        help="Path to the Snowflake key-pair private key (PEM)",
+    )
+
 
 VALID_DATABASE_ANALYZERS = [
     "config",
@@ -369,13 +393,7 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
     # and keeps this entry point usable on its own.
     providers_arg = getattr(args, "providers", None)
     if providers_arg:
-        providers = providers_arg.split(",")
-        config.aws.enabled = "aws" in providers
-        config.gcp.enabled = "gcp" in providers
-        config.supabase.enabled = "supabase" in providers
-        config.heroku.enabled = "heroku" in providers
-        config.neon.enabled = "neon" in providers
-        config.planetscale.enabled = "planetscale" in providers
+        apply_providers_override(config, providers_arg.split(","))
 
     regions = getattr(args, "regions", None)
     if regions:
@@ -433,6 +451,18 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
         and args.planetscale_target_database
     ):
         config.planetscale.target_database = args.planetscale_target_database
+
+    if getattr(args, "snowflake_account", None):
+        config.snowflake.account = args.snowflake_account
+
+    if getattr(args, "snowflake_user", None):
+        config.snowflake.user = args.snowflake_user
+
+    if getattr(args, "snowflake_role", None):
+        config.snowflake.role = args.snowflake_role
+
+    if getattr(args, "snowflake_private_key_path", None):
+        config.snowflake.private_key_path = args.snowflake_private_key_path
 
     # Run cloud discovery
     cloud_tool = CloudDiscoveryTool(config)
@@ -829,6 +859,40 @@ def generate_summary_markdown(
                     )
                 lines.append("")
 
+            elif provider_name == "snowflake":
+                lines.append(
+                    f"- **Postgres instances:** {provider_summary.get('instance_count', 0)}"
+                )
+                lines.append(
+                    f"- **Primaries:** {provider_summary.get('primary_count', 0)}"
+                )
+                lines.append(
+                    f"- **Read replicas:** {provider_summary.get('read_replica_count', 0)}"
+                )
+                all_instances = []
+                for region, rdata in resources.items():
+                    for inst in rdata.get("instances", []):
+                        all_instances.append(inst)
+                if all_instances:
+                    lines.extend(
+                        [
+                            "",
+                            "| Instance | Type | State | Compute | Region | CSP | Origin |",
+                            "|----------|------|-------|---------|--------|-----|--------|",
+                        ]
+                    )
+                    for inst in all_instances:
+                        lines.append(
+                            f"| {inst.get('name', '')} "
+                            f"| {inst.get('type', '')} "
+                            f"| {inst.get('state', '')} "
+                            f"| {inst.get('compute_family') or ''} "
+                            f"| {inst.get('region', '')} "
+                            f"| {inst.get('csp', '')} "
+                            f"| {inst.get('origin') or ''} |"
+                        )
+                lines.append("")
+
     # Gaps section
     gaps = []
     if db_results:
@@ -1018,13 +1082,9 @@ def main() -> None:
         # reflects providers enabled on the command line.
         providers_arg = getattr(args, "providers", None)
         if providers_arg:
-            providers = [p.strip() for p in providers_arg.split(",")]
-            config.aws.enabled = "aws" in providers
-            config.gcp.enabled = "gcp" in providers
-            config.supabase.enabled = "supabase" in providers
-            config.heroku.enabled = "heroku" in providers
-            config.neon.enabled = "neon" in providers
-            config.planetscale.enabled = "planetscale" in providers
+            apply_providers_override(
+                config, [p.strip() for p in providers_arg.split(",")]
+            )
 
         # Resolve which modules to run. Precedence: explicit subcommand, then
         # the config file's `modules:`, then inference from config contents.

@@ -197,6 +197,15 @@ class TestCloudArguments:
         args = parser.parse_args(["cloud", "--providers", "aws,gcp"])
         assert args.providers == "aws,gcp"
 
+    def test_snowflake_providers_flag(self):
+        parser = create_main_parser()
+        args = parser.parse_args(["cloud", "--providers", "snowflake"])
+        assert args.providers == "snowflake"
+        args = parser.parse_args(
+            ["cloud", "--providers", "snowflake", "--snowflake-account", "xy12345"]
+        )
+        assert args.snowflake_account == "xy12345"
+
     def test_regions_argument(self):
         """Test --regions argument."""
         parser = create_main_parser()
@@ -787,6 +796,61 @@ class TestGenerateSummaryMarkdown:
         assert "Apps:" in content
         assert "Databases:" in content
         assert "Plans:" in content
+
+    def test_cloud_section_with_snowflake(self):
+        """Test cloud section with Snowflake provider data."""
+        results = {
+            "timestamp": "2025-01-15T10:00:00Z",
+            "discovery_version": "2.0.0",
+            "database_results": None,
+            "cloud_results": {
+                "providers": {
+                    "snowflake": {
+                        "summary": {
+                            "instance_count": 2,
+                            "primary_count": 1,
+                            "read_replica_count": 1,
+                        },
+                        "resources": {
+                            "us-east-1": {
+                                "instances": [
+                                    {
+                                        "name": "primary_instance",
+                                        "type": "PRIMARY",
+                                        "state": "READY",
+                                        "compute_family": "STANDARD_M",
+                                        "region": "us-east-1",
+                                        "csp": "aws",
+                                        "origin": None,
+                                    },
+                                    {
+                                        "name": "replica_1",
+                                        "type": "READ_REPLICA",
+                                        "state": "READY",
+                                        "compute_family": "STANDARD_M",
+                                        "region": "us-east-1",
+                                        "csp": "aws",
+                                        "origin": "primary_instance",
+                                    },
+                                ]
+                            }
+                        },
+                    }
+                },
+                "summary": {
+                    "providers_discovered": ["snowflake"],
+                    "total_databases": 2,
+                    "total_clusters": 0,
+                    "total_regions": 1,
+                },
+                "errors": [],
+            },
+        }
+        content = self._write_and_read(results)
+        assert "SNOWFLAKE" in content
+        assert "Postgres instances:" in content
+        assert "READ_REPLICA" in content
+        assert "primary_instance" in content
 
     def test_cloud_section_with_supabase(self):
         """Test cloud section with Supabase provider data."""

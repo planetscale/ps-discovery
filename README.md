@@ -7,7 +7,7 @@ Discovery tools for analyzing PostgreSQL and MySQL/Vitess database environments 
 The PlanetScale Discovery Tools consist of two main components:
 
 1. **Database Discovery** - Comprehensive database environment analysis for PostgreSQL and MySQL/Vitess
-2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, PlanetScale Postgres)
+2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, PlanetScale Postgres, Snowflake Postgres)
 
 Both tools can be used independently or together for a complete environment assessment.
 
@@ -54,6 +54,7 @@ nano config.yaml
 - **Heroku**: Set your `api_key` from [dashboard.heroku.com/account](https://dashboard.heroku.com/account) or set `HEROKU_API_KEY` env var
 - **Neon**: Set your `api_key` from [console.neon.tech/app/settings/api-keys](https://console.neon.tech/app/settings/api-keys) or set `NEON_API_KEY` env var
 - **PlanetScale**: Set `service_token_id` and `service_token` from [app.planetscale.com/settings/service-tokens](https://app.planetscale.com/settings/service-tokens) or set `PLANETSCALE_SERVICE_TOKEN_ID` and `PLANETSCALE_SERVICE_TOKEN` env vars
+- **Snowflake**: Set `account`, `user`, and `private_key_path` (or `SNOWFLAKE_ACCOUNT` / `SNOWFLAKE_USER` / `SNOWFLAKE_PRIVATE_KEY_PATH`). Do not enable AWS/GCP for Snowflake-hosted hostnames.
 
 ### 3. Run Discovery
 
@@ -237,6 +238,8 @@ providers:
     enabled: false
   planetscale:
     enabled: false
+  snowflake:
+    enabled: false
 
 output:
   output_dir: ./reports
@@ -265,6 +268,7 @@ ps-discovery config-template --output config.yaml --engines postgres,mysql --pro
 | **Heroku** | Postgres add-ons, PgBouncer pooling, followers | [Heroku Setup Guide](docs/providers/heroku.md) |
 | **Neon** | Serverless Postgres projects, branches, endpoints | [Neon Setup Guide](docs/providers/neon.md) |
 | **PlanetScale** | Postgres databases, branches, cluster sizing (Postgres only) | [PlanetScale Setup Guide](docs/providers/planetscale.md) |
+| **Snowflake** | Snowflake Postgres instances (SHOW / DESCRIBE inventory) | [Snowflake Setup Guide](docs/providers/snowflake.md) |
 
 ## Query Workload Capture (optional, for Neki sharding design)
 

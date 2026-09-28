@@ -16,6 +16,7 @@ pipx install -e ".[gcp]"       # GCP support
 pipx install -e ".[supabase]"  # Supabase support
 pipx install -e ".[heroku]"    # Heroku support
 pipx install -e ".[neon]"      # Neon support
+pipx install -e ".[snowflake]" # Snowflake Postgres support
 pipx install -e ".[all]"       # All engines and cloud providers
 pipx install -e .              # PostgreSQL database discovery only
 
@@ -111,7 +112,7 @@ These flags apply to both PostgreSQL and MySQL. The values are routed to the app
 |------|-------------|---------|
 | `--output` | Output file path, `.yaml` or `.yml` (required) | |
 | `--engines` | Comma-separated engines: `postgres`, `mysql` | `postgres` |
-| `--providers` | Comma-separated cloud providers: `aws`, `gcp`, `supabase`, `heroku`, `neon` | |
+| `--providers` | Comma-separated cloud providers: `aws`, `gcp`, `supabase`, `heroku`, `neon`, `planetscale`, `snowflake` | |
 
 ## Automating Discovery
 

@@ -1,0 +1,53 @@
+# PlanetScale Discovery - Snowflake Provider Configuration
+# Shape mirrors AWS/GCP provider blocks. Placeholders only.
+# Never commit passwords, private keys, or real account identifiers.
+
+engine: postgres
+
+# Database discovery (same as AWS/GCP/database-only path)
+database:
+  host: your-instance.your-org.us-east-1.aws.postgres.snowflake.app
+  port: 5432
+  database: your_database
+  username: planetscale_discovery
+  password: ${DISCOVERY_DB_PASSWORD}
+  ssl_mode: require
+  connection_timeout: 30
+  statement_timeout: 300s
+
+# Cloud providers — enable Snowflake the same way customers enable aws/gcp.
+# Do NOT enable providers.aws or providers.gcp for Snowflake-hosted Postgres.
+providers:
+  snowflake:
+    enabled: true
+    account: ${SNOWFLAKE_ACCOUNT}
+    user: ${SNOWFLAKE_USER}
+    role: DISCOVERY_READONLY
+    # Preferred: key pair (path outside this file). Password/SSO are alternatives.
+    authentication: key_pair
+    private_key_path: ${SNOWFLAKE_PRIVATE_KEY_PATH}
+    discover_all: true
+    account_inventory: true
+    # Optional: limit to named instances (when discover_all is false)
+    # resources:
+    #   postgres_instances:
+    #     - your_primary_instance
+    #     - your_replica_instance
+
+  aws:
+    enabled: false
+  gcp:
+    enabled: false
+  supabase:
+    enabled: false
+  heroku:
+    enabled: false
+  neon:
+    enabled: false
+  planetscale:
+    enabled: false
+
+output:
+  output_dir: ./snowflake_discovery_output
+
+log_level: INFO

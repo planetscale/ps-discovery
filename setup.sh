@@ -268,6 +268,10 @@ add_provider_deps() {
             DEPS+=("requests>=2.32.5")
             INSTALLED_PROVIDERS="planetscale"
             ;;
+        snowflake)
+            DEPS+=("snowflake-connector-python>=3.12.0" "cryptography>=42.0.0")
+            INSTALLED_PROVIDERS="snowflake"
+            ;;
         none | None | NONE | "")
             : # self-managed / direct connection — no extra dependencies
             ;;
@@ -290,6 +294,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         "Heroku Postgres" \
         "Neon" \
         "PlanetScale Postgres" \
+        "Snowflake Postgres" \
         "None (self-managed / direct connection)") || exit 130
     case "$provider_idx" in
         0) provider_choice="aws" ;;
@@ -298,6 +303,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         3) provider_choice="heroku" ;;
         4) provider_choice="neon" ;;
         5) provider_choice="planetscale" ;;
+        6) provider_choice="snowflake" ;;
         *) provider_choice="none" ;;
     esac
 else
@@ -488,6 +494,9 @@ if [ -n "$INSTALLED_PROVIDERS" ]; then
     if [[ $INSTALLED_PROVIDERS == *"planetscale"* ]]; then
         echo "     • PlanetScale: Set your service token ID and token, or the"
         echo "       PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN env vars"
+    fi
+    if [[ $INSTALLED_PROVIDERS == *"snowflake"* ]]; then
+        echo "     • Snowflake: Set account, user, and key-pair path (or SNOWFLAKE_* env vars)"
     fi
     echo ""
 fi

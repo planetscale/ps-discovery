@@ -107,6 +107,32 @@ providers:
     discover_all: true
 ```
 
+### [Snowflake](snowflake.md)
+Snowflake Postgres account inventory via `SHOW` / `DESCRIBE POSTGRES INSTANCE`.
+
+**Key Features:**
+- Account inventory of Snowflake Postgres instances (one SHOW/DESCRIBE row = one instance)
+- `name` is the SHOW instance name for Liftoff Current hosting Name (`your_primary_instance`), not the hostname id
+- Hostname CSP/region parsing (`{id}.{account}.{region}.{aws|azure}.postgres.snowflake.app`)
+- Compute family, storage, `is_ha`, state, and replica `origin` only when Snowflake returns them
+- Key-pair auth (recommended) or password via environment
+- Does **not** enable AWS or GCP APIs for Snowflake-hosted hostnames
+- Does **not** invent Sharp Pulse metrics, IOPS, CPU util, or a shared HA/replica topology
+
+**Quick Start:**
+```yaml
+providers:
+  snowflake:
+    enabled: true
+    account: ${SNOWFLAKE_ACCOUNT}
+    user: ${SNOWFLAKE_USER}
+    role: DISCOVERY_READONLY
+    authentication: key_pair
+    private_key_path: ${SNOWFLAKE_PRIVATE_KEY_PATH}
+    discover_all: true
+    account_inventory: true
+```
+
 ### [PlanetScale](planetscale.md)
 PlanetScale Postgres estate discovery across organizations, databases and branches.
 
@@ -140,6 +166,7 @@ Each provider has different authentication methods:
 - **Heroku**: Platform API keys (from Dashboard or CLI)
 - **Neon**: Personal, organization, or project-scoped API keys (from the Neon console)
 - **PlanetScale**: Service tokens, sent as a token ID and token pair
+- **Snowflake**: Key-pair (recommended), password via `SNOWFLAKE_PASSWORD`, or interactive SSO
 
 See individual provider documentation for detailed authentication setup.
 
@@ -174,6 +201,13 @@ providers:
     enabled: true
     service_token_id: "your-service-token-id"
     service_token: "your-service-token"
+
+  snowflake:
+    enabled: true
+    account: ${SNOWFLAKE_ACCOUNT}
+    user: ${SNOWFLAKE_USER}
+    authentication: key_pair
+    private_key_path: ${SNOWFLAKE_PRIVATE_KEY_PATH}
 
 output:
   output_dir: ./multi_cloud_discovery
@@ -220,6 +254,15 @@ export PLANETSCALE_SERVICE_TOKEN_ID=your-service-token-id
 export PLANETSCALE_SERVICE_TOKEN=your-service-token
 export PLANETSCALE_ORGANIZATION=your-org-slug       # Optional: scope to one org
 export PLANETSCALE_TARGET_DATABASE=my-database      # Optional: target one database
+```
+
+**Snowflake:**
+```bash
+export SNOWFLAKE_ACCOUNT=your-account-locator
+export SNOWFLAKE_USER=planetscale_discovery
+export SNOWFLAKE_PRIVATE_KEY_PATH=$HOME/.ssh/snowflake_discovery.p8
+# or, for password auth:
+export SNOWFLAKE_PASSWORD=your-local-secret
 ```
 
 ### Discovery Scope
@@ -280,6 +323,9 @@ pipx install -e ".[neon]"
 
 # PlanetScale only
 pipx install -e ".[planetscale]"
+
+# Snowflake only
+pipx install -e ".[snowflake]"
 ```
 
 ## Output Format
@@ -295,10 +341,11 @@ All providers generate consistent output:
     "supabase": { /* Supabase discoveries */ },
     "heroku": { /* Heroku discoveries */ },
     "neon": { /* Neon discoveries */ },
-    "planetscale": { /* PlanetScale discoveries */ }
+    "planetscale": { /* PlanetScale discoveries */ },
+    "snowflake": { /* Snowflake Postgres discoveries */ }
   },
   "summary": {
-    "providers_discovered": ["aws", "gcp", "supabase", "heroku", "neon", "planetscale"],
+    "providers_discovered": ["aws", "gcp", "supabase", "heroku", "neon", "planetscale", "snowflake"],
     "total_databases": 10,
     "total_clusters": 3,
     "total_regions": 5

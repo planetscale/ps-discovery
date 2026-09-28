@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Snowflake** cloud discovery provider. Inventories Snowflake Postgres instances with `SHOW POSTGRES INSTANCES` and `DESCRIBE POSTGRES INSTANCE`, one row per instance, under `cloud_results.providers.snowflake`. No invented Sharp Pulse metrics, IOPS, or shared HA topology. Install with `ps-discovery[snowflake]`. See [Snowflake Setup](docs/providers/snowflake.md).
+
 ## [2.0.1] - 2026-09-24
 
 ### Changed

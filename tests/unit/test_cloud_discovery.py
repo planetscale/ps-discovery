@@ -364,6 +364,58 @@ class TestCloudDiscoveryTool:
         mock_analyzer.authenticate.assert_called_once()
         mock_analyzer.analyze.assert_called_once()
 
+    @patch("planetscale_discovery.cloud.analyzers.snowflake_analyzer.SnowflakeAnalyzer")
+    def test_discover_snowflake(self, mock_snowflake_analyzer_class):
+        """Test Snowflake discovery"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = True
+        mock_analyzer.analyze.return_value = {
+            "resources": {
+                "us-east-1": {
+                    "instances": [
+                        {"name": "primary_instance", "type": "PRIMARY"},
+                        {
+                            "name": "replica_1",
+                            "type": "READ_REPLICA",
+                        },
+                    ]
+                }
+            },
+            "summary": {"instance_count": 2, "database_instances": 2},
+        }
+        mock_snowflake_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.snowflake.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "snowflake" in results["providers"]
+        instances = results["providers"]["snowflake"]["resources"]["us-east-1"][
+            "instances"
+        ]
+        assert len(instances) == 2
+        mock_analyzer.authenticate.assert_called_once()
+        mock_analyzer.analyze.assert_called_once()
+
+    @patch("planetscale_discovery.cloud.analyzers.snowflake_analyzer.SnowflakeAnalyzer")
+    def test_discover_snowflake_authentication_failure(
+        self, mock_snowflake_analyzer_class
+    ):
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = False
+        mock_snowflake_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.snowflake.enabled = True
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "snowflake" not in results["providers"]
+        mock_analyzer.analyze.assert_not_called()
+
     @patch("planetscale_discovery.cloud.analyzers.aws_analyzer.AWSAnalyzer")
     @patch("planetscale_discovery.cloud.analyzers.gcp_analyzer.GCPAnalyzer")
     def test_discover_mixed_success_and_failure(
