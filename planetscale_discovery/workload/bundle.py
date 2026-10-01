@@ -449,13 +449,15 @@ def render_workload_sql(
     ]
     if identity:
         lines.append(f"-- neki:capture {identity}")
-    lines += [
-        "-- Every observed statement is included; nothing is ranked or dropped.",
-    ]
     if covered_seconds:
-        lines.append(f"-- Observed over {covered_seconds:.0f} seconds of traffic.")
+        lines += [
+            f"-- Observed over {covered_seconds:.0f} seconds of traffic.",
+            "-- Every statement that ran during the window is included.",
+            "-- A statement whose counters did not move is omitted. Nothing is ranked.",
+        ]
     else:
         lines.append("-- One snapshot only: lifetime totals, not a measured window.")
+        lines.append("-- Nothing is ranked.")
     lines.append("")
 
     for statement in sorted(statements, key=lambda s: s["id"]):
@@ -866,8 +868,10 @@ be traced back to the capture it came from.
 | Views described | {schema['views']} |
 | Tables with a row count | {summary['cardinality']['table_count']} |
 
-Every query that touches one of your tables is here, however rarely it ran.
-Nothing is ranked, dropped for being small, or sampled.
+Every query that ran during the window and touches one of your tables is here,
+however rarely it ran. A statement found in existing PostgreSQL statistics but
+that did not run during the capture window is excluded. Nothing is ranked,
+dropped for being small, or sampled.
 
 ## Worth knowing about these numbers
 

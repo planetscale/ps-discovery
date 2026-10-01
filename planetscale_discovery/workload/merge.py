@@ -164,6 +164,7 @@ def merge_snapshots(
     _carry_first_seen(usable[0], tables, indexes)
     _carry_peaks(peaks, tables)
     _finish_statements(statements, covered)
+    _omit_idle_statements(statements)
 
     return {
         "usable": True,
@@ -505,6 +506,23 @@ def _carry_peaks(peaks, tables) -> None:
     """Attach each table's busiest interval, or None where none was measured."""
     for name, record in tables.items():
         record["peak"] = peaks.get(name)
+
+
+def _omit_idle_statements(statements: Dict[str, Dict[str, Any]]) -> None:
+    """Drop statements that did not execute during the measured window.
+
+    ``pg_stat_statements`` keeps a row after the statement stops running. The
+    baseline subtracts that history, so a row whose counters do not move has a
+    zero delta. Leaving it in the window lists queries that ran only before
+    this capture started.
+    """
+    idle = [
+        key
+        for key, record in statements.items()
+        if not any((record.get("counters") or {}).values())
+    ]
+    for key in idle:
+        del statements[key]
 
 
 def _finish_statements(statements, covered_seconds) -> None:
