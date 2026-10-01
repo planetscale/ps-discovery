@@ -50,6 +50,12 @@ setup(
             "google-auth>=2.48.0",
             "google-api-python-client>=2.190.0",
         ],
+        "azure": [
+            "azure-identity>=1.25.3",
+            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<2",
+            "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
+            "azure-mgmt-network>=32.0.0",
+        ],
         "supabase": [
             "requests>=2.32.5",
         ],
@@ -76,6 +82,10 @@ setup(
             "google-cloud-alloydb>=0.7.0",
             "google-auth>=2.48.0",
             "google-api-python-client>=2.190.0",
+            "azure-identity>=1.25.3",
+            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<2",
+            "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
+            "azure-mgmt-network>=32.0.0",
             "requests>=2.32.5",
         ],
     },
@@ -101,7 +111,7 @@ setup(
         "Programming Language :: Python :: 3.14",
     ],
     # Additional metadata
-    keywords="postgresql mysql database discovery cloud aws gcp supabase heroku neon",
+    keywords="postgresql mysql database discovery cloud aws gcp azure supabase heroku neon planetscale",
     project_urls={
         "Documentation": "https://docs.planetscale.com",
         "Source": "https://github.com/planetscale/pg-discovery-tool",

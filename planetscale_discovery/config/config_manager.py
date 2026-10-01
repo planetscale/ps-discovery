@@ -118,6 +118,23 @@ class GCPConfig:
 
 
 @dataclass
+class AzureConfig:
+    """Azure provider configuration."""
+
+    enabled: bool = False
+    subscription_id: str = ""
+    # Empty means the whole subscription.
+    resource_groups: List[str] = field(default_factory=list)
+    # Filter on each resource's own location. Empty means all regions.
+    regions: List[str] = field(default_factory=list)
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    resources: Dict[str, List[str]] = field(default_factory=dict)
+    discover_all: bool = True
+
+
+@dataclass
 class SupabaseConfig:
     """Supabase provider configuration."""
 
@@ -177,6 +194,7 @@ class DiscoveryConfig:
     mysql: MySQLConfig = field(default_factory=MySQLConfig)
     aws: AWSConfig = field(default_factory=AWSConfig)
     gcp: GCPConfig = field(default_factory=GCPConfig)
+    azure: AzureConfig = field(default_factory=AzureConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     heroku: HerokuConfig = field(default_factory=HerokuConfig)
     neon: NeonConfig = field(default_factory=NeonConfig)
@@ -234,6 +252,7 @@ def resolve_modules(
         for provider in (
             config.aws,
             config.gcp,
+            config.azure,
             config.supabase,
             config.heroku,
             config.neon,
@@ -305,6 +324,7 @@ class ConfigManager:
                     "Provider setup guides:\n"
                     f"  AWS:      {docs_base}/docs/providers/aws.md\n"
                     f"  GCP:      {docs_base}/docs/providers/gcp.md\n"
+                    f"  Azure:    {docs_base}/docs/providers/azure.md\n"
                     f"  Supabase: {docs_base}/docs/providers/supabase.md\n"
                     f"  Heroku:   {docs_base}/docs/providers/heroku.md\n"
                     f"  Neon:     {docs_base}/docs/providers/neon.md\n"
@@ -444,6 +464,30 @@ class ConfigManager:
                 gcp_config.service_account_key = creds.get("service_account_key")
                 gcp_config.application_default = creds.get("application_default", False)
 
+        # Parse Azure config
+        azure_config = AzureConfig()
+        if "providers" in config_data and "azure" in (config_data["providers"] or {}):
+            azure_data = config_data["providers"]["azure"] or {}
+            azure_config.enabled = azure_data.get("enabled", azure_config.enabled)
+            azure_config.subscription_id = azure_data.get(
+                "subscription_id", azure_config.subscription_id
+            )
+            azure_config.resource_groups = azure_data.get(
+                "resource_groups", azure_config.resource_groups
+            )
+            azure_config.regions = azure_data.get("regions", azure_config.regions)
+            azure_config.discover_all = azure_data.get(
+                "discover_all", azure_config.discover_all
+            )
+            azure_config.resources = azure_data.get("resources", azure_config.resources)
+
+            # Parse credentials
+            if "credentials" in azure_data:
+                creds = azure_data["credentials"] or {}
+                azure_config.tenant_id = creds.get("tenant_id")
+                azure_config.client_id = creds.get("client_id")
+                azure_config.client_secret = creds.get("client_secret")
+
         # Parse Supabase config
         supabase_config = SupabaseConfig()
         if "providers" in config_data and "supabase" in (
@@ -514,6 +558,7 @@ class ConfigManager:
             mysql=mysql_config,
             aws=aws_config,
             gcp=gcp_config,
+            azure=azure_config,
             supabase=supabase_config,
             heroku=heroku_config,
             neon=neon_config,
@@ -578,6 +623,26 @@ class ConfigManager:
             application_default=os.getenv("GCP_USE_ADC", "false").lower() == "true",
         )
 
+        # AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET are the
+        # names DefaultAzureCredential reads natively.
+        azure_config = AzureConfig(
+            enabled=os.getenv("AZURE_ENABLED", "false").lower() == "true",
+            subscription_id=os.getenv("AZURE_SUBSCRIPTION_ID", ""),
+            resource_groups=(
+                os.getenv("AZURE_RESOURCE_GROUPS", "").split(",")
+                if os.getenv("AZURE_RESOURCE_GROUPS")
+                else []
+            ),
+            regions=(
+                os.getenv("AZURE_REGIONS", "").split(",")
+                if os.getenv("AZURE_REGIONS")
+                else []
+            ),
+            tenant_id=os.getenv("AZURE_TENANT_ID"),
+            client_id=os.getenv("AZURE_CLIENT_ID"),
+            client_secret=os.getenv("AZURE_CLIENT_SECRET"),
+        )
+
         # Supabase configuration
         supabase_config = SupabaseConfig(
             enabled=os.getenv("SUPABASE_ENABLED", "false").lower() == "true",
@@ -621,6 +686,7 @@ class ConfigManager:
             mysql=mysql_config,
             aws=aws_config,
             gcp=gcp_config,
+            azure=azure_config,
             supabase=supabase_config,
             heroku=heroku_config,
             neon=neon_config,
@@ -734,6 +800,7 @@ class ConfigManager:
             if not (
                 self.config.aws.enabled
                 or self.config.gcp.enabled
+                or self.config.azure.enabled
                 or self.config.supabase.enabled
                 or self.config.heroku.enabled
                 or self.config.neon.enabled
@@ -743,7 +810,17 @@ class ConfigManager:
                     "At least one cloud provider must be enabled for cloud discovery.\n"
                     "  Enable a provider in your config file (e.g. providers.aws.enabled: true)\n"
                     "  or pass --providers on the command line (e.g. --providers heroku).\n"
-                    "  Supported providers: aws, gcp, supabase, heroku, neon, planetscale"
+                    "  Supported providers: aws, gcp, azure, supabase, heroku, neon, "
+                    "planetscale"
+                )
+
+            # Azure has no ambient subscription default, and the SDK's own
+            # failure for a missing one is opaque.
+            if self.config.azure.enabled and not self.config.azure.subscription_id:
+                errors.append(
+                    "Azure discovery requires a subscription ID.\n"
+                    "  Set providers.azure.subscription_id in your config file,\n"
+                    "  pass --azure-subscription, or export AZURE_SUBSCRIPTION_ID."
                 )
 
         if errors:
@@ -756,8 +833,8 @@ class ConfigManager:
 
         Args:
             output_path: Path where the template should be saved
-            providers: List of cloud providers to include (aws, gcp, supabase, heroku,
-                      neon, planetscale).
+            providers: List of cloud providers to include (aws, gcp, azure,
+                      supabase, heroku, neon, planetscale).
                       If None or empty, no cloud provider sections are generated.
             engines: List of database engines to include (postgres, mysql).
                     Defaults to ["postgres"].
@@ -888,6 +965,37 @@ mysql:
     #     - my-cloudsql-instance
     #   alloydb_clusters:
     #     - my-alloydb-cluster
+
+"""
+
+                if "azure" in providers:
+                    template_yaml += """  azure:
+    enabled: true
+    subscription_id: your-azure-subscription-id
+    # Optional: filter by each resource's own location.
+    # Leave empty or omit to discover every region.
+    regions:
+      - eastus
+      - westeurope
+    # Optional: narrow the scan to specific resource groups
+    # resource_groups:
+    #   - my-database-rg
+    credentials:
+      # Service principal (recommended for automation). Create one with:
+      #   az ad sp create-for-rbac --name planetscale-discovery \\
+      #     --role Reader --scopes /subscriptions/<subscription-id>
+      tenant_id: your-tenant-id
+      client_id: your-client-id
+      client_secret: your-client-secret
+      # Or omit all three to use ambient credentials from `az login`,
+      # a managed identity, or the AZURE_* environment variables.
+    discover_all: true  # Discover all Flexible Servers in the subscription
+    # Or specify specific resources:
+    # resources:
+    #   postgresql_flexible_servers:
+    #     - my-postgres-server
+    #   mysql_flexible_servers:
+    #     - my-mysql-server
 
 """
 

@@ -91,7 +91,7 @@ may be used with no subcommand: `ps-discovery --config config.yaml`.
     )
     config_parser.add_argument(
         "--providers",
-        help="Comma-separated list of cloud providers to include (aws,gcp,supabase,heroku,neon,planetscale). If not specified, only database and output sections are generated.",
+        help="Comma-separated list of cloud providers to include (aws,gcp,azure,supabase,heroku,neon,planetscale). If not specified, only database and output sections are generated.",
         default=None,
     )
     config_parser.add_argument(
@@ -164,7 +164,7 @@ def add_shared_run_args(
         "--providers",
         default=default(None),
         help=(
-            "Comma-separated list of cloud providers (aws,gcp,supabase,heroku,neon,planetscale). "
+            "Comma-separated list of cloud providers (aws,gcp,azure,supabase,heroku,neon,planetscale). "
             "Overrides the enabled providers in the config file."
         ),
     )
@@ -232,6 +232,14 @@ def add_cloud_args(parser: argparse.ArgumentParser) -> None:
     cloud_group.add_argument("--gcp-project", help="GCP project ID")
 
     cloud_group.add_argument("--gcp-key", help="Path to GCP service account key file")
+
+    cloud_group.add_argument("--azure-subscription", help="Azure subscription ID")
+
+    cloud_group.add_argument(
+        "--azure-resource-groups",
+        help="Comma-separated list of Azure resource groups to scan "
+        "(default: the whole subscription)",
+    )
 
     cloud_group.add_argument(
         "--target-database",
@@ -372,6 +380,7 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
         providers = providers_arg.split(",")
         config.aws.enabled = "aws" in providers
         config.gcp.enabled = "gcp" in providers
+        config.azure.enabled = "azure" in providers
         config.supabase.enabled = "supabase" in providers
         config.heroku.enabled = "heroku" in providers
         config.neon.enabled = "neon" in providers
@@ -384,6 +393,8 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
             config.aws.regions = regions
         if config.gcp.enabled:
             config.gcp.regions = regions
+        if config.azure.enabled:
+            config.azure.regions = regions
 
     if getattr(args, "aws_profile", None):
         config.aws.profile = args.aws_profile
@@ -393,6 +404,16 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
 
     if getattr(args, "gcp_key", None):
         config.gcp.service_account_key = args.gcp_key
+
+    if getattr(args, "azure_subscription", None):
+        config.azure.subscription_id = args.azure_subscription
+
+    if getattr(args, "azure_resource_groups", None):
+        config.azure.resource_groups = [
+            group.strip()
+            for group in args.azure_resource_groups.split(",")
+            if group.strip()
+        ]
 
     # Set target database for focused analysis
     if getattr(args, "target_database", None):
@@ -766,6 +787,46 @@ def generate_summary_markdown(
                         )
                     lines.append("")
 
+            elif provider_name == "azure":
+                all_pg = []
+                all_mysql = []
+                for region, rdata in resources.items():
+                    for srv in rdata.get("postgresql_flexible_servers", []):
+                        all_pg.append(srv)
+                    for srv in rdata.get("mysql_flexible_servers", []):
+                        all_mysql.append(srv)
+
+                for label, servers in (
+                    ("PostgreSQL Flexible Servers", all_pg),
+                    ("MySQL Flexible Servers", all_mysql),
+                ):
+                    if not servers:
+                        continue
+                    lines.extend(
+                        [
+                            f"#### {label}",
+                            "",
+                            "| Server | Version | SKU | Tier | Storage | HA | Region | Status |",
+                            "|--------|---------|-----|------|---------|----|--------|--------|",
+                        ]
+                    )
+                    for srv in servers:
+                        sku = srv.get("sku", {})
+                        storage = srv.get("storage", {})
+                        size = storage.get("storage_size_gb")
+                        ha_mode = srv.get("high_availability", {}).get("mode", "")
+                        lines.append(
+                            f"| {srv.get('name', '')} "
+                            f"| {srv.get('version_full') or srv.get('version', '')} "
+                            f"| {sku.get('name', '')} "
+                            f"| {sku.get('tier', '')} "
+                            f"| {str(size) + 'GB' if size else ''} "
+                            f"| {ha_mode if ha_mode and ha_mode != 'Disabled' else 'No'} "
+                            f"| {srv.get('location', '')} "
+                            f"| {srv.get('state', '')} |"
+                        )
+                    lines.append("")
+
             elif provider_name == "supabase":
                 lines.append(
                     f"- **Projects:** {provider_summary.get('total_projects', 0)}"
@@ -1021,10 +1082,16 @@ def main() -> None:
             providers = [p.strip() for p in providers_arg.split(",")]
             config.aws.enabled = "aws" in providers
             config.gcp.enabled = "gcp" in providers
+            config.azure.enabled = "azure" in providers
             config.supabase.enabled = "supabase" in providers
             config.heroku.enabled = "heroku" in providers
             config.neon.enabled = "neon" in providers
             config.planetscale.enabled = "planetscale" in providers
+
+        # Applied before validate_config(), which requires a subscription ID
+        # once Azure is enabled.
+        if getattr(args, "azure_subscription", None):
+            config.azure.subscription_id = args.azure_subscription
 
         # Resolve which modules to run. Precedence: explicit subcommand, then
         # the config file's `modules:`, then inference from config contents.

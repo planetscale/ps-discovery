@@ -47,6 +47,31 @@ providers:
       service_account_key: path/to/key.json
 ```
 
+### [Azure (Database for PostgreSQL/MySQL)](azure.md)
+Azure Database for PostgreSQL and MySQL Flexible Server discovery.
+
+**Key Features:**
+- PostgreSQL Flexible Server discovery
+- MySQL Flexible Server discovery
+- Virtual network and subnet configuration
+- Network security group rule analysis
+- Service principal or Azure CLI authentication
+
+**Quick Start:**
+```yaml
+providers:
+  azure:
+    enabled: true
+    subscription_id: 22222222-2222-2222-2222-222222222222
+    # Optional: omit to scan every region
+    regions:
+      - eastus
+    credentials:
+      tenant_id: your-tenant-id
+      client_id: your-client-id
+      client_secret: your-client-secret
+```
+
 ### [Supabase](supabase.md)
 Supabase-hosted PostgreSQL project discovery.
 
@@ -136,6 +161,7 @@ Each provider has different authentication methods:
 
 - **AWS**: IAM profiles, access keys, session tokens, instance roles
 - **GCP**: Service account keys, application default credentials
+- **Azure**: Service principal (tenant/client/secret), Azure CLI sign-in, or managed identity
 - **Supabase**: Personal access tokens, service role keys
 - **Heroku**: Platform API keys (from Dashboard or CLI)
 - **Neon**: Personal, organization, or project-scoped API keys (from the Neon console)
@@ -157,6 +183,10 @@ providers:
   gcp:
     enabled: true
     project_id: my-project
+
+  azure:
+    enabled: true
+    subscription_id: 22222222-2222-2222-2222-222222222222
 
   supabase:
     enabled: true
@@ -193,6 +223,17 @@ export AWS_REGION=us-east-1
 ```bash
 export GCP_PROJECT_ID=my-project-123
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+```
+
+**Azure:**
+```bash
+export AZURE_SUBSCRIPTION_ID=22222222-2222-2222-2222-222222222222
+export AZURE_TENANT_ID=11111111-1111-1111-1111-111111111111
+export AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000
+export AZURE_CLIENT_SECRET=your-client-secret
+# Optional
+export AZURE_REGIONS=eastus,westeurope
+export AZURE_RESOURCE_GROUPS=rg-prod
 ```
 
 **Supabase:**
@@ -266,6 +307,9 @@ pipx install -e ".[aws]"
 # GCP only
 pipx install -e ".[gcp]"
 
+# Azure only
+pipx install -e ".[azure]"
+
 # Supabase only
 pipx install -e ".[supabase]"
 
@@ -292,13 +336,14 @@ All providers generate consistent output:
   "providers": {
     "aws": { /* AWS discoveries */ },
     "gcp": { /* GCP discoveries */ },
+    "azure": { /* Azure discoveries */ },
     "supabase": { /* Supabase discoveries */ },
     "heroku": { /* Heroku discoveries */ },
     "neon": { /* Neon discoveries */ },
     "planetscale": { /* PlanetScale discoveries */ }
   },
   "summary": {
-    "providers_discovered": ["aws", "gcp", "supabase", "heroku", "neon", "planetscale"],
+    "providers_discovered": ["aws", "gcp", "azure", "supabase", "heroku", "neon", "planetscale"],
     "total_databases": 10,
     "total_clusters": 3,
     "total_regions": 5

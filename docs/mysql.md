@@ -4,7 +4,9 @@
 
 The PlanetScale Discovery CLI can analyze MySQL and MySQL-compatible databases including standard MySQL, MariaDB, Percona Server, Amazon Aurora MySQL, Google Cloud SQL for MySQL, Azure Database for MySQL, and PlanetScale (Vitess). The tool collects metadata about database configuration, schema structure, performance characteristics, replication topology, and feature usage without accessing actual table data.
 
-> **Cloud provider support:** MySQL discovery is supported on AWS RDS MySQL, Aurora MySQL, and GCP Cloud SQL MySQL — both cloud analyzers recognize the MySQL engine and report it accordingly. The Supabase, Heroku Postgres, and Neon providers in this repo are PostgreSQL-only.
+> **Cloud provider support:** MySQL discovery is supported on AWS RDS MySQL,
+> Aurora MySQL, GCP Cloud SQL MySQL, and Azure Database for MySQL Flexible
+> Server. The Supabase, Heroku Postgres, and Neon providers are PostgreSQL-only.
 
 ## Prerequisites
 
