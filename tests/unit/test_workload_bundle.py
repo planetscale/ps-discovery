@@ -128,10 +128,14 @@ class TestWorkloadSql:
         assert "-- neki:metrics calls=42" in sql
 
     def test_the_window_is_stated(self):
-        assert "39 seconds" in render_workload_sql([stmt("a")], 39.4)
+        sql = render_workload_sql([stmt("a")], 39.4)
+        assert "39 seconds" in sql
+        assert "counters did not move is omitted" in sql
 
     def test_cumulative_is_labelled(self):
-        assert "not a measured window" in render_workload_sql([stmt("a")], None)
+        sql = render_workload_sql([stmt("a")], None)
+        assert "not a measured window" in sql
+        assert "counters did not move is omitted" not in sql
 
     def test_output_is_deterministic(self):
         statements = [stmt("b"), stmt("a"), stmt("c")]

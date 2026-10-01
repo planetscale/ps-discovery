@@ -600,7 +600,12 @@ left out, and `finalize` reports how many of each.
   of 572, and leaving them in produced every routing error reported against that
   capture, which buried the real result.
 
-Nothing else is removed. Every query that touches one of your tables is kept,
+A statement found in existing PostgreSQL statistics but that did not run during
+the capture window is excluded. `pg_stat_statements` keeps a row after the
+statement stops running. The baseline subtracts that history, so a row whose
+counters do not move has a count of zero for the window and is excluded.
+
+Every query that ran during the window and touches one of your tables is kept,
 however rarely it ran, because how much a query matters depends on a cost model
 that the planning tools apply later.
 

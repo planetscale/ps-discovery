@@ -86,9 +86,12 @@ belongs to `pg_stat_statements`, not to the application, and counting it would
 return this tool's own reads to the query log.
 
 `finalize` counts both kinds and names them in its summary. The tool ranks, caps
-and samples nothing. It emits every statement that names a captured relation,
-however rare. Deciding which statements matter needs a cost model and a
-candidate topology, which the planning tools supply.
+and samples nothing. It emits every statement that ran during the window and
+names a captured relation, however rare. A statement found in existing
+PostgreSQL statistics but that did not run during the capture window is
+excluded.
+Deciding which statements matter needs a cost model and a candidate topology,
+which the planning tools supply.
 
 ### Metric headers
 
