@@ -14,6 +14,7 @@ from planetscale_discovery.config.config_manager import (
     DataSizeConfig,
     AWSConfig,
     GCPConfig,
+    AzureConfig,
     HerokuConfig,
     OutputConfig,
     DiscoveryConfig,
@@ -92,6 +93,42 @@ class TestGCPConfig:
         assert config.enabled is False
         assert config.project_id == ""
         assert config.discover_all is True
+
+
+class TestAzureConfig:
+    """Tests for AzureConfig dataclass"""
+
+    def test_default_values(self):
+        """Test default configuration values"""
+        config = AzureConfig()
+        assert config.enabled is False
+        assert config.subscription_id == ""
+        assert config.resource_groups == []
+        # Empty means every region: Azure lists per subscription.
+        assert config.regions == []
+        assert config.tenant_id is None
+        assert config.client_id is None
+        assert config.client_secret is None
+        assert config.resources == {}
+        assert config.discover_all is True
+
+    def test_custom_values(self):
+        """Test explicit configuration values"""
+        config = AzureConfig(
+            enabled=True,
+            subscription_id="sub-1",
+            resource_groups=["rg-a"],
+            regions=["eastus"],
+            tenant_id="t",
+            client_id="c",
+            client_secret="s",
+            discover_all=False,
+        )
+        assert config.enabled is True
+        assert config.subscription_id == "sub-1"
+        assert config.resource_groups == ["rg-a"]
+        assert config.regions == ["eastus"]
+        assert config.discover_all is False
 
 
 class TestHerokuConfig:
@@ -470,6 +507,94 @@ class TestConfigManager:
             del os.environ["GCP_PROJECT_ID"]
             del os.environ["GCP_REGIONS"]
 
+    def test_load_azure_config(self):
+        """Test loading Azure provider configuration from a file"""
+        config_data = {
+            "providers": {
+                "azure": {
+                    "enabled": True,
+                    "subscription_id": "sub-1",
+                    "resource_groups": ["rg-a", "rg-b"],
+                    "regions": ["eastus", "westeurope"],
+                    "discover_all": False,
+                    "resources": {"postgresql_flexible_servers": ["pg1"]},
+                    "credentials": {
+                        "tenant_id": "tenant-1",
+                        "client_id": "client-1",
+                        "client_secret": "secret-1",
+                    },
+                }
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            yaml.dump(config_data, f)
+            temp_path = f.name
+
+        try:
+            manager = ConfigManager(temp_path)
+            config = manager.load_config(validate=False)
+
+            assert config.azure.enabled is True
+            assert config.azure.subscription_id == "sub-1"
+            assert config.azure.resource_groups == ["rg-a", "rg-b"]
+            assert config.azure.regions == ["eastus", "westeurope"]
+            assert config.azure.discover_all is False
+            assert config.azure.resources == {"postgresql_flexible_servers": ["pg1"]}
+            assert config.azure.tenant_id == "tenant-1"
+            assert config.azure.client_id == "client-1"
+            assert config.azure.client_secret == "secret-1"
+        finally:
+            Path(temp_path).unlink()
+
+    def test_azure_environment_variables(self):
+        """Test Azure configuration from environment"""
+        os.environ["AZURE_ENABLED"] = "true"
+        os.environ["AZURE_SUBSCRIPTION_ID"] = "sub-from-env"
+        os.environ["AZURE_REGIONS"] = "eastus,westus2"
+        os.environ["AZURE_RESOURCE_GROUPS"] = "rg-a,rg-b"
+        os.environ["AZURE_TENANT_ID"] = "tenant-from-env"
+
+        try:
+            manager = ConfigManager()
+            config = manager.load_config(validate=False)
+
+            assert config.azure.enabled is True
+            assert config.azure.subscription_id == "sub-from-env"
+            assert "eastus" in config.azure.regions
+            assert config.azure.resource_groups == ["rg-a", "rg-b"]
+            assert config.azure.tenant_id == "tenant-from-env"
+        finally:
+            del os.environ["AZURE_ENABLED"]
+            del os.environ["AZURE_SUBSCRIPTION_ID"]
+            del os.environ["AZURE_REGIONS"]
+            del os.environ["AZURE_RESOURCE_GROUPS"]
+            del os.environ["AZURE_TENANT_ID"]
+
+    def test_validation_cloud_azure_provider(self):
+        """Azure alone satisfies the "one provider enabled" rule"""
+        config = DiscoveryConfig()
+        config.azure.enabled = True
+        config.azure.subscription_id = "sub-1"
+        config.modules = ["cloud"]
+
+        manager = ConfigManager()
+        manager.config = config
+
+        manager._validate_config()  # must not raise
+
+    def test_validation_azure_requires_subscription_id(self):
+        """Azure has no ambient subscription default, so this must be caught"""
+        config = DiscoveryConfig()
+        config.azure.enabled = True
+        config.modules = ["cloud"]
+
+        manager = ConfigManager()
+        manager.config = config
+
+        with pytest.raises(ValueError, match="subscription ID"):
+            manager._validate_config()
+
     def test_load_data_size_config(self):
         """Test loading data_size configuration"""
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
@@ -585,6 +710,7 @@ class TestConfigManager:
             "providers": {
                 "aws": {"enabled": True, "credentials": None},
                 "gcp": None,
+                "azure": None,
                 "supabase": None,
                 "heroku": None,
             },
@@ -600,6 +726,8 @@ class TestConfigManager:
         assert config.aws.enabled is True
         assert config.aws.profile is None
         assert config.gcp.enabled is False
+        assert config.azure.enabled is False
+        assert config.azure.subscription_id == ""
         assert config.heroku.enabled is False
         assert config.output.output_dir == "./discovery_output"
 
@@ -708,6 +836,30 @@ class TestSelfDescribingTemplate:
             )
             text = path.read_text()
             assert "engine: mysql" in text
+
+    def test_yaml_template_azure_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=["azure"], engines=["postgres"]
+            )
+            data = yaml.safe_load(path.read_text())
+            azure = data["providers"]["azure"]
+            assert azure["enabled"] is True
+            assert "subscription_id" in azure
+            # Service principal fields live under credentials:, like AWS/GCP.
+            assert "tenant_id" in azure["credentials"]
+            assert "client_secret" in azure["credentials"]
+
+    def test_yaml_template_omits_unrequested_providers(self):
+        """Asking for azure must not emit any other provider's block."""
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=["azure"], engines=["postgres"]
+            )
+            data = yaml.safe_load(path.read_text())
+            assert set(data["providers"]) == {"azure"}
 
     def test_yaml_template_supabase_token_at_top_level(self):
         with tempfile.TemporaryDirectory() as d:

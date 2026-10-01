@@ -31,6 +31,13 @@ The `<timestamp>` is the discovery start time, for example
 }
 ```
 
+### Cloud results
+
+`cloud_results.providers` holds one entry per provider that ran, keyed by
+provider name (`aws`, `gcp`, `azure`, `supabase`, `heroku`, `neon`,
+`planetscale`). Each entry carries the provider's own scope identifier, the
+regions analyzed, per-region resources, a summary, and complexity factors.
+
 ## Markdown Summary Sections
 
 When `--local-summary` is used, the markdown file includes:

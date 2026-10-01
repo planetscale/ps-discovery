@@ -62,6 +62,9 @@ install-test:
 install-aws:
 	pip install -e ".[aws]"
 
+install-azure:
+	pip install -e ".[azure]"
+
 install-all:
 	pip install -e ".[all]"
 

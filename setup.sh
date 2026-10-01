@@ -252,6 +252,10 @@ add_provider_deps() {
             DEPS+=("google-cloud-resource-manager>=1.14.2" "google-cloud-compute>=1.39.0" "google-cloud-monitoring>=2.27.2" "google-cloud-alloydb>=0.5.0" "google-auth>=2.38.0" "google-api-python-client>=2.184.0")
             INSTALLED_PROVIDERS="gcp"
             ;;
+        azure)
+            DEPS+=("azure-identity>=1.25.3" "azure-mgmt-postgresqlflexibleservers>=1.1.0,<2" "azure-mgmt-mysqlflexibleservers>=1.0.0,<2" "azure-mgmt-network>=32.0.0")
+            INSTALLED_PROVIDERS="azure"
+            ;;
         supabase)
             DEPS+=("requests>=2.32.5")
             INSTALLED_PROVIDERS="supabase"
@@ -290,6 +294,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         "Heroku Postgres" \
         "Neon" \
         "PlanetScale Postgres" \
+        "Azure (Database for PostgreSQL / MySQL)" \
         "None (self-managed / direct connection)") || exit 130
     case "$provider_idx" in
         0) provider_choice="aws" ;;
@@ -298,6 +303,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         3) provider_choice="heroku" ;;
         4) provider_choice="neon" ;;
         5) provider_choice="planetscale" ;;
+        6) provider_choice="azure" ;;
         *) provider_choice="none" ;;
     esac
 else
@@ -488,6 +494,10 @@ if [ -n "$INSTALLED_PROVIDERS" ]; then
     if [[ $INSTALLED_PROVIDERS == *"planetscale"* ]]; then
         echo "     • PlanetScale: Set your service token ID and token, or the"
         echo "       PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN env vars"
+    fi
+    if [[ $INSTALLED_PROVIDERS == *"azure"* ]]; then
+        echo "     • Azure: Set subscription_id, then either run 'az login' or set"
+        echo "       AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET"
     fi
     echo ""
 fi

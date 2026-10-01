@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Azure cloud discovery provider.** Discovers Azure Database for PostgreSQL Flexible Servers, Azure Database for MySQL Flexible Servers, and the virtual networks and network security groups around them. See [Azure Setup](docs/providers/azure.md).
+
 ## [2.0.1] - 2026-09-24
 
 ### Changed

@@ -15,7 +15,9 @@ from planetscale_discovery.cli import (
     generate_summary_markdown,
     _format_bytes,
     main,
+    run_cloud_discovery,
 )
+from planetscale_discovery.config.config_manager import DiscoveryConfig
 
 
 class TestArgumentParsing:
@@ -221,6 +223,24 @@ class TestCloudArguments:
         args = parser.parse_args(["cloud", "--gcp-key", "/path/to/key.json"])
         assert args.gcp_key == "/path/to/key.json"
 
+    def test_azure_subscription_argument(self):
+        """Test --azure-subscription argument."""
+        parser = create_main_parser()
+        args = parser.parse_args(["cloud", "--azure-subscription", "sub-1"])
+        assert args.azure_subscription == "sub-1"
+
+    def test_azure_resource_groups_argument(self):
+        """Test --azure-resource-groups argument."""
+        parser = create_main_parser()
+        args = parser.parse_args(["cloud", "--azure-resource-groups", "rg-a,rg-b"])
+        assert args.azure_resource_groups == "rg-a,rg-b"
+
+    def test_providers_argument_accepts_azure(self):
+        """Test --providers azure parses."""
+        parser = create_main_parser()
+        args = parser.parse_args(["cloud", "--providers", "azure"])
+        assert args.providers == "azure"
+
     def test_target_database_argument(self):
         """Test --target-database argument."""
         parser = create_main_parser()
@@ -383,6 +403,33 @@ class TestDiscoveryExecution:
         # Verify cloud discovery was called
         mock_tool_instance.discover.assert_called_once()
 
+    @patch("planetscale_discovery.cli.CloudDiscoveryTool")
+    def test_azure_arguments_reach_config(self, mock_tool):
+        """Test that the Azure flags are applied to the config."""
+        config = DiscoveryConfig()
+        args = create_main_parser().parse_args(
+            [
+                "cloud",
+                "--providers",
+                "azure",
+                "--regions",
+                "eastus,westeurope",
+                "--azure-subscription",
+                "sub-1",
+                "--azure-resource-groups",
+                "rg-a, rg-b,",
+            ]
+        )
+
+        run_cloud_discovery(config, args)
+
+        assert config.azure.enabled is True
+        assert config.aws.enabled is False
+        assert config.azure.subscription_id == "sub-1"
+        assert config.azure.resource_groups == ["rg-a", "rg-b"]
+        assert config.azure.regions == ["eastus", "westeurope"]
+        mock_tool.assert_called_once_with(config)
+
 
 class TestCombinedSummary:
     """Test combined summary generation."""
@@ -474,6 +521,7 @@ class TestErrorHandling:
         for var in (
             "AWS_ENABLED",
             "GCP_ENABLED",
+            "AZURE_ENABLED",
             "SUPABASE_ENABLED",
             "HEROKU_ENABLED",
             "NEON_ENABLED",
@@ -812,6 +860,75 @@ class TestGenerateSummaryMarkdown:
         content = self._write_and_read(results)
         assert "SUPABASE" in content
         assert "Projects:" in content
+
+    def test_cloud_section_with_azure(self):
+        """Test cloud section with Azure provider data."""
+        results = {
+            "timestamp": "2025-01-15T10:00:00Z",
+            "discovery_version": "2.0.0",
+            "database_results": None,
+            "cloud_results": {
+                "providers": {
+                    "azure": {
+                        "summary": {
+                            "postgresql_flexible_servers": 1,
+                            "mysql_flexible_servers": 1,
+                        },
+                        "resources": {
+                            "eastus": {
+                                "postgresql_flexible_servers": [
+                                    {
+                                        "name": "pg-prod",
+                                        "version": "16",
+                                        "version_full": "16.3",
+                                        "sku": {
+                                            "name": "Standard_D4ds_v5",
+                                            "tier": "GeneralPurpose",
+                                        },
+                                        "storage": {"storage_size_gb": 512},
+                                        "high_availability": {"mode": "ZoneRedundant"},
+                                        "location": "eastus",
+                                        "state": "Ready",
+                                    }
+                                ],
+                                "mysql_flexible_servers": [
+                                    {
+                                        "name": "mysql-prod",
+                                        "version": "8.0.21",
+                                        "sku": {
+                                            "name": "Standard_D2ds_v4",
+                                            "tier": "GeneralPurpose",
+                                        },
+                                        "storage": {"storage_size_gb": 128},
+                                        "high_availability": {"mode": "Disabled"},
+                                        "location": "eastus",
+                                        "state": "Ready",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                },
+                "summary": {
+                    "providers_discovered": ["azure"],
+                    "total_databases": 2,
+                    "total_clusters": 0,
+                    "total_regions": 1,
+                },
+                "errors": [],
+            },
+        }
+        content = self._write_and_read(results)
+        assert "AZURE" in content
+        assert "#### PostgreSQL Flexible Servers" in content
+        assert "#### MySQL Flexible Servers" in content
+        assert "pg-prod" in content
+        assert "mysql-prod" in content
+        assert "Standard_D4ds_v5" in content
+        assert "| 16.3 |" in content
+        assert "512GB" in content
+        # HA mode renders as the mode name when enabled, "No" when disabled.
+        assert "ZoneRedundant" in content
 
     def test_gaps_section(self):
         """Test that analysis gaps are included in the output."""

@@ -68,6 +68,13 @@ jobs:
           source venv/bin/activate
           python3 -c "from google.cloud import compute_v1; print('GCP dependencies OK')"
 
+      - name: Test with Azure dependencies
+        run: |
+          rm -rf venv config.yaml
+          PSDISCOVERY_ENGINE=postgres PSDISCOVERY_PROVIDER=azure bash setup.sh
+          source venv/bin/activate
+          python3 -c "from azure.mgmt.postgresqlflexibleservers import PostgreSQLManagementClient; print('Azure dependencies OK')"
+
       - name: Test with Supabase dependencies
         run: |
           rm -rf venv config.yaml

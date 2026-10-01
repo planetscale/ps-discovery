@@ -7,7 +7,7 @@ Discovery tools for analyzing PostgreSQL and MySQL/Vitess database environments 
 The PlanetScale Discovery Tools consist of two main components:
 
 1. **Database Discovery** - Comprehensive database environment analysis for PostgreSQL and MySQL/Vitess
-2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Supabase, Heroku Postgres, Neon, PlanetScale Postgres)
+2. **Cloud Discovery** - Multi-cloud database infrastructure analysis (AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, Azure Database for PostgreSQL/MySQL, Supabase, Heroku Postgres, Neon, PlanetScale Postgres)
 
 Both tools can be used independently or together for a complete environment assessment.
 
@@ -50,6 +50,7 @@ nano config.yaml
 **Optional cloud configuration (if you installed cloud providers):**
 - **AWS**: Configure your AWS profile or access keys and regions
 - **GCP**: Set `project_id`, `service_account_key` path, and regions
+- **Azure**: Set `subscription_id`, then either run `az login` or set `tenant_id`, `client_id` and `client_secret`
 - **Supabase**: Set your `access_token` from [app.supabase.com/account/tokens](https://app.supabase.com/account/tokens)
 - **Heroku**: Set your `api_key` from [dashboard.heroku.com/account](https://dashboard.heroku.com/account) or set `HEROKU_API_KEY` env var
 - **Neon**: Set your `api_key` from [console.neon.tech/app/settings/api-keys](https://console.neon.tech/app/settings/api-keys) or set `NEON_API_KEY` env var
@@ -229,6 +230,8 @@ providers:
       - us-east-1
   gcp:
     enabled: false
+  azure:
+    enabled: false
   supabase:
     enabled: false
   heroku:
@@ -261,6 +264,7 @@ ps-discovery config-template --output config.yaml --engines postgres,mysql --pro
 |----------|-------------------|---------------|
 | **AWS** | RDS instances, Aurora clusters, VPC networking | [AWS Setup Guide](docs/providers/aws.md) |
 | **GCP** | Cloud SQL instances, AlloyDB clusters, VPC networks | [GCP Setup Guide](docs/providers/gcp.md) |
+| **Azure** | PostgreSQL/MySQL Flexible Servers, VNets, network security groups | [Azure Setup Guide](docs/providers/azure.md) |
 | **Supabase** | Managed PostgreSQL projects, connection pooling | [Supabase Setup Guide](docs/providers/supabase.md) |
 | **Heroku** | Postgres add-ons, PgBouncer pooling, followers | [Heroku Setup Guide](docs/providers/heroku.md) |
 | **Neon** | Serverless Postgres projects, branches, endpoints | [Neon Setup Guide](docs/providers/neon.md) |

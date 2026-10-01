@@ -106,7 +106,7 @@ send it.
 | Cloud or hosting provider | `providers:` in `config.yaml` | [Provider guides](docs/providers/) |
 | Large column and LOB analysis | optional module | [Data Size Analysis](docs/data_size_analysis.md) |
 
-Supported providers: AWS, GCP, Supabase, Heroku, Neon, and PlanetScale.
+Supported providers: AWS, GCP, Azure, Supabase, Heroku, Neon, and PlanetScale.
 
 ## Query workload capture (optional)
 

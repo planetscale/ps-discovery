@@ -34,6 +34,19 @@ providers:
       service_account_key: path/to/service-account-key.json
     discover_all: true
 
+  azure:
+    enabled: true
+    subscription_id: 22222222-2222-2222-2222-222222222222
+    # Omit regions to discover every region in the subscription.
+    regions:
+      - eastus
+      - westeurope
+    credentials:
+      tenant_id: 11111111-1111-1111-1111-111111111111
+      client_id: 00000000-0000-0000-0000-000000000000
+      client_secret: your-client-secret
+    discover_all: true
+
 output:
   output_dir: ./discovery_output
 

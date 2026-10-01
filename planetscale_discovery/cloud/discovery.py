@@ -50,6 +50,10 @@ class CloudDiscoveryTool:
             if self.config.gcp.enabled:
                 self._discover_gcp()
 
+            # Discover Azure resources
+            if self.config.azure.enabled:
+                self._discover_azure()
+
             # Discover Supabase resources
             if self.config.supabase.enabled:
                 self._discover_supabase()
@@ -179,6 +183,52 @@ class CloudDiscoveryTool:
                 {
                     "timestamp": generate_timestamp(),
                     "message": f"GCP discovery failed: {e}",
+                    "type": "PROVIDER_ERROR",
+                }
+            )
+
+    def _discover_azure(self) -> None:
+        """Discover Azure resources."""
+        self.logger.info("Starting Azure discovery")
+
+        try:
+            # Lazy import Azure analyzer only when needed
+            try:
+                from .analyzers.azure_analyzer import AzureAnalyzer
+            except ImportError:
+                self.logger.error(
+                    'Azure dependencies not installed. Install with: pip install "ps-discovery[azure]"'
+                )
+                self.results["errors"].append(
+                    {
+                        "timestamp": generate_timestamp(),
+                        "message": "Azure dependencies not installed",
+                        "type": "DEPENDENCY_ERROR",
+                    }
+                )
+                return
+
+            azure_analyzer = AzureAnalyzer(self.config.azure, self.logger)
+
+            if not azure_analyzer.authenticate():
+                for error in azure_analyzer.errors:
+                    self.results["errors"].append(error)
+                return
+
+            azure_results = azure_analyzer.analyze()
+            self.results["providers"]["azure"] = azure_results
+
+            self.logger.info(
+                f"Azure discovery completed. Found "
+                f"{len(azure_results.get('resources', {}))} region(s) with resources"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Azure discovery failed: {e}")
+            self.results["errors"].append(
+                {
+                    "timestamp": generate_timestamp(),
+                    "message": f"Azure discovery failed: {e}",
                     "type": "PROVIDER_ERROR",
                 }
             )
@@ -385,6 +435,12 @@ class CloudDiscoveryTool:
             summary["total_databases"] += provider_summary.get("cloud_sql_instances", 0)
             summary["total_databases"] += provider_summary.get("total_projects", 0)
             summary["total_databases"] += provider_summary.get("total_databases", 0)
+            summary["total_databases"] += provider_summary.get(
+                "postgresql_flexible_servers", 0
+            )
+            summary["total_databases"] += provider_summary.get(
+                "mysql_flexible_servers", 0
+            )
             summary["total_clusters"] += provider_summary.get("database_clusters", 0)
             summary["total_clusters"] += provider_summary.get("alloydb_clusters", 0)
 

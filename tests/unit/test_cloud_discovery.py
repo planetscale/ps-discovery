@@ -113,6 +113,85 @@ class TestCloudDiscoveryTool:
         assert "gcp" not in results["providers"]
         mock_analyzer.analyze.assert_not_called()
 
+    @patch("planetscale_discovery.cloud.analyzers.azure_analyzer.AzureAnalyzer")
+    def test_discover_azure(self, mock_azure_analyzer_class):
+        """Test Azure discovery"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = True
+        mock_analyzer.analyze.return_value = {
+            "resources": {"eastus": {}},
+            "metadata": {"subscription_id": "sub-1"},
+        }
+        mock_azure_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.azure.enabled = True
+        config.azure.subscription_id = "sub-1"
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "azure" in results["providers"]
+        assert "resources" in results["providers"]["azure"]
+        mock_analyzer.authenticate.assert_called_once()
+        mock_analyzer.analyze.assert_called_once()
+
+    @patch("planetscale_discovery.cloud.analyzers.azure_analyzer.AzureAnalyzer")
+    def test_discover_azure_authentication_failure(self, mock_azure_analyzer_class):
+        """Test Azure discovery with authentication failure"""
+        mock_analyzer = MagicMock()
+        mock_analyzer.authenticate.return_value = False
+        mock_analyzer.errors = [{"message": "Azure authentication failed"}]
+        mock_azure_analyzer_class.return_value = mock_analyzer
+
+        config = DiscoveryConfig()
+        config.azure.enabled = True
+        config.azure.subscription_id = "sub-1"
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        # Azure results should not be in providers if auth failed
+        assert "azure" not in results["providers"]
+        mock_analyzer.analyze.assert_not_called()
+        assert any("Azure" in e.get("message", "") for e in results["errors"])
+
+    @patch("planetscale_discovery.cloud.analyzers.azure_analyzer.AzureAnalyzer")
+    def test_discover_azure_analyzer_raises(self, mock_azure_analyzer_class):
+        """A raising analyzer is recorded, not propagated"""
+        mock_azure_analyzer_class.side_effect = Exception("boom")
+
+        config = DiscoveryConfig()
+        config.azure.enabled = True
+        config.azure.subscription_id = "sub-1"
+
+        tool = CloudDiscoveryTool(config)
+        results = tool.discover()
+
+        assert "azure" not in results["providers"]
+        assert any(
+            "Azure discovery failed" in e.get("message", "") for e in results["errors"]
+        )
+
+    def test_generate_summary_counts_azure_servers(self):
+        """Both Flexible Server types roll up into total_databases"""
+        config = DiscoveryConfig()
+        tool = CloudDiscoveryTool(config)
+        tool.results["providers"]["azure"] = {
+            "regions_analyzed": ["eastus", "westus2"],
+            "summary": {
+                "postgresql_flexible_servers": 2,
+                "mysql_flexible_servers": 1,
+            },
+        }
+
+        tool._generate_summary()
+
+        assert tool.results["summary"]["total_databases"] == 3
+        # Azure contributes no clusters.
+        assert tool.results["summary"]["total_clusters"] == 0
+        assert tool.results["summary"]["total_regions"] == 2
+
     @patch("planetscale_discovery.cloud.analyzers.aws_analyzer.AWSAnalyzer")
     @patch("planetscale_discovery.cloud.analyzers.gcp_analyzer.GCPAnalyzer")
     def test_discover_both_providers(

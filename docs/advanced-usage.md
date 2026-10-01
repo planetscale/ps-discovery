@@ -13,6 +13,7 @@ cd ps-discovery
 pipx install -e ".[mysql]"     # Add MySQL support
 pipx install -e ".[aws]"       # AWS cloud discovery support
 pipx install -e ".[gcp]"       # GCP support
+pipx install -e ".[azure]"     # Azure support
 pipx install -e ".[supabase]"  # Supabase support
 pipx install -e ".[heroku]"    # Heroku support
 pipx install -e ".[neon]"      # Neon support
@@ -111,7 +112,7 @@ These flags apply to both PostgreSQL and MySQL. The values are routed to the app
 |------|-------------|---------|
 | `--output` | Output file path, `.yaml` or `.yml` (required) | |
 | `--engines` | Comma-separated engines: `postgres`, `mysql` | `postgres` |
-| `--providers` | Comma-separated cloud providers: `aws`, `gcp`, `supabase`, `heroku`, `neon` | |
+| `--providers` | Comma-separated cloud providers: `aws`, `gcp`, `azure`, `supabase`, `heroku`, `neon`, `planetscale` | |
 
 ## Automating Discovery
 
@@ -193,6 +194,10 @@ providers:
   gcp:
     enabled: true
     project_id: my-project
+
+  azure:
+    enabled: true
+    subscription_id: 22222222-2222-2222-2222-222222222222
 
   supabase:
     enabled: true
