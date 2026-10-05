@@ -271,6 +271,12 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             # relispartition and partitioned tables added in PostgreSQL 10
             version_num = self._get_server_version_num()
             has_declarative_partitioning = version_num >= 100000
+            identity_col = (
+                "a.attidentity" if has_declarative_partitioning else "''"
+            ) + " as identity_kind"
+            generated_col = (
+                "a.attgenerated" if version_num >= 120000 else "''"
+            ) + " as generated_kind"
 
             with self.connection.cursor() as cursor:
                 # Build query based on version
@@ -318,7 +324,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 try:
                     with self.connection.cursor() as detail_cursor:
                         detail_cursor.execute(
-                            """
+                            f"""
                             SELECT
                                 a.attname as column_name,
                                 a.attnum as column_number,
@@ -329,7 +335,20 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                                 col_description(a.attrelid, a.attnum) as description,
                                 a.attisdropped as is_dropped,
                                 a.attstorage as storage_type,
-                                a.attcollation as collation_oid
+                                a.attcollation as collation_oid,
+                                {identity_col},
+                                {generated_col},
+                                (
+                                    SELECT dep.objid::regclass::text
+                                    FROM pg_depend dep
+                                    JOIN pg_class seq ON seq.oid = dep.objid AND seq.relkind = 'S'
+                                    WHERE dep.classid = 'pg_class'::regclass
+                                    AND dep.refclassid = 'pg_class'::regclass
+                                    AND dep.refobjid = a.attrelid
+                                    AND dep.refobjsubid = a.attnum
+                                    AND dep.deptype IN ('a', 'i')
+                                    LIMIT 1
+                                ) as owned_sequence
                             FROM pg_attribute a
                             LEFT JOIN pg_attrdef d ON (a.attrelid = d.adrelid AND a.attnum = d.adnum)
                             WHERE a.attrelid = %s
