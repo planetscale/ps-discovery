@@ -28,6 +28,41 @@ Snowflake discovery has two inputs you can use together or separately:
 
 For catalog-level database discovery you also need a read-only Postgres user and network access to the instance hostname on port `5432` (SSL required). See [Database discovery](#database-discovery-optional).
 
+## Required Permissions
+
+Inventory needs one privilege: `OPERATE` on each Postgres instance. Snowflake has no narrower privilege for `SHOW POSTGRES INSTANCES` / `DESCRIBE POSTGRES INSTANCE`, and both commands only return instances the role holds `OPERATE` or `OWNERSHIP` on. Read replicas do not inherit grants from their primary, so grant every instance.
+
+Create the role once as `SECURITYADMIN`, or have `USERADMIN` create the role and the role that owns the instances grant `OPERATE`. `ACCOUNTADMIN` is not needed.
+
+```sql
+USE ROLE SECURITYADMIN;
+CREATE ROLE IF NOT EXISTS PS_DISCOVERY;
+GRANT OPERATE ON POSTGRES INSTANCE "your_primary_instance" TO ROLE PS_DISCOVERY;
+GRANT OPERATE ON POSTGRES INSTANCE "your_replica_instance" TO ROLE PS_DISCOVERY;
+```
+
+Snowflake has no `GRANT ... ON ALL` or `ON FUTURE` form for Postgres instances, so grant each one by name. `SECURITYADMIN` sees every instance in the account, so list them first with `SHOW POSTGRES INSTANCES;`. With a warehouse active, this prints one `GRANT` per instance:
+
+```sql
+SHOW POSTGRES INSTANCES
+  ->> SELECT 'GRANT OPERATE ON POSTGRES INSTANCE "' || "name" || '" TO ROLE PS_DISCOVERY;' FROM $1;
+```
+
+Instances created after the grant are not covered. Any instance without a grant is missing from the report.
+
+The next section grants this role to the user that runs discovery.
+
+`OPERATE` also allows suspend, resume, and Postgres setting changes. The inventory queries are `SHOW POSTGRES INSTANCES` and `DESCRIBE POSTGRES INSTANCE`. After connect, the tool also runs `USE SECONDARY ROLES NONE` (unless `use_secondary_roles: true`) and `SELECT CURRENT_ACCOUNT()`, `CURRENT_ACCOUNT_NAME()`, `CURRENT_ORGANIZATION_NAME()`, `CURRENT_REGION()`, `CURRENT_ROLE()`, and `CURRENT_SECONDARY_ROLES()` for the account block. Drop the role once the report is produced:
+
+```sql
+USE ROLE SECURITYADMIN;
+DROP ROLE IF EXISTS PS_DISCOVERY;
+```
+
+The tool runs `USE SECONDARY ROLES NONE` after connecting, so a user with `DEFAULT_SECONDARY_ROLES = ('ALL')` still sees only what `PS_DISCOVERY` can see. The tool runs this only when a role is set, in `role:` or `SNOWFLAKE_ROLE`. Set `use_secondary_roles: true` to keep secondary roles active.
+
+Do not grant `ACCOUNTADMIN` or `SNOWFLAKE` database roles for this inventory. The tool does not create, alter, or drop Snowflake objects.
+
 ## Authentication Options
 
 Account inventory uses Snowflake **account** credentials. These are not the Postgres instance password.
@@ -46,13 +81,16 @@ openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
 chmod 600 rsa_key.p8
 ```
 
-Create the user as `SECURITYADMIN` (after the role in [Required Permissions](#required-permissions)). Paste the body of `rsa_key.pub` without the `BEGIN` / `END` lines:
+The first command asks you to set a passphrase for the private key. The `openssl rsa` command asks for that passphrase again to read the key.
+
+Create the user as `SECURITYADMIN`, after you create the `PS_DISCOVERY` role in [Required Permissions](#required-permissions). Paste the body of `rsa_key.pub` without the `BEGIN` / `END` lines:
 
 ```sql
 USE ROLE SECURITYADMIN;
 CREATE USER PS_DISCOVERY_SVC
   TYPE = SERVICE
   DEFAULT_ROLE = PS_DISCOVERY
+  DEFAULT_SECONDARY_ROLES = ()
   RSA_PUBLIC_KEY = 'MIIBIjANBgkqh...';
 GRANT ROLE PS_DISCOVERY TO USER PS_DISCOVERY_SVC;
 ```
@@ -93,9 +131,16 @@ authentication: sso
 
 This uses Snowflake's `externalbrowser` authenticator: a browser opens and the person running discovery signs in through the account's identity provider (Okta, Entra ID, and so on). Nothing is stored, so it fits a one-off run by a person. It only works if the account has SAML SSO set up, needs a browser, and does not work for `TYPE = SERVICE` users.
 
+Grant the role to the existing user that signs in:
+
+```sql
+USE ROLE SECURITYADMIN;
+GRANT ROLE PS_DISCOVERY TO USER your_user;
+```
+
 ### Option 3: Password
 
-Use key pair on a service user, or `authentication: sso`. Snowflake is retiring password-only sign-in. If the account still allows a password, set `SNOWFLAKE_PASSWORD`. Do not put the password in the config file. `read -s` keeps it out of your shell history:
+Use key pair on a service user, or `authentication: sso`. Snowflake is retiring password-only sign-in. If the account still allows a password, grant `PS_DISCOVERY` to the user as in [Option 2](#option-2-sso), then set `SNOWFLAKE_PASSWORD`. Do not put the password in the config file. `read -s` keeps it out of your shell history:
 
 ```bash
 export SNOWFLAKE_ACCOUNT=your-account-locator
@@ -115,40 +160,6 @@ providers:
     authentication: password
     discover_all: true
 ```
-
-## Required Permissions
-
-Inventory needs one privilege: `OPERATE` on each Postgres instance. Snowflake has no narrower privilege for `SHOW POSTGRES INSTANCES` / `DESCRIBE POSTGRES INSTANCE`, and both commands only return instances the role holds `OPERATE` or `OWNERSHIP` on. Read replicas do not inherit grants from their primary, so grant every instance.
-
-Create the role once as `SECURITYADMIN`, or have `USERADMIN` create the role and the role that owns the instances grant `OPERATE`. `ACCOUNTADMIN` is not needed.
-
-```sql
-USE ROLE SECURITYADMIN;
-CREATE ROLE IF NOT EXISTS PS_DISCOVERY;
-GRANT OPERATE ON POSTGRES INSTANCE "your_primary_instance" TO ROLE PS_DISCOVERY;
-GRANT OPERATE ON POSTGRES INSTANCE "your_replica_instance" TO ROLE PS_DISCOVERY;
-GRANT ROLE PS_DISCOVERY TO USER your_user;
-```
-
-Snowflake has no `GRANT ... ON ALL` or `ON FUTURE` form for Postgres instances, so grant each one by name. `SECURITYADMIN` sees every instance in the account, so list them first with `SHOW POSTGRES INSTANCES;`. With a warehouse active, this prints one `GRANT` per instance:
-
-```sql
-SHOW POSTGRES INSTANCES
-  ->> SELECT 'GRANT OPERATE ON POSTGRES INSTANCE "' || "name" || '" TO ROLE PS_DISCOVERY;' FROM $1;
-```
-
-Instances created after the grant are not covered. Any instance without a grant is missing from the report.
-
-`OPERATE` also allows suspend, resume, and Postgres setting changes. The inventory queries are `SHOW POSTGRES INSTANCES` and `DESCRIBE POSTGRES INSTANCE`. After connect, the tool also runs `USE SECONDARY ROLES NONE` (unless `use_secondary_roles: true`) and `SELECT CURRENT_ACCOUNT()`, `CURRENT_ACCOUNT_NAME()`, `CURRENT_ORGANIZATION_NAME()`, `CURRENT_REGION()`, `CURRENT_ROLE()`, and `CURRENT_SECONDARY_ROLES()` for the account block. Drop the role once the report is produced:
-
-```sql
-USE ROLE SECURITYADMIN;
-DROP ROLE IF EXISTS PS_DISCOVERY;
-```
-
-The tool runs `USE SECONDARY ROLES NONE` after connecting, so a user with `DEFAULT_SECONDARY_ROLES = ('ALL')` still sees only what `PS_DISCOVERY` can see. Set `use_secondary_roles: true` to keep secondary roles active.
-
-Do not grant `ACCOUNTADMIN` or `SNOWFLAKE` database roles for this inventory. The tool does not create, alter, or drop Snowflake objects.
 
 ## Database discovery (optional)
 
@@ -248,6 +259,7 @@ You may enable Snowflake alongside other providers only when you are assessing *
 ```bash
 export SNOWFLAKE_ACCOUNT=your-account-locator
 export SNOWFLAKE_USER=PS_DISCOVERY_SVC
+export SNOWFLAKE_ROLE=PS_DISCOVERY
 export SNOWFLAKE_PRIVATE_KEY_PATH=$HOME/.ssh/snowflake_discovery.p8
 read -s -p "Key passphrase: " SNOWFLAKE_PRIVATE_KEY_PASSPHRASE && export SNOWFLAKE_PRIVATE_KEY_PASSPHRASE
 # When there is no YAML authentication: field (env-only load), key_pair is the default.

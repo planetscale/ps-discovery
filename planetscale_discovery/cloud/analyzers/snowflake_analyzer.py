@@ -397,8 +397,7 @@ class SnowflakeAnalyzer(CloudAnalyzer):
                 "Snowflake account and user are required. "
                 "Set them in providers.snowflake or via SNOWFLAKE_ACCOUNT / "
                 "SNOWFLAKE_USER.\n"
-                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/"
-                "blob/main/docs/providers/snowflake.md"
+                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/snowflake.md"
             )
             return False
 
@@ -449,8 +448,7 @@ class SnowflakeAnalyzer(CloudAnalyzer):
             self.add_error(
                 "Snowflake authentication failed. Verify account locator, user, "
                 "role, and key-pair or password.\n"
-                "  Setup guide: https://github.com/planetscale/planetscale-discovery-cli-dev/"
-                "blob/main/docs/providers/snowflake.md",
+                "  Setup guide: https://github.com/planetscale/ps-discovery/blob/main/docs/providers/snowflake.md",
                 e,
             )
             return False
