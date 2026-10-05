@@ -4,9 +4,9 @@
 #
 #    pip-compile --generate-hashes --no-index --no-strip-extras --output-file=requirements-lock.txt requirements/base.in
 #
-boto3==1.43.93 \
-    --hash=sha256:196bfc8b4c9cd5505f9f7b963e30956db3a00fd47e20dd0ee3574a243c1fb212 \
-    --hash=sha256:3c948fe231490d446bf90bf3322d1452632107329d3683b37d88b7399bf481a0
+boto3==1.43.98 \
+    --hash=sha256:1ec732e023fb29c12dc8520f925b5bbbed29eeb36b5764b5a5c26052d7c721f7 \
+    --hash=sha256:7454f666a9e852a56db0a7fa23be33a899f64e27828930eac43c3edba7b34e17
     # via -r requirements/base.in
 botocore==1.43.103 \
     --hash=sha256:6a6a561a6de43845ae42bc7ff7e2c798742bfa277f5215398f9c15ed9b1bd67c \
