@@ -759,6 +759,41 @@ class TestSchemaAnalyzer:
         assert len(result) == 1
         assert result[0]["table_name"] == "legacy_table"
 
+    @pytest.mark.parametrize(
+        "version_num, selected, absent",
+        [
+            (140011, ["a.attidentity", "a.attgenerated"], []),
+            (110000, ["a.attidentity"], ["attgenerated"]),
+            (90624, [], ["attidentity", "attgenerated"]),
+        ],
+    )
+    def test_get_table_analysis_column_identity_and_generated(
+        self, analyzer, mock_connection, version_num, selected, absent
+    ):
+        _, cursor = mock_connection
+        cursor.fetchall.return_value = [
+            {"table_oid": 16385, "table_name": "users", "table_type": "r"}
+        ]
+
+        with patch.object(
+            analyzer, "_get_server_version_num", return_value=version_num
+        ):
+            analyzer._get_table_analysis()
+
+        column_sql = next(
+            c.args[0]
+            for c in cursor.execute.call_args_list
+            if "FROM pg_attribute a" in c.args[0]
+        )
+        assert "as identity_kind" in column_sql
+        assert "as generated_kind" in column_sql
+        assert "as owned_sequence" in column_sql
+        assert "pg_get_serial_sequence" not in column_sql
+        for column in selected:
+            assert column in column_sql
+        for column in absent:
+            assert column not in column_sql
+
     # ---------------------------------------------------------------
     # _get_index_analysis()
     # ---------------------------------------------------------------
