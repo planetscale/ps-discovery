@@ -68,6 +68,10 @@ setup(
         "planetscale": [
             "requests>=2.32.5",
         ],
+        "snowflake": [
+            "snowflake-connector-python>=3.12.0",
+            "cryptography>=42.0.0",
+        ],
         "workload": [
             "pglast>=7,<9",
         ],
@@ -87,6 +91,8 @@ setup(
             "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
             "azure-mgmt-network>=32.0.0",
             "requests>=2.32.5",
+            "snowflake-connector-python>=3.12.0",
+            "cryptography>=42.0.0",
         ],
     },
     # Entry points for command-line scripts
@@ -111,7 +117,7 @@ setup(
         "Programming Language :: Python :: 3.14",
     ],
     # Additional metadata
-    keywords="postgresql mysql database discovery cloud aws gcp azure supabase heroku neon planetscale",
+    keywords="postgresql mysql database discovery cloud aws gcp azure supabase heroku neon planetscale snowflake",
     project_urls={
         "Documentation": "https://docs.planetscale.com",
         "Source": "https://github.com/planetscale/pg-discovery-tool",

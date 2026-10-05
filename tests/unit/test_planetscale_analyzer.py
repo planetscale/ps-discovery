@@ -297,7 +297,7 @@ class TestPlanetScaleAnalyzer:
 
     @patch("requests.Session")
     def test_analyze_records_storage_and_totals(self, mock_session_class):
-        """Liftoff read the SKU default because the branch carried no usage."""
+        """A consumer read the SKU default because the branch carried no usage."""
         from tests.fixtures.planetscale_responses import (
             PLANETSCALE_ORGANIZATION_DETAIL_RESPONSE,
             PLANETSCALE_CLUSTER_SIZE_SKUS_RESPONSE,

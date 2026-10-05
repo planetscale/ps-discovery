@@ -10,7 +10,7 @@ authors = [{name = "PlanetScale", email = "engineering@planetscale.com"}]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
-keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "azure", "supabase", "heroku", "neon", "planetscale"]
+keywords = ["postgresql", "mysql", "database", "discovery", "cloud", "aws", "gcp", "azure", "supabase", "heroku", "neon", "planetscale", "snowflake"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: System Administrators",
@@ -66,6 +66,10 @@ neon = [
 planetscale = [
     "requests>=2.32.5",
 ]
+snowflake = [
+    "snowflake-connector-python>=3.12.0",
+    "cryptography>=42.0.0",
+]
 workload = [
     "pglast>=7,<9",
 ]
@@ -86,6 +90,8 @@ all = [
     "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
     "azure-mgmt-network>=32.0.0",
     "requests>=2.32.5",
+    "snowflake-connector-python>=3.12.0",
+    "cryptography>=42.0.0",
 ]
 
 [project.scripts]

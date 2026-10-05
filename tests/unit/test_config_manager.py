@@ -18,6 +18,7 @@ from planetscale_discovery.config.config_manager import (
     HerokuConfig,
     OutputConfig,
     DiscoveryConfig,
+    apply_providers_override,
     resolve_modules,
 )
 
@@ -250,6 +251,109 @@ class TestConfigManager:
             assert config.planetscale.target_database == "my-database"
         finally:
             os.unlink(config_file)
+
+    def test_load_snowflake_from_yaml_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            config_data = {
+                "providers": {
+                    "snowflake": {
+                        "enabled": True,
+                        "account": "xy12345",
+                        "user": "planetscale_discovery",
+                        "role": "PS_DISCOVERY",
+                        "authentication": "key_pair",
+                        "private_key_path": "/tmp/key.p8",
+                        "discover_all": True,
+                        "use_secondary_roles": True,
+                        "password": "do-not-load",
+                        "private_key_passphrase": "do-not-load",
+                    }
+                }
+            }
+            yaml.dump(config_data, f)
+            config_file = f.name
+
+        try:
+            config = ConfigManager(config_file).load_config(validate=False)
+
+            assert config.snowflake.enabled is True
+            assert config.snowflake.account == "xy12345"
+            assert config.snowflake.user == "planetscale_discovery"
+            assert config.snowflake.role == "PS_DISCOVERY"
+            assert config.snowflake.authentication == "key_pair"
+            assert config.snowflake.private_key_path == "/tmp/key.p8"
+            assert config.snowflake.use_secondary_roles is True
+            assert config.snowflake.password is None
+            assert config.snowflake.private_key_passphrase is None
+        finally:
+            os.unlink(config_file)
+
+    def test_snowflake_yaml_secrets_warn(self, caplog):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            yaml.dump(
+                {
+                    "providers": {
+                        "snowflake": {
+                            "enabled": True,
+                            "password": "do-not-load",
+                            "private_key_passphrase": "do-not-load",
+                        }
+                    }
+                },
+                f,
+            )
+            config_file = f.name
+
+        try:
+            ConfigManager(config_file).load_config(validate=False)
+        finally:
+            os.unlink(config_file)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("SNOWFLAKE_PASSWORD" in m for m in messages)
+        assert any("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE" in m for m in messages)
+        assert not any("do-not-load" in m for m in messages)
+
+    def test_snowflake_secondary_roles_default_off(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            yaml.dump({"providers": {"snowflake": {"enabled": True}}}, f)
+            config_file = f.name
+
+        try:
+            config = ConfigManager(config_file).load_config(validate=False)
+            assert config.snowflake.use_secondary_roles is False
+        finally:
+            os.unlink(config_file)
+
+    def test_load_snowflake_from_environment(self):
+        env = {
+            "SNOWFLAKE_ENABLED": "true",
+            "SNOWFLAKE_ACCOUNT": "env-acct",
+            "SNOWFLAKE_USER": "env-user",
+            "SNOWFLAKE_ROLE": "DISCOVERY_READONLY",
+            "SNOWFLAKE_PRIVATE_KEY_PATH": "/tmp/env.p8",
+        }
+        with patch.dict(os.environ, env):
+            config = ConfigManager().load_config(validate=False)
+
+        assert config.snowflake.enabled is True
+        assert config.snowflake.account == "env-acct"
+        assert config.snowflake.user == "env-user"
+        assert config.snowflake.role == "DISCOVERY_READONLY"
+        assert config.snowflake.private_key_path == "/tmp/env.p8"
+
+    def test_load_snowflake_authenticator_alias_from_environment(self):
+        env = {
+            "SNOWFLAKE_ENABLED": "true",
+            "SNOWFLAKE_ACCOUNT": "env-acct",
+            "SNOWFLAKE_USER": "env-user",
+            "SNOWFLAKE_AUTHENTICATOR": "password",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("SNOWFLAKE_AUTHENTICATION", None)
+            config = ConfigManager().load_config(validate=False)
+
+        assert config.snowflake.authentication == "password"
 
     def test_load_planetscale_from_environment(self):
         """The PlanetScale provider block loads from the environment"""
@@ -789,6 +893,20 @@ class TestResolveModules:
         config.neon.enabled = True
         assert resolve_modules(config, None) == ["database", "cloud"]
 
+    def test_infer_cloud_snowflake(self):
+        config = DiscoveryConfig()
+        config.snowflake.enabled = True
+        assert resolve_modules(config, None) == ["cloud"]
+
+    def test_apply_providers_override_snowflake(self):
+        config = DiscoveryConfig()
+        config.aws.enabled = True
+        apply_providers_override(config, ["snowflake"])
+        assert config.snowflake.enabled is True
+        assert config.aws.enabled is False
+        assert config.gcp.enabled is False
+        assert config.azure.enabled is False
+
     def test_infer_mysql_by_host(self):
         config = DiscoveryConfig(engine="mysql")
         config.mysql.host = "db.example.com"
@@ -870,3 +988,19 @@ class TestSelfDescribingTemplate:
             data = yaml.safe_load(path.read_text())
             # Supabase access_token lives at the top level of the block.
             assert "access_token" in data["providers"]["supabase"]
+
+    def test_yaml_template_snowflake_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.yaml"
+            ConfigManager().save_config_template(
+                str(path), providers=["snowflake"], engines=["postgres"]
+            )
+            data = yaml.safe_load(path.read_text())
+            assert data["providers"]["snowflake"]["enabled"] is True
+            assert data["providers"]["snowflake"]["authentication"] == "key_pair"
+            assert data["providers"]["snowflake"]["account"] == ""
+            text = path.read_text()
+            assert "${" not in text
+            assert "SNOWFLAKE_ACCOUNT" in text
+            assert "network_inventory" not in text
+            assert "usage_history_days" not in text
