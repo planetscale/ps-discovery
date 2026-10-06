@@ -7,10 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-05
+
 ### Added
 
-- **Snowflake cloud discovery provider.** Inventories Snowflake Postgres instances with `SHOW POSTGRES INSTANCES` and `DESCRIBE POSTGRES INSTANCE`, one row per instance, under `cloud_results.providers.snowflake`. The discovery role needs `OPERATE` on each instance. See [Snowflake Setup](docs/providers/snowflake.md).
 - **Azure cloud discovery provider.** Discovers Azure Database for PostgreSQL Flexible Servers, Azure Database for MySQL Flexible Servers, and the virtual networks and network security groups around them. See [Azure Setup](docs/providers/azure.md).
+- **Snowflake cloud discovery provider.** Inventories Snowflake Postgres instances with `SHOW POSTGRES INSTANCES` and `DESCRIBE POSTGRES INSTANCE`, one row per instance, under `cloud_results.providers.snowflake`. The discovery role needs `OPERATE` on each instance. See [Snowflake Setup](docs/providers/snowflake.md).
+- **PostgreSQL identity and generated columns.** Each column in `table_analysis` now records `identity_kind`, `generated_kind` and `owned_sequence`. The workload bundle's `schema.sql` now writes identity clauses.
+
+### Changed
+
+- `workload finalize` no longer writes a statement whose counters did not change during the capture window.
+
+### Fixed
+
+- **User and role analysis failed on PostgreSQL 15 and earlier.** The query read `pg_auth_members.inherit_option`, which exists only on PostgreSQL 16 and later.
+- **MySQL per-database object counts were lost under `ONLY_FULL_GROUP_BY`.** The count query failed on a server with the default `sql_mode` and was recorded as an analysis gap.
+- **MySQL replication reads that the server rejected were reported as empty.** A user without `REPLICATION CLIENT` now gets an analysis gap, not an empty replica and binary log result.
+- **The MySQL processlist summary looked server-wide without the `PROCESS` privilege.** When `Threads_connected` is larger than the processlist, the summary now sets `processlist_truncated` and the report gives a warning.
 
 ## [2.0.1] - 2026-09-24
 
