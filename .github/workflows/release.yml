@@ -27,12 +27,31 @@ jobs:
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "Building release for version: ${VERSION}"
 
-    - name: Verify VERSION file matches tag
+    - name: Verify every version identifier matches tag
+      env:
+        TAG_VERSION: ${{ steps.get_version.outputs.version }}
       run: |
-        FILE_VERSION=$(cat VERSION | tr -d '\n')
-        TAG_VERSION="${{ steps.get_version.outputs.version }}"
+        failed=0
+        check() {
+          if ! grep -Fq -- "$2" "$1"; then
+            echo "❌ Error: $1 does not contain: $2"
+            failed=1
+          fi
+        }
+        FILE_VERSION=$(tr -d '\n' < VERSION)
         if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
           echo "❌ Error: VERSION file ($FILE_VERSION) does not match tag ($TAG_VERSION)"
+          failed=1
+        fi
+        check setup.py                          "version=\"${TAG_VERSION}\","
+        check pyproject.toml                    "version = \"${TAG_VERSION}\""
+        check planetscale_discovery/__init__.py "__version__ = \"${TAG_VERSION}\""
+        check README.md                         "unzip ps-discovery-${TAG_VERSION}.zip"
+        check README.md                         "cd ps-discovery-${TAG_VERSION}"
+        check docs/workload-bundle.md           "\"discovery_version\": \"${TAG_VERSION}\""
+        check CHANGELOG.md                      "## [${TAG_VERSION}]"
+        if [ "$failed" -ne 0 ]; then
+          echo "Update the files above to ${TAG_VERSION} on main, then tag again."
           exit 1
         fi
         echo "✅ Version verified: $TAG_VERSION"

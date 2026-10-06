@@ -84,17 +84,19 @@ This will update the version in:
 - `setup.py`
 - `pyproject.toml`
 - `planetscale_discovery/__init__.py`
+- `README.md` (the release zip name in Quick Start)
+- `docs/workload-bundle.md` (the example `discovery_version`)
 
-The script stops with an error if any of these files was not updated to the new version.
+The script stops with an error if any of these files was not updated to the new version. The release workflow checks the same files and a `CHANGELOG.md` section for the tag, and stops before it builds anything if one does not match.
 
 ### 4. Review and Commit Changes
 
 ```bash
 # Review the changes
-git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py CHANGELOG.md
+git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py README.md docs/workload-bundle.md CHANGELOG.md
 
 # Commit the version bump and changelog
-git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py CHANGELOG.md
+git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py README.md docs/workload-bundle.md CHANGELOG.md
 git commit -m "Release vX.Y.Z"
 ```
 
