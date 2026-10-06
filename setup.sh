@@ -272,6 +272,10 @@ add_provider_deps() {
             DEPS+=("requests>=2.32.5")
             INSTALLED_PROVIDERS="planetscale"
             ;;
+        snowflake)
+            DEPS+=("snowflake-connector-python>=3.12.0" "cryptography>=42.0.0")
+            INSTALLED_PROVIDERS="snowflake"
+            ;;
         none | None | NONE | "")
             : # self-managed / direct connection — no extra dependencies
             ;;
@@ -295,6 +299,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         "Neon" \
         "PlanetScale Postgres" \
         "Azure (Database for PostgreSQL / MySQL)" \
+        "Snowflake Postgres" \
         "None (self-managed / direct connection)") || exit 130
     case "$provider_idx" in
         0) provider_choice="aws" ;;
@@ -304,6 +309,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
         4) provider_choice="neon" ;;
         5) provider_choice="planetscale" ;;
         6) provider_choice="azure" ;;
+        7) provider_choice="snowflake" ;;
         *) provider_choice="none" ;;
     esac
 else
@@ -498,6 +504,10 @@ if [ -n "$INSTALLED_PROVIDERS" ]; then
     if [[ $INSTALLED_PROVIDERS == *"azure"* ]]; then
         echo "     • Azure: Set subscription_id, then either run 'az login' or set"
         echo "       AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET"
+    fi
+    if [[ $INSTALLED_PROVIDERS == *"snowflake"* ]]; then
+        echo "     • Snowflake: Set account, user, role, and key-pair path (or SNOWFLAKE_* env vars)"
+        echo "       The role needs OPERATE on every Postgres instance"
     fi
     echo ""
 fi

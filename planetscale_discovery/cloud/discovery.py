@@ -70,6 +70,9 @@ class CloudDiscoveryTool:
             if self.config.planetscale.enabled:
                 self._discover_planetscale()
 
+            if self.config.snowflake.enabled:
+                self._discover_snowflake()
+
             # Generate summary
             self._generate_summary()
 
@@ -412,6 +415,55 @@ class CloudDiscoveryTool:
                 {
                     "timestamp": generate_timestamp(),
                     "message": f"PlanetScale discovery failed: {e}",
+                    "type": "PROVIDER_ERROR",
+                }
+            )
+
+    def _discover_snowflake(self) -> None:
+        self.logger.info("Starting Snowflake discovery")
+
+        try:
+            try:
+                from .analyzers.snowflake_analyzer import SnowflakeAnalyzer
+            except ImportError:
+                self.logger.error(
+                    'Snowflake dependencies not installed. Install with: pip install "ps-discovery[snowflake]"'
+                )
+                self.results["errors"].append(
+                    {
+                        "timestamp": generate_timestamp(),
+                        "message": "Snowflake dependencies not installed",
+                        "type": "DEPENDENCY_ERROR",
+                    }
+                )
+                return
+
+            snowflake_analyzer = SnowflakeAnalyzer(self.config.snowflake, self.logger)
+
+            try:
+                if not snowflake_analyzer.authenticate():
+                    for error in snowflake_analyzer.errors:
+                        self.results["errors"].append(error)
+                    return
+
+                snowflake_results = snowflake_analyzer.analyze()
+                self.results["providers"]["snowflake"] = snowflake_results
+
+                instance_count = snowflake_results.get("summary", {}).get(
+                    "instance_count", 0
+                )
+                self.logger.info(
+                    f"Snowflake discovery completed. Found {instance_count} Postgres instance(s)"
+                )
+            finally:
+                snowflake_analyzer.close()
+
+        except Exception as e:
+            self.logger.error(f"Snowflake discovery failed: {e}")
+            self.results["errors"].append(
+                {
+                    "timestamp": generate_timestamp(),
+                    "message": f"Snowflake discovery failed: {e}",
                     "type": "PROVIDER_ERROR",
                 }
             )
