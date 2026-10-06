@@ -622,6 +622,18 @@ class TestTheFinalizeSummaryPrints:
         _print_summary(summary, tmp_path)
         assert "RESET pgaudit.log" not in capsys.readouterr().out
 
+    def test_the_distributions_line_prints_only_when_the_tier_ran(
+        self, tmp_path, capsys
+    ):
+        from planetscale_discovery.workload.cli_workload import _print_summary
+
+        summary = write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
+        _print_summary(summary, tmp_path)
+        assert "distributions:" not in capsys.readouterr().out
+        summary["distributions"] = {"taken": True, "columns": 2}
+        _print_summary(summary, tmp_path)
+        assert "distributions:  2 column(s) from pg_stats" in capsys.readouterr().out
+
 
 class TestAnIdleDatabaseSaysSo:
     """An empty bundle and a full one look identical in a file listing."""

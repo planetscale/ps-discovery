@@ -5,11 +5,12 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 SNAPSHOT_GLOB = "snapshot-*.json.gz"
 BURST_GLOB = "burst-*.json.gz"
 SCHEMA_FILE = "schema.json"
+DISTRIBUTIONS_FILE = "distributions.json"
 
 
 class WorkloadStore:
@@ -52,6 +53,23 @@ class WorkloadStore:
 
     def read_schema(self) -> Dict[str, Any]:
         with open(self.schema_path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    @property
+    def distributions_path(self) -> Path:
+        return self.directory / DISTRIBUTIONS_FILE
+
+    def write_distributions(self, doc: Dict[str, Any]) -> None:
+        """Store the distribution tier's reading, replacing the last one."""
+        _atomic_write(
+            self.distributions_path, json.dumps(doc, indent=2, default=str).encode()
+        )
+
+    def read_distributions(self) -> Optional[Dict[str, Any]]:
+        """The stored reading, or None when the tier never ran."""
+        if not self.distributions_path.exists():
+            return None
+        with open(self.distributions_path, encoding="utf-8") as handle:
             return json.load(handle)
 
     def append_snapshot(self, snapshot: Dict[str, Any]) -> Path:

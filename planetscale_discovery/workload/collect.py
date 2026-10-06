@@ -142,7 +142,7 @@ ORDER BY s.schemaname, s.relname, s.indexrelname
 MCF_KEPT = 10
 
 # Frequencies, never values. most_common_vals and histogram_bounds hold sampled
-# rows from the customer's tables and are never read. most_common_freqs is an
+# rows from the customer's tables; this query reads neither. most_common_freqs is an
 # array of floats describing how often the values in that list occur, which is
 # what says whether a candidate shard key spreads evenly or piles onto one shard.
 # reltuples and the analyze timestamps ride along: n_distinct decodes against
@@ -177,8 +177,8 @@ LEFT JOIN (
       AND icol.attname = s.attname
 WHERE NOT (s.schemaname = ANY(%(excluded)s))
   AND (%(schemas)s::text[] IS NULL OR s.schemaname = ANY(%(schemas)s))
-  -- An inheritance parent emits a second, tree-wide row per column; both of
-  -- the consumer's collectors filter it, and an arbitrary winner is worse.
+  -- An inheritance parent emits a second, tree-wide row per column. This keeps
+  -- the table's own rows, where distributions.py keeps the tree's.
   AND NOT s.inherited
 ORDER BY s.schemaname, s.tablename, s.attname
 """

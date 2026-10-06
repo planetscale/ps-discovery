@@ -312,13 +312,26 @@ file before the bundle leaves your organization.
 ### Steps
 
 1. Switch the capture on in your config file. Without this setting, the
-   commands stop with exit code 1.
+   commands stop with exit code 1. Also declare the columns your PlanetScale
+   migration engineer names, normally the candidate shard keys:
 
    ```yaml
    database:
      workload:
        enabled: true
+       distributions:
+         by_column:
+           - organization_id
+         explicit:
+           - public.issues.status
    ```
+
+   The capture records the most common values of each declared column, from
+   the statistics PostgreSQL keeps for its query planner. A sharding scheme is
+   planned from where those values fall. The values ship as they are, and the
+   bundle README lists each column. The capture role needs `SELECT` on each
+   declared column. See
+   [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
 
 2. Check the server. `init --check` reports what the server can supply for
    each level and what you must change. It creates no session and changes
@@ -330,7 +343,9 @@ file before the bundle leaves your organization.
 
 3. Start the session. `init` checks the requirements, stores the schema and
    takes the first snapshot. It stops with exit code 5 if `pg_stat_statements`
-   cannot be read or the role does not have `pg_monitor`.
+   cannot be read, the role does not have `pg_monitor`, or the role cannot
+   read a declared column. For a column it cannot read, it prints the `GRANT`
+   to run.
 
    ```bash
    ./ps-discovery workload init --session ./workload-session
@@ -362,7 +377,8 @@ see [Workload Capture](docs/workload_capture.md). For the bundle contents, see
 
 ## Security & Data Privacy
 
-This tool collects **metadata only** — never actual data from your tables.
+This tool reads no table of yours. A discovery run collects metadata only. A
+workload capture also collects the values described below.
 
 **What is collected:** Schema metadata (table names, column types, constraints), database configuration (version, settings, extensions), usage statistics (table sizes, row counts, cache ratios), infrastructure topology (cloud resources, networking), and user/role names.
 
@@ -370,7 +386,12 @@ This tool collects **metadata only** — never actual data from your tables.
 
 **Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by `$N` placeholders, so `SELECT * FROM orders WHERE email = $1` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
 
-**`capture_log` is the one exception, and it is off by default.** A session that captures the query log writes `burst.csv`, which holds statement text with its literal values. Read that file before the archive leaves your organization.
+**A workload capture records values from your data in two files.** The bundle README names each one:
+
+- `distributions.json` holds the most common values of each column you declare, and how often each occurs. A sharding scheme needs them, so every workload capture records them. The values come from PostgreSQL's own statistics, and the tool scans no table to get them. By default the values ship as they are, because the migration team must read a value to place it on a shard. `hash_values: true` ships hashes instead, which gives a less exact plan. `init` lists each column before the capture starts.
+- `burst.csv`, written only when you turn on `capture_log`, holds statement text with its literal values.
+
+Read both files before the archive leaves your organization.
 
 All analysis runs locally — no data is sent to external services.
 

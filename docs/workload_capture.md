@@ -141,8 +141,9 @@ caveat.
 
 ### 2. Create a role for the capture
 
-Workload capture needs less access than a discovery run. It reads no user table,
-so it needs no `SELECT` on your data:
+Workload capture needs less access than a discovery run. It reads no user table.
+It needs `SELECT` only on the columns you declare for
+[step 6](#6-declare-the-columns-your-migration-engineer-names):
 
 ```sql
 CREATE USER planetscale_workload WITH PASSWORD 'secure_password_here';
@@ -150,7 +151,7 @@ GRANT CONNECT ON DATABASE your_database TO planetscale_workload;
 GRANT pg_monitor TO planetscale_workload;
 ```
 
-`pg_monitor` is the whole permission requirement for the capture role. Without
+`pg_monitor` lets the capture role read the statistics views. Without
 it, PostgreSQL hides the statement text of every other role behind
 `<insufficient privilege>`, and the capture would describe only the statements
 your capture role ran itself. That result looks complete and is badly wrong, so
@@ -160,6 +161,10 @@ Turning on `capture_log` needs more, both in the database and in your cloud
 account, and the extra access belongs to whoever sets the capture up rather
 than to the capture role. See
 [Permissions for log capture](#permissions-for-log-capture).
+
+The capture role also needs a column-level `SELECT` grant on each column you
+declare in step 6. See
+[Grant the capture role each column](#grant-the-capture-role-each-column).
 
 You can reuse the discovery role from the
 [Required PostgreSQL Privileges](../README.md#required-postgresql-privileges)
@@ -324,6 +329,22 @@ refuses a standby unless you pass `--allow-replica`.
 The host that runs the capture needs cron, the tool installed, and a writable
 directory for the session. It does not need to be the database host.
 
+### 6. Declare the columns your migration engineer names
+
+**This step is required.** Your PlanetScale migration engineer gives you a list
+of columns, normally the candidate shard keys. The capture records the most
+common values of each of those columns, and how often each value occurs. A
+sharding scheme cannot be planned without them.
+
+1. Add the columns under `database.workload.distributions` in your config file.
+   See [Declare the columns](#declare-the-columns).
+2. Grant the capture role `SELECT` on each column. See
+   [Grant the capture role each column](#grant-the-capture-role-each-column).
+
+`init` checks each declared column. It stops when a column does not exist, or
+when the capture role cannot read it, and it prints the `GRANT` to run. When
+every column passes, `init` lists the columns whose values the capture records.
+
 ## Usage
 
 Start with `init --check`. It reports every problem the server has before you
@@ -459,11 +480,14 @@ archive is normally well under the attachment limit of any mail or ticket
 system. Every file in it is mode `0600`, and the directory carries a
 `.gitignore` so it cannot be committed by accident.
 
-Treat it as you would any schema export. It holds table, column and index names,
-statement shapes, row counts, a distinct-value count and null fraction per
-indexed column, and a `manifest.json` recording when the capture ran and over
-which intervals. It holds no data from your tables and no literal values from
-your queries. See
+It holds table, column and index names, statement shapes, row counts, a
+distinct-value count and null fraction per indexed column, and a
+`manifest.json` recording when the capture ran and over which intervals. It
+also holds values from your data in `distributions.json`: the most common
+values of the columns you declared, as they are, unless you set
+`hash_values: true`.
+With `capture_log` on, `burst.csv` holds the literal values from your queries.
+See
 [Privacy](#privacy-what-leaves-your-database-and-what-never-does) below, which
 includes how to check the bundle yourself before you send it.
 
@@ -479,6 +503,11 @@ It reads `pg_stat_statements`, `pg_stat_user_tables`, `pg_stat_user_indexes`,
 `pg_class`, `pg_index`, `pg_attribute`, `pg_namespace`, `pg_settings`,
 `pg_extension`, `information_schema.columns`, and the catalogs that the schema
 analyzer already reads.
+
+It also reads `pg_stats`. For indexed and constrained columns it reads only
+the counts and frequencies. For the columns you declare in
+[step 6](#6-declare-the-columns-your-migration-engineer-names), it also reads
+`most_common_vals`, the most common values themselves.
 
 It also calls `pg_total_relation_size`, `pg_relation_size` and
 `pg_indexes_size` on each table and index in scope. These report how many bytes
@@ -497,14 +526,16 @@ as startup parameters. The tool then applies them with `SET` and verifies them.
 
 ## What the server must provide
 
-Capture needs two things, and `init` checks both before it writes anything:
+Capture needs three things, and `init` checks each one before it writes
+anything:
 
 | Requirement | Why |
 | --- | --- |
 | `pg_monitor` on the capture role | to read the statistics views at all, and to see statement text belonging to other roles |
 | `pg_stat_statements`, installed and readable | it is the only record of the query workload, which is what a sharding scheme is planned from |
+| `SELECT` on each declared column | PostgreSQL shows a column's statistics only to a role that may read the column |
 
-`init` stops with exit code 5 when either is missing, and names which one. It
+`init` stops with exit code 5 when one is missing, and names which one. It
 reports the case where the extension is installed but not preloaded separately,
 because `CREATE EXTENSION` then succeeds and collects nothing forever. When the
 connected role is not a superuser, `init` names where the setting lives instead
@@ -515,17 +546,31 @@ Aurora, or a database flag on Cloud SQL and AlloyDB.
 
 You are about to send a file to another company, so you should know exactly what
 is in it. The short version: the bundle describes the *shape* of your queries and
-the *size* of your tables. It contains none of your data.
+the *size* of your tables. It also holds one set of values from your data: the
+most common values of the columns you declare in
+[step 6](#6-declare-the-columns-your-migration-engineer-names). A sharding scheme
+is planned from where those values fall, so the capture cannot leave them out.
 
 | In the bundle | Never in the bundle |
 | --- | --- |
 | Table, column and index names | Any row from any table |
-| Query shapes, with values removed | The values your queries search for |
-| How often each query ran, and how long it took | Customer names, emails, tokens, or any other content |
-| Row counts and table sizes | Passwords, connection strings or credentials |
-| How evenly each column's values are spread | Which values those are |
-| How many rows were written to each table | The rows themselves |
-| Your PostgreSQL settings and version | Sampled column values from database statistics |
+| Query shapes, with values removed | The values your queries search for, unless you turn on `capture_log` |
+| How often each query ran, and how long it took | Passwords, connection strings or credentials |
+| Row counts and table sizes | Values of any column you did not declare |
+| How evenly each column's values are spread | Sampled values from database statistics, other than the declared columns |
+| How many rows were written to each table | |
+| Your PostgreSQL settings and version | |
+| **The most common values of each declared column**, as they are, and how often each occurs | |
+
+The declared columns' values come from `pg_stats`, the statistics PostgreSQL
+keeps for its own query planner. The tool scans no table to get them. By
+default the values ship as they are, because the migration team must know
+which shard each value goes to. `init` lists each declared column before the
+capture starts, and the bundle's README lists them again. See
+[Recording the common values of chosen columns](#recording-the-common-values-of-chosen-columns).
+
+One more setting adds values: [`capture_log`](#the-exception-burstcsv), which
+is off by default, writes the literal values from your queries to `burst.csv`.
 
 ### What a captured query looks like
 
@@ -547,13 +592,14 @@ are stored by the database verbatim, so every statement passes through the same
 removal step regardless of where it came from. A password is a string literal
 like any other, and is removed like any other.
 
-### The tool never reads your data
+### The tool never reads your tables
 
 It reads the PostgreSQL catalogs and statistics views — the same information
 `\d` in `psql` shows you, plus counters. It runs no `SELECT` against a table of
-yours, takes no sample, and counts no rows. It also never reads the sampled
-column values PostgreSQL keeps for its own planner in `pg_stats`, which are the
-one place in the catalogs where real values from your tables appear.
+yours, takes no sample, and counts no rows. PostgreSQL keeps sampled column
+values for its own planner in `pg_stats`, which is the one place in the
+catalogs where real values from your tables appear. The tool reads those values
+for the columns you declare, and for no other column.
 
 ### You can check all of this yourself
 
@@ -898,6 +944,104 @@ says the same thing in its privacy section.
 A log window is matched against the snapshot window it was taken alongside. A
 window read by `collect` always falls inside it. An exported file might not;
 see [W215](#w215-burst_outside_window).
+
+## Recording the common values of chosen columns
+
+`column_stats.json` says how unevenly a column's values are spread, never which
+values those are. A sharding scheme needs to know which values those are. When
+one tenant holds 40% of the rows, the migration team must know which tenant it
+is, so they can place it and match it to that tenant's traffic.
+
+The capture records this for the columns you declare, and for no other. It
+reads `most_common_vals` and `most_common_freqs` from `pg_stats`: the most
+common values PostgreSQL's last `ANALYZE` sampled, and how often each occurs. It
+scans no table. Your PlanetScale migration engineer tells you which columns to
+declare.
+
+### Declare the columns
+
+Declare the columns in your config file before you run `init`:
+
+```yaml
+database:
+  workload:
+    enabled: true
+    distributions:
+      by_column:
+        - organization_id
+      explicit:
+        - issues.status
+        - {schema: billing, table: invoices, column: account_id}
+```
+
+- **`by_column`** names a column. Every table in the capture that has a column
+  of that name is read.
+- **`explicit`** names one column of one table, written as
+  `schema.table.column`, as `table.column`, or as a mapping of `table`,
+  `column` and, optionally, `schema`. Without a schema the entry must match
+  exactly one table. When two schemas hold a table of that name, the entry is
+  skipped and named rather than guessed, so add the schema.
+- **`hash_values`** defaults to `false`, which ships the values as they are. Set
+  it to `true` to ship a hash of each value instead. See
+  [What leaves with the bundle](#what-leaves-with-the-bundle) before you do.
+
+Names match regardless of case, the way PostgreSQL folds unquoted names, and an
+exact match wins over a folded one. A list with one entry can be written as the
+entry alone.
+
+`init` resolves each entry and checks that the capture role can read the
+column. It stops with exit code 1 when an entry matches no column, matches more
+than one, or names a column of a type the capture cannot record. It stops with
+exit code 5 when the role cannot read a column, and prints the `GRANT` to run.
+When every column passes, `init` prints each one and says whether its values
+ship as hashes or verbatim.
+
+Each `collect` reads the declared columns again, and `finalize` writes the
+latest reading into `distributions.json`. A column you declare after `init` is
+read by the next `collect`, but `init` did not check it. A declaration no
+`collect` ever read is named in the bundle's caveats.
+
+### Grant the capture role each column
+
+PostgreSQL shows a column in `pg_stats` only to a role that may `SELECT` that
+column. The capture role from
+[step 2](#2-create-a-role-for-the-capture) holds `pg_monitor` and nothing else,
+so it sees no rows in `pg_stats` at all, and every declared column would be left
+out. Grant it each declared column:
+
+```sql
+GRANT SELECT (organization_id) ON public.issues TO planetscale_workload;
+```
+
+A column-level grant is enough, and it is the narrowest grant PostgreSQL offers.
+It does let the role read that column's values directly, although this tool
+never does: it reads only `pg_stats`. Revoke the grant when the capture ends.
+
+A table with row-level security enabled shows nothing in `pg_stats` to a role
+its policies apply to, so a declared column on such a table is left out.
+
+### What leaves with the bundle
+
+By default `distributions.json` holds the values as they are. A sharding scheme
+places each value on a shard, and the migration team can place a value only
+when they can read it. Both the file (`"values_hashed": false`) and the bundle
+README say that the values are verbatim. Treat the bundle the way you would
+treat a database log.
+
+With `hash_values: true`, the file holds a SHA-256 hash of each value instead.
+The migration team can then match a value to its traffic, but cannot place it
+on a shard, so the plan for that column is an estimate. The hash has no salt.
+A hash hides a value nobody can guess, like a UUID. It does not hide a status
+name or a small integer id, because whoever holds the file can hash every
+candidate and compare.
+
+If a column on the list holds values you cannot send, tell your PlanetScale
+migration engineer before the capture starts.
+
+A declared column that cannot be read is left out of the file and named in the
+README's caveats. The file's format, the hashing rules and every reason a column
+is left out are in
+[Workload Bundle Format](workload-bundle.md#value-distributions).
 
 ## Exit codes
 

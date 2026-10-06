@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from planetscale_discovery.workload import bundle_burst
+from planetscale_discovery.workload.distributions import (
+    DISTRIBUTIONS_SCHEMA_VERSION,
+    DISTRIBUTIONS_SOURCE,
+)
+from planetscale_discovery.workload.valuehash import join_hash
 from planetscale_discovery.workload.codes import label
 from planetscale_discovery.workload.collect import MCF_KEPT
 from planetscale_discovery.workload.schema_sql import (
@@ -57,6 +62,8 @@ def write_bundle(
     collector_version: str,
     target_schemas: Optional[Sequence[str]] = None,
     bursts: Optional[Sequence[Dict[str, Any]]] = None,
+    distributions: Optional[Dict[str, Any]] = None,
+    distributions_hash_values: bool = False,
 ) -> Dict[str, Any]:
     """Write the bundle and return a summary of what it holds.
 
@@ -111,6 +118,11 @@ def write_bundle(
         out_dir, bursts or [], merged, known
     )
 
+    # The distribution tier's readings; absent stays absent, no file.
+    distributions_summary = _write_distributions(
+        out_dir, distributions, identity, distributions_hash_values
+    )
+
     summary = {
         "capture_id": identity,
         "burst": burst_summary,
@@ -146,6 +158,7 @@ def write_bundle(
             "parse_failures": len(parse.get("failures") or []),
         },
         "cardinality": cardinality,
+        "distributions": distributions_summary,
         "resets_observed": merged.get("resets_observed"),
         "caveats": _caveats(
             merged,
@@ -155,10 +168,77 @@ def write_bundle(
             burst_summary,
             outside_window,
             unreadable_bursts,
+            distributions_summary,
         ),
     }
     _write_text(out_dir / "README.md", _render_readme(summary, out_dir))
     return summary
+
+
+def _write_distributions(
+    out_dir: Path,
+    distributions: Optional[Dict[str, Any]],
+    identity: str,
+    hash_values: bool,
+) -> Dict[str, Any]:
+    """Write distributions.json, hashing values when hash_values is true.
+    No readings, no file; the notes become caveats either way."""
+    distributions = distributions or {}
+    notes = list(distributions.get("notes") or [])
+    columns = []
+    for col in distributions.get("columns") or []:
+        where = f"{col.get('table')}.{col.get('column')}"
+        try:
+            # The field name declares the content: value_hash, or value.
+            mcv = col["mcv"]
+            entry = {k: v for k, v in col.items() if k != "type"}
+            if hash_values:
+                mcv, unhashable = _hash_mcv(col["type"], mcv)
+                if unhashable:
+                    notes.append(
+                        f"distributions: {where}: {unhashable} value(s) left out, "
+                        f"because a {col['type']} value of that form has no hash"
+                    )
+                    freqs = [m["frequency"] for m in mcv]
+                    entry["mcv_coverage"] = min(1.0, sum(freqs)) if freqs else None
+        except (KeyError, TypeError) as exc:
+            # A malformed entry omits its column, never the bundle.
+            notes.append(f"distributions: {where} not written: {exc}")
+            continue
+        columns.append({**entry, "mcv": mcv})
+    if columns:
+        doc = {
+            "schema_version": DISTRIBUTIONS_SCHEMA_VERSION,
+            "capture_id": identity,
+            "source": DISTRIBUTIONS_SOURCE,
+            "values_hashed": bool(hash_values),
+            "columns_declared": distributions.get("columns_declared") or {},
+            "columns": columns,
+        }
+        _write_text(
+            out_dir / "distributions.json",
+            json.dumps(doc, indent=2, sort_keys=True) + "\n",
+        )
+    return {
+        "taken": bool(columns),
+        "columns": len(columns),
+        "column_names": [f"{c['table']}.{c['column']}" for c in columns],
+        "values_hashed": bool(hash_values),
+        "notes": notes,
+    }
+
+
+def _hash_mcv(
+    type_name: str, mcv: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], int]:
+    hashed = []
+    for m in mcv:
+        try:
+            value_hash = join_hash(type_name, m["value"])
+        except ValueError:
+            continue
+        hashed.append({"value_hash": value_hash, "frequency": m["frequency"]})
+    return hashed, len(mcv) - len(hashed)
 
 
 def capture_id(merged: Dict[str, Any]) -> str:
@@ -240,7 +320,7 @@ def render_column_stats(merged: Dict[str, Any], identity: str) -> Dict[str, Any]
     on one shard however many shards there are, and a row count cannot show it.
 
     Frequencies only. ``most_common_vals`` and ``histogram_bounds`` hold sampled
-    rows from the customer's tables and are never read.
+    rows from the customer's tables and never reach this file.
     """
     columns = merged.get("columns") or []
     drifted = [
@@ -616,11 +696,20 @@ def _caveats(
     burst_summary=None,
     outside_window=None,
     unreadable_bursts=None,
+    distributions_summary=None,
 ) -> List[str]:
     """Notes that change how the counts in this bundle should be read."""
     caveats: List[str] = []
     burst_summary = burst_summary or {}
     outside_window = outside_window or []
+    distributions = distributions_summary or {}
+    # The tier's omissions are caveats verbatim, never silently absent.
+    caveats.extend(distributions.get("notes") or [])
+    if distributions.get("taken") and not distributions["values_hashed"]:
+        caveats.append(
+            "distributions.json carries the most common values VERBATIM: "
+            "handle this bundle like burst.csv."
+        )
 
     if merged.get("basis") != "windowed":
         # Names the cause first. Leading with "since the statistics were last
@@ -792,6 +881,14 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
         - statements["excluded_not_this_application"]
     )
 
+    distributions = summary.get("distributions") or {}
+    distributions_files = ""
+    if distributions.get("taken"):
+        distributions_files = (
+            "| `distributions.json` | the most common values of each declared "
+            "column and how often each occurs, "
+            f"**{'hashed' if distributions['values_hashed'] else 'verbatim'}** |\n"
+        )
     burst_files = ""
     if burst_taken:
         burst_files = (
@@ -801,6 +898,42 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
             "whether it landed on ordinary traffic |\n"
         )
 
+    dist_privacy = ""
+    if distributions.get("taken"):
+        listed = "".join(f"- `{name}`\n" for name in distributions["column_names"])
+        if distributions["values_hashed"]:
+            form = (
+                "Each value is a SHA-256 hash with no salt. A hash hides a value "
+                "that nobody can guess, such as a UUID. It does not hide a value "
+                "that is easy to guess, such as a status name or a small number: "
+                "anyone with this file can hash each candidate and compare. "
+                "Treat those hashes as the values."
+            )
+        else:
+            form = (
+                "The values are VERBATIM, as PostgreSQL recorded them. Treat "
+                "`distributions.json` the way you would treat a database log."
+            )
+        dist_privacy = f"""**`distributions.json` holds values from your data.** It holds
+the most common values of each column below, and how often each value occurs,
+from the statistics PostgreSQL keeps for its query planner. {form}
+
+{listed}
+"""
+    value_files = [
+        name
+        for name, taken in (
+            ("`burst.csv`", burst_taken),
+            ("`distributions.json`", distributions.get("taken")),
+        )
+        if taken
+    ]
+    no_rows = "It contains no rows from your data."
+    if value_files:
+        no_rows = (
+            f"Apart from {' and '.join(value_files)}, it contains no values "
+            "from your data."
+        )
     if burst_taken:
         privacy = f"""## What is in here, and what is not
 
@@ -819,14 +952,13 @@ the server logged it. This capture recorded {burst.get('with_values', 0)}
 statement(s) carrying values. Before this archive leaves your organization,
 read `burst.csv` and treat it the way you would treat a database log.
 
-No table of yours was read to produce this bundle, and apart from the logged
-statement text in `burst.csv` it contains no rows from your data. Every file
+{dist_privacy}No table of yours was read to produce this bundle. {no_rows} Every file
 is readable only by you (mode `0600`), and this directory carries a
 `.gitignore` so it cannot be committed to a repository by accident. Delete
 it once the sharding scheme is planned.
 """
     else:
-        privacy = """## What is in here, and what is not
+        privacy = f"""## What is in here, and what is not
 
 The queries in `workload.sql` keep their structure and lose their values. A
 query your application ran as:
@@ -837,10 +969,10 @@ is recorded as:
 
     SELECT * FROM orders WHERE customer_email = $1
 
-The structure is what a sharding scheme is designed from. The values are not
-needed for it, so they were removed before anything was written here. No table
-of yours was read to produce this bundle, and it contains no rows from your
-data.
+The structure is what a sharding scheme is designed from, so the values in your
+queries were removed before anything was written here.
+
+{dist_privacy}No table of yours was read to produce this bundle. {no_rows}
 
 Every file is readable only by you (mode `0600`), and this directory carries a
 `.gitignore` so it cannot be committed to a repository by accident. Delete it
@@ -888,7 +1020,7 @@ dropped for being small, or sampled.
 | `manifest.json` | when this capture ran, and over which intervals |
 | `column_stats.json` | how evenly the values in each column are spread |
 | `table_activity.json` | how much each table was written and read, and which indexes were used |
-{burst_files}
+{burst_files}{distributions_files}
 ## Sending it
 
 Compress this directory into one archive and send the archive to your

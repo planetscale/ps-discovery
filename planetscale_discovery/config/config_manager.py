@@ -51,6 +51,11 @@ class WorkloadConfig:
     capture_log_seconds: int = 600
     capture_log_source: str = "pgaudit"
     capture_log_file: Optional[str] = None
+    # The distribution tier, off unless declared: pg_stats for these columns,
+    # verbatim unless hash_values is true, which hashes them at finalize.
+    distributions_by_column: List[str] = field(default_factory=list)
+    distributions_explicit: List[Any] = field(default_factory=list)
+    distributions_hash_values: bool = False
 
 
 @dataclass
@@ -410,9 +415,25 @@ class ConfigManager:
             db_config.schemas = db_data.get("schemas", db_config.schemas)
 
             if "workload" in db_data:
-                db_config.workload = self._apply_dict(
-                    WorkloadConfig(), dict(db_data["workload"] or {})
-                )
+                # Only the nested distributions block sets the distributions_* fields.
+                workload_data = {
+                    k: v
+                    for k, v in (db_data["workload"] or {}).items()
+                    if not k.startswith("distributions_")
+                }
+                dist = workload_data.pop("distributions", None) or {}
+                if not isinstance(dist, dict):
+                    raise ValueError(
+                        "database.workload.distributions must be a mapping "
+                        "(by_column / explicit / hash_values)"
+                    )
+                workload_data.update({f"distributions_{k}": v for k, v in dist.items()})
+                workload = self._apply_dict(WorkloadConfig(), workload_data)
+                for key in ("distributions_by_column", "distributions_explicit"):
+                    value = getattr(workload, key)
+                    if not isinstance(value, list):  # a lone entry is one entry
+                        setattr(workload, key, [value] if value else [])
+                db_config.workload = workload
 
             # Parse data_size config
             if "data_size" in db_data:
@@ -987,6 +1008,12 @@ database:
   #                             # (10 to 3600). Keep the schedule longer
   #   capture_log_source: pgaudit   # pgaudit, pgaudit-json, stderr, log_fdw
   #   capture_log_file:         # The exported log, for every source but log_fdw
+  #   distributions:            # The columns your migration engineer names
+  #     by_column:              # Every table carrying this column name
+  #       - organization_id
+  #     explicit:               # Or one [schema.]table.column, or a mapping
+  #       - public.issues.status
+  #     hash_values: false      # Values ship VERBATIM; true ships hashes
 """
 
             if "mysql" in engines:

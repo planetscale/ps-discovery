@@ -194,7 +194,7 @@ class TestTableRows:
 
 class TestInheritedRowsAreFiltered:
     """pg_stats emits a second, tree-wide row per column for an inheritance
-    parent; both of the consumer's collectors filter it with NOT inherited."""
+    parent; the column-stats query keeps the table's own rows."""
 
     def test_the_column_query_filters_inherited_rows(self):
         assert "AND NOT s.inherited" in COLUMN_SQL

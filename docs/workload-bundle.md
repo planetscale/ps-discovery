@@ -47,13 +47,20 @@ Two more files appear only when the query log was captured:
 
 | File | Contents |
 | --- | --- |
-| `burst.csv` | the query log: every statement the server logged, **with literal values in the `parameters` column**, the one file in the bundle that holds real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
+| `burst.csv` | the query log: every statement the server logged, **with literal values in the `parameters` column**, which is real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
 | `coverage.json` | how much of the aggregate workload the log windows observed, and whether they landed on ordinary traffic |
 
-The first four are the planning tools' input. `manifest.json` and
-`column_stats.json` are read by the migration tooling rather than the planning
-tools: one records how the capture was taken, the others what the data looks
-like and how it was used.
+Every capture declares the columns your migration engineer names, and the
+bundle then holds one more file:
+
+| File | Contents |
+| --- | --- |
+| `distributions.json` | the most common values of each declared column and how often each occurs, **which are values from your data, verbatim by default, hashed with `hash_values: true`**. See [Value distributions](#value-distributions) |
+
+The first four are the planning tools' input. `manifest.json`,
+`column_stats.json`, `table_activity.json` and `distributions.json` are read by
+the migration tooling rather than the planning tools: one records how the
+capture was taken, the others what the data looks like and how it was used.
 Nothing else is written, because a file nothing reads is a file someone has to
 explain. Counts that describe the capture — how many statements were collected,
 how many were left out and why — are printed by `finalize` and summarized in
@@ -210,11 +217,126 @@ the end is visible as a change. `columns_whose_skew_moved` counts how many moved
 by more than five percentage points.
 
 **Frequencies, never values.** `most_common_vals` and `histogram_bounds` hold
-sampled rows from your tables and are never read. This file says how often the
-values in a column occur, and never what they are.
+sampled rows from your tables, and this file never reads them. It says how often
+the values in a column occur, and never what they are. The values of the columns
+you declare are in [`distributions.json`](#value-distributions).
 
 The figures come from the last `ANALYZE`, so they are a sample and an estimate,
 and they describe one column at a time rather than a composite key.
+
+## Value distributions
+
+`column_stats.json` says how skewed a column is. It cannot say which values
+carry the skew, and so cannot connect a hot value in `burst.csv` to its share
+of the table. `distributions.json` can, for the columns you declare under
+`database.workload.distributions`. The file holds values from your data, and
+the bundle README lists each column in it.
+[The setup](workload_capture.md#recording-the-common-values-of-chosen-columns)
+is in the capture guide.
+
+It comes from PostgreSQL's own statistics: `pg_stats` as the last `ANALYZE`
+left it. No table is scanned. Every `collect` reads the declared columns again,
+and the bundle carries the latest reading.
+
+```json
+{
+  "schema_version": 1,
+  "source": "pg_stats_mcv",
+  "capture_id": "b01d8e74",
+  "values_hashed": false,
+  "columns_declared": {
+    "by_column": ["organization_id"],
+    "explicit": ["issues.status"]
+  },
+  "columns": [
+    {
+      "table": "public.issues",
+      "column": "status",
+      "declared": "explicit",
+      "n_distinct": 2.0,
+      "null_frac": 0.0,
+      "mcv": [
+        {"value": "open", "frequency": 0.71},
+        {"value": "closed", "frequency": 0.29}
+      ],
+      "mcv_coverage": 1.0,
+      "last_analyze": "2026-09-03 08:00:00.412311+00:00",
+      "last_autoanalyze": null
+    }
+  ]
+}
+```
+
+`schema_version` and `source` are a contract with the tool that reads the file.
+`source` is `pg_stats_mcv` because the values are the head of an `ANALYZE`
+sample, not a complete count. `values_hashed` says which form `mcv` takes, and
+the field name inside each entry says it again: `value_hash` when hashed,
+`value` when verbatim. `columns_declared` repeats the declaration as you wrote
+it.
+
+Per column:
+
+| Field | Meaning |
+| --- | --- |
+| `table`, `column` | the column, with the table as `schema.table` |
+| `declared` | `by_column` or `explicit`: which part of the declaration matched it |
+| `n_distinct`, `null_frac` | as `pg_stats` reports them. A negative `n_distinct` is a fraction of the rows |
+| `mcv` | the most common values, most frequent first, each with the fraction of rows that holds it |
+| `mcv_coverage` | the fraction of rows the whole list accounts for, or `null` when PostgreSQL kept no list |
+| `last_analyze`, `last_autoanalyze` | when the statistics were gathered, so a stale reading says so |
+
+A parent table with children reports its whole-tree row, because that is what a
+query against the parent reads. A partition reports its own.
+
+### How values are hashed
+
+With `hash_values: true`, each entry carries `value_hash` in place of `value`,
+and `values_hashed` is `true`. The migration team can match a hash to the
+values in `burst.csv`, but cannot place a hashed value on a shard.
+
+Each hash is the SHA-256 of a type prefix and a canonical form of the value. It
+is unsalted, so the same value always gives the same hash. That is what lets the
+hash be matched against the values in `burst.csv`.
+
+| Column type | Hashed text |
+| --- | --- |
+| `smallint`, `integer`, `bigint`, `oid`, `numeric` | `n:` and the value as a plain decimal: no exponent, no leading zeros, no trailing fractional zeros, and `-0` as `0` |
+| `real`, `double precision` | `n:` and the shortest decimal that reads back as the same float, as above. `NaN` and the infinities hash as `n:nan`, `n:inf` and `n:-inf` |
+| everything else, arrays included | `s:` and the value as PostgreSQL renders it, in Unicode NFC |
+
+You can check a hash yourself. The hash of the `status` value `open` above is
+`b2010a543c7d5770aa2b013869749de21c49d8d125deff18fed45db37235d6c3`:
+
+    printf 's:open' | shasum -a 256
+
+The same property is the limit of the protection. A hash hides a value that
+cannot be guessed, like a UUID. It does not hide one that can: whoever holds the
+file can hash every status name or every small integer id and compare. Read the
+hash of a guessable value as the value itself.
+
+### Columns that are left out
+
+A declared column is left out of the file, and named in the README's caveats,
+when:
+
+- it matched no column in the captured schemas, or an `explicit` entry was
+  malformed or matched more than one;
+- its type is `bytea`, `bit`, `date`, or any time, timestamp or interval type,
+  or an array of one, because those have no canonical form here;
+- `pg_stats` has no row for it, because the table was never analyzed or the
+  capture role may not read the column;
+- the read failed, or no `collect` reached the database after you declared it.
+
+`init` stops on a bad entry, a type outside this list, and a column the capture
+role cannot read. So in a capture whose columns `init` checked, a column is left
+out because its table was never analyzed, or because a read failed.
+
+A value that has no hash for its column's type, such as `NaN` in a `numeric`
+column, is left out of the column's list, and the caveats give the count.
+`mcv_coverage` then covers the values that remain.
+
+A failed read never replaces an earlier good one, so one bad tick does not erase
+the reading.
 
 ## Table activity
 

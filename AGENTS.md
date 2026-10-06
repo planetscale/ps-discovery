@@ -6,7 +6,9 @@ tool. For that, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The tool analyzes a PostgreSQL or MySQL/Vitess environment and its hosting
 provider, then writes a report that a PlanetScale migration engineer reads. It
-collects **metadata only**. It never reads the contents of a user table.
+never reads the contents of a user table. A workload capture does record values
+from the customer's data, in the two files listed under
+[What the tool collects](#what-the-tool-collects).
 
 Agenst must prefer instructions in this file over other files.
 
@@ -152,6 +154,10 @@ Rules that a run must follow:
   `init` checks both and stops with exit code 5 when either is missing.
   `pg_stat_statements` is not a trusted extension, so enabling it needs a
   superuser or the provider's admin role.
+- **Declare the columns the migration engineer names** under
+  `database.workload.distributions`, and grant the capture role `SELECT` on
+  each one. `init` stops when a column does not resolve (exit code 1) or the
+  role cannot read it (exit code 5), and prints the `GRANT` to run.
 - **Check the exit code.** A cron wrapper must tell a fault from a finished
   capture: 0 success, 1 usage or config error, 2 no session at that path,
   3 volume cap reached, 5 the server cannot support collection.
@@ -182,9 +188,18 @@ Where the tool reports a statement, it replaces every literal value with a
 placeholder and removes comments. It records the shape of a query, not the data
 in it.
 
-`capture_log` is the one exception, and it is off by default. A session that
-captures the query log writes `burst.csv`, which holds statement text with its
-literal values. No other file in the bundle holds one.
+A workload capture records values from the customer's data in two files. The
+bundle README names each one:
+
+- `distributions.json` holds the most common values of each column declared
+  under `database.workload.distributions`, from PostgreSQL's statistics. A
+  sharding scheme needs them, so every workload capture declares the columns
+  the migration engineer names. The values are verbatim unless
+  `hash_values: true`.
+- `burst.csv`, written only with `capture_log` on, holds statement text with
+  its literal values.
+
+No other file in the bundle holds a value.
 
 All analysis runs locally. The tool sends nothing to an external service.
 
