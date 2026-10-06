@@ -19,8 +19,8 @@ Agents must follow instructions in `AGENTS.md`.
 
 ```bash
 # Download and extract the release
-unzip ps-discovery-2.0.1.zip
-cd ps-discovery-2.0.1
+unzip ps-discovery-2.1.0.zip
+cd ps-discovery-2.1.0
 
 # Run the interactive setup script
 ./setup.sh
