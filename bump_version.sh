@@ -75,6 +75,16 @@ sed -i.bak "s/^__version__ = \"${CURRENT_VERSION}\"/__version__ = \"${NEW_VERSIO
 rm planetscale_discovery/__init__.py.bak
 echo "✅ Updated planetscale_discovery/__init__.py"
 
+ESCAPED_CURRENT_VERSION="${CURRENT_VERSION//./\\.}"
+
+sed -i.bak "s/ps-discovery-${ESCAPED_CURRENT_VERSION}/ps-discovery-${NEW_VERSION}/g" README.md
+rm README.md.bak
+echo "✅ Updated README.md"
+
+sed -i.bak "s/\"discovery_version\": \"${ESCAPED_CURRENT_VERSION}\"/\"discovery_version\": \"${NEW_VERSION}\"/" docs/workload-bundle.md
+rm docs/workload-bundle.md.bak
+echo "✅ Updated docs/workload-bundle.md"
+
 # Fail if any file did not end up at the new version
 ESCAPED_NEW_VERSION="${NEW_VERSION//./\\.}"
 
@@ -89,16 +99,19 @@ check_version VERSION                           "^${ESCAPED_NEW_VERSION}$"
 check_version setup.py                          "version=\"${ESCAPED_NEW_VERSION}\","
 check_version pyproject.toml                    "^version = \"${ESCAPED_NEW_VERSION}\"$"
 check_version planetscale_discovery/__init__.py "^__version__ = \"${ESCAPED_NEW_VERSION}\"$"
+check_version README.md                         "unzip ps-discovery-${ESCAPED_NEW_VERSION}\.zip"
+check_version README.md                         "cd ps-discovery-${ESCAPED_NEW_VERSION}"
+check_version docs/workload-bundle.md           "\"discovery_version\": \"${ESCAPED_NEW_VERSION}\""
 
 # Show what changed
 echo ""
 echo "Changes made:"
-git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py
+git diff VERSION setup.py pyproject.toml planetscale_discovery/__init__.py README.md docs/workload-bundle.md
 
 echo ""
 echo "Next steps:"
-echo "1. Review the changes above"
-echo "2. Commit: git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py && git commit -m 'Bump version to ${NEW_VERSION}'"
+echo "1. Review the changes above, and add a ## [${NEW_VERSION}] section to CHANGELOG.md"
+echo "2. Commit: git add VERSION setup.py pyproject.toml planetscale_discovery/__init__.py README.md docs/workload-bundle.md CHANGELOG.md && git commit -m 'Release v${NEW_VERSION}'"
 echo "3. Tag: git tag -a v${NEW_VERSION} -m 'Release v${NEW_VERSION}'"
 echo "4. Push: git push origin main && git push origin v${NEW_VERSION}"
 echo ""
