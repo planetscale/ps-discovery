@@ -5,7 +5,7 @@ candidate key holds 40% of the rows, which puts 40% of that table on one shard
 however many shards there are. `pg_stats.most_common_freqs` says exactly that.
 
 Frequencies only. `most_common_vals` and `histogram_bounds` hold sampled rows
-from the customer's tables and are never read, which is the line these tests
+from the customer's tables and never appear here, which is the line these tests
 hold: this file may carry how often values occur, never which values they are.
 """
 

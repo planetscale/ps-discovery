@@ -21,9 +21,16 @@ from planetscale_discovery.workload.collect import (
     end_transaction,
     logged_step,
 )
+from planetscale_discovery.workload.distributions import (
+    collect_distributions,
+    resolve_targets,
+    unreadable_targets,
+)
 from planetscale_discovery.workload.merge import merge_snapshots
 from planetscale_discovery.workload.probe import CapabilityProbe
+from planetscale_discovery.workload.schema_sql import quote_identifier
 from planetscale_discovery.workload.store import WorkloadStore
+from planetscale_discovery.workload.valuehash import refusal_reason
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -81,6 +88,10 @@ the window and name the file in capture_log_file. On RDS and Aurora,
 capture_log_source: log_fdw reads the log over this connection instead, and
 each collect then watches it for capture_log_seconds. 'init --check' reports
 whether this server can supply it.
+
+Declare the columns your migration engineer names under 'distributions:' in
+database.workload. Each collect records their most common values from pg_stats,
+verbatim unless hash_values is true. 'init' checks each column and lists it.
 """
 
 
@@ -434,8 +445,13 @@ def _init(args, config, logger) -> int:
                 _report_log_readiness(connection, workload, logger)
             end_transaction(connection)
 
-        store.create()
         schema = _collect_schema(connection, config, logger)
+        status = _check_distributions(connection, schema, config, logger)
+        end_transaction(connection)
+        if status != EXIT_OK:
+            return status
+
+        store.create()
         with logged_step(logger, f"writing the schema to {store.schema_path}"):
             store.write_schema(schema)
 
@@ -539,6 +555,7 @@ def _snapshot(store, config, logger, optional: bool) -> None:
         with logged_step(logger, "taking a snapshot"):
             snapshot = _new_collector(connection, config, logger).collect()
         _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
+        _collect_distributions(store, connection, config, logger)
     finally:
         connection.close()
 
@@ -552,6 +569,82 @@ def _report_snapshot(snapshot: Dict[str, Any], path, logger) -> None:
         f"{len(snapshot['tables'])} tables, "
         f"{len(snapshot['indexes'])} indexes, {snapshot.get('duration_ms')}ms"
     )
+
+
+def _declares_distributions(workload: WorkloadConfig) -> bool:
+    return bool(workload.distributions_by_column or workload.distributions_explicit)
+
+
+def _check_distributions(connection, schema, config, logger) -> int:
+    """Stop init unless every declared column can be read from pg_stats."""
+    workload = _workload_config(config)
+    if not _declares_distributions(workload):
+        return EXIT_OK
+    targets, problems = resolve_targets(
+        schema,
+        workload.distributions_by_column,
+        workload.distributions_explicit,
+        workload.schemas or getattr(config.database, "schemas", None),
+    )
+    problems += [
+        f"distributions: {t['schema']}.{t['table']}.{t['column']}: {reason}"
+        for t in targets
+        if (reason := refusal_reason(t["type"]))
+    ]
+    if problems:
+        for problem in problems:
+            logger.error(problem)
+        logger.error("Correct database.workload.distributions, then run init again.")
+        return EXIT_USAGE
+
+    unreadable = unreadable_targets(connection, targets)
+    if unreadable:
+        logger.error(
+            f"{len(unreadable)} declared column(s) are hidden from this role in "
+            "pg_stats, so their values cannot be captured:"
+        )
+        role = quote_identifier(config.database.username)
+        for t, reason in unreadable:
+            logger.error(f"  {t['schema']}.{t['table']}.{t['column']}: {reason}")
+            if reason.startswith("no SELECT"):
+                logger.error(
+                    f"    GRANT SELECT ({quote_identifier(t['column'])}) ON "
+                    f"{quote_identifier(t['schema'])}."
+                    f"{quote_identifier(t['table'])} TO {role};"
+                )
+        return EXIT_CAPABILITY
+
+    form = "as hashes" if workload.distributions_hash_values else "VERBATIM"
+    logger.info(
+        f"distributions: each collect captures the most common values of these "
+        f"{len(targets)} column(s), {form}:"
+    )
+    for t in targets:
+        logger.info(f"  {t['schema']}.{t['table']}.{t['column']}")
+    return EXIT_OK
+
+
+def _collect_distributions(store, connection, config, logger) -> None:
+    """The declared columns' pg_stats readings, stored for finalize. A
+    failed read never fails the collect, nor replaces an earlier reading."""
+    workload = _workload_config(config)
+    if not _declares_distributions(workload):
+        return
+    try:
+        doc = collect_distributions(
+            connection,
+            store.read_schema(),
+            workload.distributions_by_column,
+            workload.distributions_explicit,
+            workload.schemas or getattr(config.database, "schemas", None),
+            logger,
+        )
+    except Exception as exc:
+        logger.warning(f"distributions: the read failed: {exc}")
+        if store.read_distributions() is not None:
+            return
+        doc = {"columns": [], "notes": [f"distributions: the read failed: {exc}"]}
+    store.write_distributions(doc)
 
 
 def _capture_log_window(store, config, workload, logger) -> None:
@@ -719,6 +812,10 @@ def _finalize(args, config, logger) -> int:
     out_dir = Path(
         getattr(args, "out", None) or store.directory / bundle_dir_name(merged)
     )
+    distributions = store.read_distributions()
+    if distributions is None and _declares_distributions(workload):
+        note = "distributions: declared, but no collect reached the database"
+        distributions = {"columns": [], "notes": [note]}
     manifest = write_bundle(
         out_dir,
         merged,
@@ -726,6 +823,8 @@ def _finalize(args, config, logger) -> int:
         collector_version=__version__,
         target_schemas=workload.schemas or getattr(config.database, "schemas", None),
         bursts=store.read_bursts(),
+        distributions=distributions,
+        distributions_hash_values=workload.distributions_hash_values,
     )
     _print_summary(manifest, out_dir, capture_log=workload.capture_log)
     return EXIT_OK
@@ -765,6 +864,9 @@ def _print_summary(
             f"  query log:      {burst['used']} window(s) used, "
             f"{burst['outside_window']} outside this capture"
         )
+    distributions = manifest.get("distributions") or {}
+    if distributions.get("taken"):
+        print(f"  distributions:  {distributions['columns']} column(s) from pg_stats")
     # Printed even when no window was read: the logging is on either way.
     if capture_log:
         print("")

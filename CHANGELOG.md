@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Common values of declared columns.** The workload bundle now has `distributions.json`. It holds the most common values from `pg_stats` for each column under `database.workload.distributions`. Values ship verbatim unless `hash_values: true`. The capture role needs `SELECT` on each declared column. See [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
+
 ## [2.1.0] - 2026-10-05
 
 ### Added

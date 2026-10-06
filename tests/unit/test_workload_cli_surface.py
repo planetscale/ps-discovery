@@ -153,6 +153,7 @@ class TestFinalizeSchemaScoping:
             "planetscale_discovery.workload.cli_workload.WorkloadStore",
             return_value=store,
         )
+        return store
 
     def test_database_schemas_is_the_fallback(self, mocker):
         """workload.schemas unset, database.schemas set: finalize must use it."""
@@ -172,6 +173,44 @@ class TestFinalizeSchemaScoping:
         mocker.patch("planetscale_discovery.workload.cli_workload._print_summary")
         _finalize(self._Args(), _FinalizeConfig(), mocker.Mock())
         assert write_bundle.call_args.kwargs["target_schemas"] == ["public"]
+
+    @pytest.mark.parametrize(
+        "declared, stored",
+        [(["org_id"], {"columns": [], "notes": []}), (["org_id"], None), ([], None)],
+    )
+    def test_the_distributions_and_hash_mode_reach_the_writer(
+        self, mocker, declared, stored
+    ):
+        """A verbatim capture hashed wrongly, a declaration never read and
+        never named, or a caveat about a tier never declared would each
+        misstate the bundle."""
+        self._mock_store(mocker).read_distributions.return_value = stored
+        patched = {
+            name: mocker.patch(
+                f"planetscale_discovery.workload.cli_workload.{name}",
+                return_value=value,
+            )
+            for name, value in [
+                ("merge_snapshots", {"usable": True}),
+                ("write_bundle", {}),
+                ("bundle_dir_name", "bundle"),
+                ("_print_summary", None),
+            ]
+        }
+        config = mocker.Mock()
+        config.database.schemas = None
+        config.database.workload = WorkloadConfig(
+            distributions_by_column=declared, distributions_hash_values=False
+        )
+        _finalize(self._Args(), config, mocker.Mock())
+        kwargs = patched["write_bundle"].call_args.kwargs
+        assert kwargs["distributions_hash_values"] is False
+        if stored is not None:
+            assert kwargs["distributions"] is stored
+        elif declared:
+            assert "no collect reached" in kwargs["distributions"]["notes"][0]
+        else:
+            assert kwargs["distributions"] is None
 
 
 class _RowLimitDatabase:

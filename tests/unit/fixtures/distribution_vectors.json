@@ -1,0 +1,23 @@
+[
+  {"input": "c8e04639-e752-c11e-9f42-3a9018720192", "kind": "string", "join_hash": "880e09a2bf699bde4ac777360b204578553ecebe81c743cd111076b8f9fd260a"},
+  {"input": "", "kind": "string", "join_hash": "05d8bd490f04e608c530dc30d63647d5d5685512ba40ce9dbd61a5fe509fa5df"},
+  {"input": "caf\u00e9", "kind": "string", "join_hash": "5225d3469aa17975e7eaa2468ee011686af4193f30656eb1c314313702855e17"},
+  {"input": "cafe\u0301", "kind": "string", "join_hash": "5225d3469aa17975e7eaa2468ee011686af4193f30656eb1c314313702855e17"},
+  {"input": "Test", "kind": "string", "join_hash": "8d44f29efb1af3b3abcaadcadad0fe5ec15bc70eb69177655e65df8ca95eb835"},
+  {"input": "Test ", "kind": "string", "join_hash": "709f4e63db2779c6b228f1450c824f2eacdec24601c77fa583615a62fcd8f808"},
+  {"input": "hello \u4e16\u754c", "kind": "string", "join_hash": "994f37b4515ca6eca8d72799244e2bb3b3afe612a7789b35e523f57e468fb27b"},
+  {"input": "\ud83e\udd84", "kind": "string", "join_hash": "0ac71d3d97a0ce2ad03b5344c1d262b3d046b9e9d8fd7dcf276baa22ca4b9349"},
+  {"input": "0123", "kind": "integer", "join_hash": "4e4507bfef19c2d67087645ab090f3c54a522aa5fea42aabaf36b99bf80e5330"},
+  {"input": "123", "kind": "integer", "join_hash": "4e4507bfef19c2d67087645ab090f3c54a522aa5fea42aabaf36b99bf80e5330"},
+  {"input": "-0", "kind": "integer", "join_hash": "d00479e197303c58f661eda1c0a51d03b4c38d261be12be577ecac2f54261255"},
+  {"input": "+42", "kind": "integer", "join_hash": "fe7b6c95376133a33f3ab3a8e364ea93691055979660ae32244f105cbb13f938"},
+  {"input": "9223372036854775807", "kind": "integer", "join_hash": "49c1ecb39f7ed46b7f190b1694464c9be33f7f759b4b9e5a6e62828dccdc565a"},
+  {"input": "1.2300", "kind": "decimal", "join_hash": "9931ee8389938eaeb27bc345f03446ac7db08f673423b04360aa15d3fefcd44d"},
+  {"input": "1.23", "kind": "decimal", "join_hash": "9931ee8389938eaeb27bc345f03446ac7db08f673423b04360aa15d3fefcd44d"},
+  {"input": "0.0001", "kind": "decimal", "join_hash": "d81053e2c82355d5f279bee52866d652c12912098ebfae0bc4b9bf6d3ce15825"},
+  {"input": "1.23e2", "kind": "decimal", "join_hash": "4e4507bfef19c2d67087645ab090f3c54a522aa5fea42aabaf36b99bf80e5330"},
+  {"input": "0.1", "kind": "float", "join_hash": "04935b94d41c2f0e72eb759254e2bbd669571a80d2e9a4f2cd93fbc225fd7986"},
+  {"input": "1e10", "kind": "float", "join_hash": "a5986480b5ab74e5c9116829f9d5c5b6e81cc9d967826319d45631901f7ee30b"},
+  {"input": "2026-09-03 18:00:00+00", "kind": "timestamp", "join_hash": "0f3ea075f7174cb0ad8a3b5d0b31ff65e939dafdfad3ae9c43b073e3282fc705"},
+  {"input": "2026-09-03T18:00:00Z", "kind": "string", "join_hash": "8108f55ca54ad1b236347307f61354ea1ff632943e491f5bd11166425f8ef125"}
+]
