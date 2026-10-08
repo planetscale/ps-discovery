@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Common values of declared columns.** The workload bundle now has `distributions.json`. It holds the most common values from `pg_stats` for each column under `database.workload.distributions`. Values ship verbatim unless `hash_values: true`. The capture role needs `SELECT` on each declared column. See [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
 
+### Changed
+
+- **Query log capture settings.** `capture_log_type` is required when `capture_log` is on, and is `statement` or `pgaudit`. `capture_log_source` is now `file` or `log_fdw`, and defaults to `file`. The tool reads whether an exported file is plain text, csvlog or a pgAudit JSON export. The old `capture_log_source` values `pgaudit`, `pgaudit-json`, `stderr` and `auto` are rejected, and the error names the settings that replace them. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
+
 ## [2.1.0] - 2026-10-05
 
 ### Added

@@ -558,7 +558,7 @@ yourself.
 database:
   workload:
     capture_log: true
-    capture_log_source: pgaudit-json
+    capture_log_type: pgaudit
     capture_log_file: pgaudit-capture.jsonl
 ```
 
@@ -584,8 +584,8 @@ timestamp>="..." timestamp<="..."
 The payload is the same `PgAuditEntry`, and chunking is reassembled by the
 tool the same way.
 
-**Read it:** the same `capture_log_source: pgaudit-json` config block as
-Cloud SQL, above.
+**Read it:** the same `capture_log_type: pgaudit` config block as Cloud SQL,
+above. The JSON encoding is read from the file.
 
 ## Additional Resources
 

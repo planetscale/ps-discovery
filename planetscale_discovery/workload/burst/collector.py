@@ -1,10 +1,17 @@
 import re
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
 from planetscale_discovery.common.utils import generate_timestamp
 from planetscale_discovery.workload.burst.sql import SafeCursor
 from planetscale_discovery.workload.logs.csvlog import to_statement
+from planetscale_discovery.workload.logs.pgaudit import (
+    ObjectLoggingError,
+    loss_summary,
+    new_summary,
+    records_from_csvlog,
+    summary_warnings,
+)
 from planetscale_discovery.workload.logs.record import COLUMNS, KNOWN_WIDTHS
 from planetscale_discovery.workload.logs.timestamps import instant_utc
 from planetscale_discovery.workload.logs.transactions import (
@@ -50,6 +57,11 @@ class BurstCollector(DatabaseAnalyzer):
         self._skipped_before_watermark = 0
         self._skipped_after_watermark = 0
         self._log_tz: Optional[str] = None
+        # pgAudit csv rows are AUDIT: lines; statement rows stay on to_statement.
+        self._audit = False
+        self._audit_summary: Optional[Dict[str, Any]] = None
+        # Persists across files so a repeated statement id is still object logging.
+        self._audit_last: List[Tuple[str, str]] = []
 
     @property
     def errors_seen(self) -> List[str]:
@@ -98,6 +110,11 @@ class BurstCollector(DatabaseAnalyzer):
                 return result
 
             statements: List[Dict[str, Any]] = []
+            # log_fdw is always csv; the type selects which parser reads message.
+            self._audit = (self.config or {}).get("capture_log_type") == "pgaudit"
+            if self._audit:
+                self._audit_summary = new_summary()
+                self._audit_last = []
             log_timezone = self._log_timezone()
             self._log_tz = log_timezone
             self._since_instant = instant_utc(self.since, log_timezone)
@@ -118,6 +135,9 @@ class BurstCollector(DatabaseAnalyzer):
                     continue
                 try:
                     read = list(self._read_file(name))
+                # Object logging corrupts the whole window, so this file is not skipped.
+                except ObjectLoggingError:
+                    raise
                 except Exception as exc:
                     self.add_warning(f"could not read {name}: {exc}")
                     result["files_skipped"].append({"file": name, "why": str(exc)})
@@ -137,6 +157,13 @@ class BurstCollector(DatabaseAnalyzer):
             result["sessions"] = _session_summary(statements)
             result["status"] = STATUS_OK if result["files_read"] else STATUS_DEGRADED
             result["warnings"] = list(self.errors_seen) + _skip_warnings(result)
+            # Same loss warnings a pgAudit file import reports.
+            if self._audit and self._audit_summary is not None:
+                result["warnings"] = list(result["warnings"]) + summary_warnings(
+                    self._audit_summary
+                )
+                if result["files_read"]:
+                    result["loss_summary"] = loss_summary(self._audit_summary)
             result["window_start"], result["window_end"] = _event_window(
                 statements, result["captured_at_server"], log_timezone
             )
@@ -239,7 +266,11 @@ class BurstCollector(DatabaseAnalyzer):
                     f"{name} produced {width} columns, which is not a csvlog "
                     "shape (23, 24 or 26)"
                 )
-            for row in self._stream(table, width):
+            rows: Iterator[Dict[str, Any]] = self._stream(table, width)
+            # to_statement drops AUDIT: lines, so parse the audit payload first.
+            if self._audit:
+                rows = records_from_csvlog(rows, self._audit_summary, self._audit_last)
+            for row in rows:
                 statement = to_statement(row)
                 if statement is None:
                     continue

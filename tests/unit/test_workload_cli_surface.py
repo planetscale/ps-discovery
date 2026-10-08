@@ -124,6 +124,42 @@ class TestMysqlIsRefused:
         assert handle_workload(Args(), self._Config("mysql"), logger) != EXIT_USAGE
 
 
+class TestABadLogSourceIsRejected:
+    """The bug: collect treated logfdw and stderr as a file and stored a burst."""
+
+    class _Args:
+        workload_command = "collect"
+        session = "./wl"
+
+    def _config(self, source):
+        class Database:
+            workload = WorkloadConfig(
+                enabled=True,
+                capture_log=True,
+                capture_log_type="statement",
+                capture_log_source=source,
+            )
+
+        class Config:
+            engine = "postgres"
+            database = Database()
+
+        return Config()
+
+    @pytest.mark.parametrize("source", ("logfdw", "stderr"))
+    def test_collect_exits_before_a_session(self, mocker, source):
+        store = mocker.patch(
+            "planetscale_discovery.workload.cli_workload.WorkloadStore"
+        )
+        logger = mocker.Mock()
+
+        code = handle_workload(self._Args(), self._config(source), logger)
+
+        assert code == EXIT_USAGE
+        assert "capture_log_source" in logger.error.call_args[0][0]
+        store.assert_not_called()
+
+
 class _FinalizeDatabase:
     workload = WorkloadConfig(schemas=None)
     schemas = ["public"]

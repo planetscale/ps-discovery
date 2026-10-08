@@ -157,6 +157,63 @@ def new_summary() -> Dict[str, Any]:
     }
 
 
+def records_from_csvlog(
+    rows: Iterable[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+    last: Optional[List[Tuple[str, str]]] = None,
+) -> Iterator[Dict[str, Any]]:
+    """AUDIT: rows become statements. An ERROR row is counted, then skipped."""
+    counts = summary if summary is not None else new_summary()
+    seen: List[Tuple[str, str]] = last if last is not None else []
+    for row in rows:
+        message = str(row.get("message") or "")
+        audit = AUDIT_RE.match(message)
+        if audit is None:
+            if str(row.get("error_severity") or "").strip() == "ERROR":
+                session = row.get("session_id")
+                if session in (None, ""):
+                    session = row.get("process_id")
+                counts["errors"]["" if session is None else str(session)] += 1
+            continue
+        fields = dict(row)
+        # log_fdw can return non-strings; session identity is compared as text.
+        for key in ("session_id", "process_id"):
+            if fields.get(key) is not None:
+                fields[key] = str(fields[key])
+        record = _csv_record(fields, audit.group(1), counts, seen)
+        if record is not None:
+            yield record
+
+
+def summary_warnings(summary: Dict[str, Any]) -> List[str]:
+    """Warnings a pgAudit summary can carry, apart from a huge JSON array."""
+    warnings = []
+    dropped = summary["dropped"]
+    if dropped:
+        tags = ", ".join(f"{tag} x{count}" for tag, count in dropped.most_common())
+        warnings.append(
+            f"{sum(dropped.values())} audit record(s) outside the shape "
+            f"commands were dropped ({tags})"
+        )
+    errors = sum(summary["errors"].values())
+    if errors:
+        warnings.append(
+            f"{errors} ERROR line(s) were counted but not attached: pgAudit "
+            "logs no statement for one that never executed"
+        )
+    for key, wording in (
+        ("malformed", "audit record(s) did not parse and were dropped"),
+        ("substatements", "function-body record(s) were dropped"),
+        ("incomplete_chunks", "chunked statement(s) never completed"),
+        ("skipped", "non-audit line(s) in the export were skipped"),
+        ("unmatched", "log line(s) did not match the sniffed prefix"),
+    ):
+        count = summary[key]
+        if count:
+            warnings.append(f"{count} {wording}")
+    return warnings
+
+
 def loss_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
     for key, value in summary.items():
@@ -308,8 +365,9 @@ def _json_entries(lines: Iterable[str], counts: Dict[str, Any]) -> Iterator[Any]
             counts["skipped"] += 1
 
 
+# A log_fdw row carries datetimes and ints, not only CSV strings.
 def _csv_record(
-    fields: Dict[str, str],
+    fields: Dict[str, Any],
     text: str,
     counts: Dict[str, Any],
     last: List[Tuple[str, str]],

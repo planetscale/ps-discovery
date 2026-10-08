@@ -49,13 +49,44 @@ class WorkloadConfig:
     statement_row_limit: int = 20000
     capture_log: bool = False
     capture_log_seconds: int = 600
-    capture_log_source: str = "pgaudit"
+    # None until capture_log is on, so a discovery run does not have to set it.
+    capture_log_type: Optional[str] = None
+    # file writes nothing; log_fdw is the only source that creates server objects.
+    capture_log_source: str = "file"
     capture_log_file: Optional[str] = None
     # The distribution tier, off unless declared: pg_stats for these columns,
     # verbatim unless hash_values is true, which hashes them at finalize.
     distributions_by_column: List[str] = field(default_factory=list)
     distributions_explicit: List[Any] = field(default_factory=list)
     distributions_hash_values: bool = False
+
+
+# Source is where the log is read. Type is what was logged. Encoding is sniffed.
+_LOG_SOURCES: Tuple[str, ...] = ("file", "log_fdw")
+_LOG_TYPES: Tuple[str, ...] = ("statement", "pgaudit")
+
+
+def workload_log_errors(workload: WorkloadConfig) -> List[str]:
+    """Bad source or type. handle_workload must call this: it exits before validate_config()."""
+    errors: List[str] = []
+    source = workload.capture_log_source
+    if source not in _LOG_SOURCES:
+        errors.append(
+            "database.workload.capture_log_source must be one of "
+            f"{', '.join(_LOG_SOURCES)}, got {source!r}"
+        )
+    log_type = workload.capture_log_type
+    if log_type is not None and log_type not in _LOG_TYPES:
+        errors.append(
+            "database.workload.capture_log_type must be one of "
+            f"{', '.join(_LOG_TYPES)}, got {log_type!r}"
+        )
+    if workload.capture_log and not log_type:
+        errors.append(
+            "database.workload.capture_log_type is required when "
+            "capture_log is true. Set it to statement or pgaudit."
+        )
+    return errors
 
 
 @dataclass
@@ -824,15 +855,8 @@ class ConfigManager:
     }
 
     # Values restricted to a fixed set, as dotted paths.
-    _ENUMS: Dict[str, Tuple[str, ...]] = {
-        "database.workload.capture_log_source": (
-            "pgaudit",
-            "pgaudit-json",
-            "stderr",
-            "log_fdw",
-            "auto",
-        ),
-    }
+    # Source and type are not here: a workload command never reaches validate_config().
+    _ENUMS: Dict[str, Tuple[str, ...]] = {}
 
     def _resolve_path(self, path: str) -> Any:
         """Walk a dotted path into the loaded config. Returns None if absent."""
@@ -857,6 +881,13 @@ class ConfigManager:
             if not (low <= value <= high):
                 errors.append(f"{path} must be between {low} and {high}, got {value}")
 
+    def _validate_workload_log(self, errors: List[str]) -> None:
+        """Require a log type when capture is on, and reject a bad source or type."""
+        config = self.config
+        if config is None:
+            return
+        errors.extend(workload_log_errors(config.database.workload))
+
     def _validate_enums(self, errors: List[str]) -> None:
         """Check every entry in _ENUMS, appending to errors."""
         for path, allowed in self._ENUMS.items():
@@ -877,6 +908,8 @@ class ConfigManager:
 
         self._validate_numeric_ranges(errors)
         self._validate_enums(errors)
+        # Required only when capture_log is on; an explicit bad type still fails when it is off.
+        self._validate_workload_log(errors)
 
         # Validate engine
         valid_engines = {"postgres", "mysql"}
@@ -1004,9 +1037,12 @@ database:
   #   max_session_mb: 512       # Hard stop; the session refuses to grow past it
   #   capture_log: false        # Also read the query log. Puts literal values
   #                             # in the bundle; see docs/workload_capture.md
+  #   capture_log_type:         # Required when capture_log is true.
+  #                             # statement (no extension) or pgaudit
   #   capture_log_seconds: 600  # log_fdw only: each collect watches this long
   #                             # (10 to 3600). Keep the schedule longer
-  #   capture_log_source: pgaudit   # pgaudit, pgaudit-json, stderr, log_fdw
+  #   capture_log_source: file  # file or log_fdw. file reads capture_log_file;
+  #                             # the file's encoding is read from the file
   #   capture_log_file:         # The exported log, for every source but log_fdw
   #   distributions:            # The columns your migration engineer names
   #     by_column:              # Every table carrying this column name

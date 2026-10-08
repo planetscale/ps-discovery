@@ -422,7 +422,7 @@ Name the file in `config.yaml`, then run the usual `collect`.
 database:
   workload:
     capture_log: true
-    capture_log_source: pgaudit
+    capture_log_type: pgaudit
     capture_log_file: exported.log
 ```
 

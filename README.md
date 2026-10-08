@@ -301,9 +301,12 @@ more accurate sharding plan.
 | 2 | Statement log or pgAudit records, read from the standard server log | Which tables each transaction writes together. How unevenly the values of a candidate shard key are accessed. | No, but recommended |
 
 Level 1 alone gives a complete bundle, and the bundle names what level 2 would
-add. To add level 2, set `capture_log: true` under `database.workload`. pgAudit
-is the default source. Platforms without pgAudit can use `log_fdw` (RDS and
-Aurora) or `stderr` (self-managed hosts). See
+add. To add level 2, set `capture_log: true` under `database.workload`, and set
+`capture_log_type` to `statement` or `pgaudit`. `statement` needs no extension.
+When a log holds both record types, the capture reads only the configured type.
+`capture_log_source` is `file` by default, which reads a log that you export and
+name in `capture_log_file`. On RDS and Aurora, `log_fdw` reads the log over the
+tool's connection. See
 [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
 
 Level 2 records literal values from your queries in `burst.csv`. Review that

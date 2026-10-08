@@ -52,7 +52,8 @@ PGAUDIT_RECOMMENDATION_INSTALLED = (
     "pgaudit.log_relation off (object logging corrupts transaction-shape "
     "assembly) and log_statement at 'none' during the window, or every "
     "statement is logged twice. Then export the log from the provider's "
-    "console or logging API and name the file in capture_log_file."
+    "console or logging API, set capture_log_type: pgaudit, and name the "
+    "file in capture_log_file."
 )
 PGAUDIT_RECOMMENDATION_AVAILABLE = (
     "pgAudit is available on this server but not installed. The one-time "
@@ -62,20 +63,14 @@ PGAUDIT_RECOMMENDATION_AVAILABLE = (
     "can need a restart; after it every pgAudit setting is role-scoped and "
     "changeable without one, and a capture is two ALTER ROLEs."
 )
-PGAUDIT_RECOMMENDATION_ABSENT = {
-    "rds": (
-        "pgAudit is not available on this server. Set capture_log_source: "
-        "log_fdw to read the log over this connection instead. It creates a "
-        "work schema and a foreign server for the length of each collect, and "
-        "it reads the whole log rather than one role's traffic; "
-        "docs/providers/aws.md compares the two."
-    ),
-    "default": (
-        "pgAudit is not available on this server. Set "
-        "log_min_duration_statement = 0 for the window, export the log, and "
-        "read it with capture_log_source: stderr."
-    ),
-}
+PGAUDIT_RECOMMENDATION_ABSENT = (
+    "pgAudit is not available on this server. Use a statement log instead: "
+    "set log_min_duration_statement = 0 for the window, export the log, and "
+    "set capture_log_type: statement. The file's encoding is read from the "
+    "file. Or enable pgAudit first (a parameter group on RDS and Aurora, the "
+    "cloudsql.enable_pgaudit flag on Cloud SQL, alloydb.enable_pgaudit on "
+    "AlloyDB), then CREATE EXTENSION pgaudit and set capture_log_type: pgaudit."
+)
 
 
 class LogCaptureProbe(DatabaseAnalyzer):
@@ -102,7 +97,7 @@ class LogCaptureProbe(DatabaseAnalyzer):
         requirements = self._requirements(
             settings, version, provider, destinations, prefix, log_fdw
         )
-        pgaudit = self._pgaudit(provider)
+        pgaudit = self._pgaudit()
         notes = self._notes(settings, version, provider, destinations, prefix)
         notes.extend(self._pgaudit_notes(pgaudit))
         return {
@@ -210,9 +205,10 @@ class LogCaptureProbe(DatabaseAnalyzer):
                     "Aurora, CREATE EXTENSION log_fdw makes the server's own "
                     "log readable through a foreign table over this same "
                     "connection, at the cost of a work schema and a foreign "
-                    "server for the length of each collect. The default "
-                    "source, pgAudit, reads a log you export and writes "
-                    "nothing to the database."
+                    "server for the length of each collect. Set "
+                    "capture_log_type to statement or pgaudit for that read. "
+                    "A file source reads a log you export and writes nothing "
+                    "to the database."
                 ),
                 where=provider,
             ),
@@ -377,7 +373,7 @@ class LogCaptureProbe(DatabaseAnalyzer):
             return "installed"
         return "available" if row.get("available") else "absent"
 
-    def _pgaudit(self, provider: str = "unknown") -> Dict[str, Any]:
+    def _pgaudit(self) -> Dict[str, Any]:
         row = self._sql.one_or_none(
             "SELECT (SELECT extversion FROM pg_extension"
             "  WHERE extname = 'pgaudit') AS installed_version,"
@@ -394,9 +390,7 @@ class LogCaptureProbe(DatabaseAnalyzer):
             recommendation = PGAUDIT_RECOMMENDATION_AVAILABLE
         else:
             state = "absent"
-            recommendation = PGAUDIT_RECOMMENDATION_ABSENT.get(
-                provider, PGAUDIT_RECOMMENDATION_ABSENT["default"]
-            )
+            recommendation = PGAUDIT_RECOMMENDATION_ABSENT
         return {
             "state": state,
             "installed": bool(installed_version),

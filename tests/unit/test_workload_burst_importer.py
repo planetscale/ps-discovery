@@ -1,5 +1,7 @@
 """Tests for collect_pgaudit_file and collect_stderr_file."""
 
+import csv
+import io
 import json
 
 import pytest
@@ -7,9 +9,12 @@ import pytest
 from planetscale_discovery.workload.burst.importer import (
     MAX_EXPORT_BYTES,
     _clock_warnings,
+    collect_csv_file,
     collect_pgaudit_file,
     collect_stderr_file,
+    sniff_packaging,
 )
+from planetscale_discovery.workload.logs.record import COLUMNS, WIDTH_PG13
 
 
 def write(tmp_path, name, content):
@@ -111,6 +116,155 @@ class TestAnOversizedExportIsRefused:
         )
         with pytest.raises(ValueError, match="over the"):
             collect_stderr_file(path)
+
+
+def _csvlog_line(**overrides):
+    values = {name: "" for name in COLUMNS[:WIDTH_PG13]}
+    values["log_time"] = "2024-01-01 00:00:00.000 UTC"
+    values["error_severity"] = "LOG"
+    values.update(overrides)
+    buffer = io.StringIO()
+    csv.writer(buffer).writerow([values[name] for name in COLUMNS[:WIDTH_PG13]])
+    return buffer.getvalue()
+
+
+class TestSniffPackaging:
+    def test_a_leading_brace_is_json(self, tmp_path):
+        path = write(
+            tmp_path, "export.json", '{"jsonPayload": {"command": "SELECT"}}\n'
+        )
+        assert sniff_packaging(path) == "json"
+
+    def test_a_csvlog_row_is_csv(self, tmp_path):
+        path = write(
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(message="statement: select 1"),
+        )
+        assert sniff_packaging(path) == "csv"
+
+    def test_a_csv_message_containing_a_severity_marker_stays_csv(self, tmp_path):
+        """The bug: a csv message containing LOG: was read as plain text."""
+        path = write(
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(message="statement: select 1 LOG: extra"),
+        )
+        assert sniff_packaging(path) == "csv"
+
+    def test_a_leading_bracket_is_json(self, tmp_path):
+        """The bug: a JSON array export was not recognized as json."""
+        path = write(
+            tmp_path, "export.json", '[{"jsonPayload": {"command": "SELECT"}}]\n'
+        )
+        assert sniff_packaging(path) == "json"
+
+    def test_a_pretty_printed_array_is_json(self, tmp_path):
+        path = write(
+            tmp_path,
+            "export.json",
+            '[\n  {"jsonPayload": {"command": "SELECT"}}\n]\n',
+        )
+        assert sniff_packaging(path) == "json"
+
+    def test_a_compact_array_longer_than_the_sample_is_json(self, tmp_path):
+        """The bug: a one-line JSON array over 8192 bytes was not recognized."""
+        records = [{"jsonPayload": {"command": "SELECT", "statement": "select 1"}}]
+        records.extend({"n": i, "pad": "x" * 40} for i in range(200))
+        text = json.dumps(records)
+        assert len(text) > 8192
+        path = write(tmp_path, "export.json", text)
+        assert sniff_packaging(path) == "json"
+
+    def test_a_pretty_object_longer_than_the_sample_is_json(self, tmp_path):
+        """The bug: a pretty-printed object over 8192 bytes was not recognized."""
+        payload = {"entries": [{"n": i, "statement": "select 1"} for i in range(200)]}
+        text = json.dumps(payload, indent=2)
+        assert len(text) > 8192
+        path = write(tmp_path, "export.json", text)
+        assert sniff_packaging(path) == "json"
+
+    def test_a_bracket_prefix_is_text(self, tmp_path):
+        """The bug: a log_line_prefix of [%p] was read as a JSON export."""
+        path = write(
+            tmp_path,
+            "postgresql.log",
+            "[4242] LOG:  statement: select 1\n",
+        )
+        assert sniff_packaging(path) == "text"
+
+    def test_an_empty_file_is_not_json(self, tmp_path):
+        """The bug: a blank file was reported as a JSON log export."""
+        path = write(tmp_path, "empty.log", "")
+        with pytest.raises(ValueError, match="no PostgreSQL log lines"):
+            sniff_packaging(path)
+
+    def test_a_known_width_row_without_a_timestamp_is_text(self, tmp_path):
+        """The bug: a known-width row whose first field is not a timestamp was read as csv."""
+        path = write(
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(
+                log_time="not-a-timestamp",
+                message="statement: select 1 LOG: extra",
+            ),
+        )
+        assert sniff_packaging(path) == "text"
+
+    def test_a_csv_error_falls_through_to_text(self, tmp_path):
+        """The bug: a field over the csv limit escaped sniff as csv.Error."""
+        path = write(
+            tmp_path,
+            "postgresql.log",
+            "2024-01-01 00:00:00.000 UTC [111] LOG:  statement: select 1\n",
+        )
+        limit = csv.field_size_limit()
+        csv.field_size_limit(8)
+        try:
+            assert sniff_packaging(path) == "text"
+        finally:
+            csv.field_size_limit(limit)
+
+    def test_a_text_audit_line_with_commas_is_text(self, tmp_path):
+        path = write(tmp_path, "postgresql.log", PGAUDIT_LOG)
+        assert sniff_packaging(path) == "text"
+
+    def test_a_file_with_no_log_line_raises(self, tmp_path):
+        path = write(tmp_path, "notes.txt", "not a log\n")
+        with pytest.raises(ValueError, match="no PostgreSQL log lines"):
+            sniff_packaging(path)
+
+
+class TestCollectCsvFile:
+    def test_an_audit_csv_is_read_as_pgaudit(self, tmp_path):
+        path = write(
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(
+                session_id="5f1.3",
+                message='AUDIT: SESSION,1,1,READ,SELECT,,,"select 1",<not logged>',
+            ),
+        )
+        result = collect_csv_file(path, audit=True)
+        assert result["statements"][0]["sql"] == "select 1"
+
+    def test_a_statement_csv_is_read_as_statements(self, tmp_path):
+        path = write(
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(message="statement: select 1"),
+        )
+        result = collect_csv_file(path, audit=False)
+        assert result["statements"][0]["sql"] == "select 1"
+
+    def test_a_crlf_inside_a_quoted_field_is_kept(self, tmp_path):
+        """The bug: a CR LF inside a quoted csvlog field was stored as LF."""
+        path = tmp_path / "postgresql.csv"
+        path.write_bytes(
+            _csvlog_line(message="statement: select 1\r\nfrom t").encode("utf-8")
+        )
+        result = collect_csv_file(str(path), audit=False)
+        assert result["statements"][0]["sql"] == "select 1\r\nfrom t"
 
 
 class TestClockWarnings:

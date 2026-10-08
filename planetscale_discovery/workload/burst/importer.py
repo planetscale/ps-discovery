@@ -1,3 +1,5 @@
+import csv
+import json
 import os
 import re
 from typing import Any, Callable, Dict, Iterator, List, Optional, TextIO
@@ -10,13 +12,19 @@ from planetscale_discovery.workload.burst.collector import (
     _event_window,
     _session_summary,
 )
-from planetscale_discovery.workload.logs.csvlog import to_statement
+from planetscale_discovery.workload.logs.csvlog import (
+    is_csvlog_row,
+    read_records,
+    to_statement,
+)
 from planetscale_discovery.workload.logs.pgaudit import (
     loss_summary,
     new_summary,
     read_jsonl_records,
     read_log_records,
+    records_from_csvlog,
     sniff_prefix,
+    summary_warnings,
 )
 from planetscale_discovery.workload.logs.stderrlog import (
     read_records as stderr_records,
@@ -25,6 +33,11 @@ from planetscale_discovery.workload.logs.stderrlog import (
 _ARRAY_WARN_BYTES = 100 * 1024 * 1024
 
 MAX_EXPORT_BYTES = 2 * 1024 * 1024 * 1024
+
+_NO_PGAUDIT_STATEMENTS = (
+    "no pgAudit statements found in it; a capture needs pgaudit.log "
+    "enabled for the window (the burst recipe is 'read,write,misc')"
+)
 
 
 def collect_pgaudit_file(
@@ -40,14 +53,89 @@ def collect_pgaudit_file(
     burst = _collect_file(
         path,
         records,
-        "no pgAudit statements found in it; a capture needs pgaudit.log "
-        "enabled for the window (the burst recipe is 'read,write,misc')",
+        _NO_PGAUDIT_STATEMENTS,
         warnings_from=lambda: _pgaudit_warnings(summary),
         already_read=already_read,
     )
     if burst.get("files_read"):
         burst["loss_summary"] = loss_summary(summary)
     return burst
+
+
+def collect_csv_file(path: str, *, audit: bool, already_read=()) -> Dict[str, Any]:
+    """Read an exported csvlog. ``audit`` selects pgAudit rows over statement rows."""
+    summary = new_summary()
+
+    def records(handle: TextIO) -> Iterator[Dict[str, Any]]:
+        rows = read_records(handle)
+        if audit:
+            return records_from_csvlog(rows, summary)
+        return rows
+
+    if audit:
+        empty_error = _NO_PGAUDIT_STATEMENTS
+        warnings_from: Optional[Callable[[], List[str]]] = lambda: _pgaudit_warnings(
+            summary
+        )
+    else:
+        empty_error = (
+            "no statements found in it; expected log_statement or "
+            "log_min_duration_statement rows ('statement: ...' / "
+            "'duration: ... ms') for the window"
+        )
+        warnings_from = None
+
+    burst = _collect_file(
+        path,
+        records,
+        empty_error,
+        warnings_from=warnings_from,
+        already_read=already_read,
+    )
+    if audit and burst.get("files_read"):
+        burst["loss_summary"] = loss_summary(summary)
+    return burst
+
+
+def sniff_packaging(path: str) -> str:
+    """json, csv, or text. An empty file or a ``[%p]`` log line is not json."""
+    with open(path, encoding="utf-8", errors="replace", newline="") as handle:
+        if _json_export(handle.read(8192)):
+            return "json"
+        handle.seek(0)
+        try:
+            row = next(csv.reader(handle), None)
+        except csv.Error:
+            row = None
+        if row and is_csvlog_row(row):
+            return "csv"
+        handle.seek(0)
+        if sniff_prefix(handle) is not None:
+            return "text"
+    raise ValueError(
+        "no PostgreSQL log lines found in it; expected server-log "
+        "text with a severity marker (LOG:, ERROR:, ...)"
+    )
+
+
+def _json_export(sample: str) -> bool:
+    """A leading ``{`` is JSON. A leading ``[`` needs one value, then ``,`` or ``]``."""
+    text = sample.lstrip(" \t\r\n\ufeff")
+    if not text:
+        return False
+    if text[0] == "{":
+        return True
+    if text[0] != "[":
+        return False
+    body = text[1:].lstrip()
+    try:
+        _, end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError:
+        return False
+    rest = body[end:].lstrip()
+    if not rest or rest[0] == ",":
+        return True
+    return rest[0] == "]" and not rest[1:].strip()
 
 
 def collect_stderr_file(path: str, already_read=(), logger=None) -> Dict[str, Any]:
@@ -128,7 +216,8 @@ def _collect_file(
     statements: List[Dict[str, Any]] = []
     newest: Optional[str] = None
 
-    with open(path, encoding="utf-8", errors="replace") as handle:
+    # newline="" keeps a \r\n inside a quoted csv field. The text readers share this open.
+    with open(path, encoding="utf-8", errors="replace", newline="") as handle:
         for record in records_from(handle):
             statement = to_statement(record)
             if statement is None:
@@ -187,30 +276,8 @@ def _clock_warnings(
 
 
 def _pgaudit_warnings(summary: Dict[str, Any]) -> List[str]:
-    warnings = []
-    dropped = summary["dropped"]
-    if dropped:
-        tags = ", ".join(f"{tag} x{count}" for tag, count in dropped.most_common())
-        warnings.append(
-            f"{sum(dropped.values())} audit record(s) outside the shape "
-            f"commands were dropped ({tags})"
-        )
-    errors = sum(summary["errors"].values())
-    if errors:
-        warnings.append(
-            f"{errors} ERROR line(s) were counted but not attached: pgAudit "
-            "logs no statement for one that never executed"
-        )
-    for key, wording in (
-        ("malformed", "audit record(s) did not parse and were dropped"),
-        ("substatements", "function-body record(s) were dropped"),
-        ("incomplete_chunks", "chunked statement(s) never completed"),
-        ("skipped", "non-audit line(s) in the export were skipped"),
-        ("unmatched", "log line(s) did not match the sniffed prefix"),
-    ):
-        count = summary[key]
-        if count:
-            warnings.append(f"{count} {wording}")
+    warnings = summary_warnings(summary)
+    # A JSON array loaded whole is a file-export problem; log_fdw never hits it.
     if summary.get("array_bytes", 0) > _ARRAY_WARN_BYTES:
         warnings.append(
             "the export was one JSON array over 100 MB and was parsed whole "
