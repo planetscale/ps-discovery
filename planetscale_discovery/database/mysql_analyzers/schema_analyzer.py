@@ -55,6 +55,12 @@ def _dedupe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 class MySQLSchemaAnalyzer(DatabaseAnalyzer):
     """Analyzes MySQL schema via information_schema."""
 
+    def __init__(self, connection, config=None, logger=None):
+        super().__init__(connection, config or {}, logger)
+        # mysql.database: limit discovery to this database. Empty means every
+        # non-system database on the server.
+        self.database = self.config.get("database") or ""
+
     def analyze(self) -> Dict[str, Any]:
         database_list = self._get_database_list()
 
@@ -242,11 +248,23 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
         return merged
 
     def _user_databases_filter(self, col: str = "table_schema") -> str:
-        """SQL fragment to exclude system databases."""
+        """SQL fragment limiting `col` to the databases discovery covers.
+
+        A configured database is bound as %s, so run the query with
+        self._filter_params.
+        """
+        if self.database:
+            return f"{col} = %s"
         quoted = ", ".join(f"'{db}'" for db in SYSTEM_DATABASES)
         return f"{col} NOT IN ({quoted})"
 
+    @property
+    def _filter_params(self) -> tuple:
+        return (self.database,) if self.database else ()
+
     def _get_database_list(self) -> List[str]:
+        if self.database:
+            return [self.database]
         try:
             cursor = self.connection.cursor()
             cursor.execute("SHOW DATABASES")
@@ -291,7 +309,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 AND {self._user_databases_filter('t.table_schema')}
                 ORDER BY total_size_bytes DESC, t.table_name ASC
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get table analysis: {e}", e)
             return []
@@ -316,7 +334,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 GROUP BY s.table_schema, s.table_name, s.index_name, s.index_type, s.non_unique, s.nullable
                 ORDER BY s.table_schema, s.table_name, s.index_name
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get index analysis: {e}", e)
             return []
@@ -336,7 +354,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter()}
                 ORDER BY table_schema, table_name
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get view analysis: {e}", e)
             return []
@@ -359,7 +377,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter('routine_schema')}
                 ORDER BY routine_schema, routine_type, routine_name
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get routine analysis: {e}", e)
             return []
@@ -380,7 +398,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter('trigger_schema')}
                 ORDER BY trigger_schema, event_object_table, action_timing, event_manipulation
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get trigger analysis: {e}", e)
             return []
@@ -410,7 +428,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter('tc.constraint_schema')}
                 ORDER BY tc.constraint_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get constraint analysis: {e}", e)
             return []
@@ -435,7 +453,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 AND {self._user_databases_filter()}
                 ORDER BY table_schema, table_name, partition_ordinal_position
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get partition analysis: {e}", e)
             return []
@@ -492,7 +510,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             WHERE {self._user_databases_filter()}
             ORDER BY table_schema, table_name, ordinal_position
         """
-        return self.execute_query(query, raise_on_error=True)
+        return self.execute_query(query, self._filter_params, raise_on_error=True)
 
     def _get_check_constraints(self) -> List[Dict[str, Any]]:
         """CHECK constraints (MySQL 8.0.16+). Gracefully returns empty on older versions."""
@@ -513,7 +531,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             """
             # raise_on_error so the version guard below actually sees the error
             # instead of execute_query filing it as a generic query failure.
-            return self.execute_query(query, raise_on_error=True)
+            return self.execute_query(query, self._filter_params, raise_on_error=True)
         except Exception as e:
             # information_schema.check_constraints doesn't exist before 8.0.16
             if (
@@ -552,7 +570,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 GROUP BY t.table_schema
                 ORDER BY t.table_schema
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get db object counts: {e}", e)
             return []
@@ -571,7 +589,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 GROUP BY table_schema, engine
                 ORDER BY table_schema, table_count DESC
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get db storage engines: {e}", e)
             return []
@@ -589,7 +607,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 GROUP BY s.table_schema, s.index_type
                 ORDER BY s.table_schema, index_count DESC
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get db index types: {e}", e)
             return []
@@ -607,7 +625,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 GROUP BY table_schema, data_type
                 ORDER BY table_schema, column_count DESC
             """
-            return self.execute_query(query)
+            return self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get db column types: {e}", e)
             return []

@@ -22,6 +22,12 @@ SYSTEM_DATABASES = frozenset(
 class MySQLFeatureAnalyzer(DatabaseAnalyzer):
     """Detects MySQL technologies and features for migration assessment."""
 
+    def __init__(self, connection, config=None, logger=None):
+        super().__init__(connection, config or {}, logger)
+        # mysql.database: limit the schema checks to this database. Empty means
+        # every non-system database on the server.
+        self.database = self.config.get("database") or ""
+
     def analyze(self) -> Dict[str, Any]:
         variables = self._get_variables()
         results = {
@@ -64,7 +70,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
                 WHERE s.index_type = 'FULLTEXT'
                 AND {filter_clause}
             """
-            result = self.execute_query_single(query)
+            result = self.execute_query_single(query, self._filter_params)
             return int(result.get("cnt", 0)) > 0
         except Exception:
             return False
@@ -81,7 +87,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
                 )
                 AND {filter_clause}
             """
-            result = self.execute_query_single(query)
+            result = self.execute_query_single(query, self._filter_params)
             return int(result.get("cnt", 0)) > 0
         except Exception:
             return False
@@ -94,7 +100,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
                 FROM information_schema.referential_constraints
                 WHERE {filter_clause}
             """
-            result = self.execute_query_single(query)
+            result = self.execute_query_single(query, self._filter_params)
             return int(result.get("cnt", 0)) > 0
         except Exception:
             return False
@@ -108,7 +114,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
                 WHERE partition_name IS NOT NULL
                 AND {filter_clause}
             """
-            result = self.execute_query_single(query)
+            result = self.execute_query_single(query, self._filter_params)
             return int(result.get("cnt", 0)) > 0
         except Exception:
             return False
@@ -123,7 +129,7 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
                 AND engine = 'InnoDB'
                 AND {filter_clause}
             """
-            result = self.execute_query_single(query)
+            result = self.execute_query_single(query, self._filter_params)
             return int(result.get("cnt", 0)) > 0
         except Exception:
             return False
@@ -180,5 +186,16 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
         return provider not in ("", "none")
 
     def _user_schema_filter(self, col: str) -> str:
+        """SQL fragment limiting `col` to the databases discovery covers.
+
+        A configured database is bound as %s, so run the query with
+        self._filter_params.
+        """
+        if self.database:
+            return f"{col} = %s"
         quoted = ", ".join(f"'{db}'" for db in SYSTEM_DATABASES)
         return f"{col} NOT IN ({quoted})"
+
+    @property
+    def _filter_params(self) -> tuple:
+        return (self.database,) if self.database else ()

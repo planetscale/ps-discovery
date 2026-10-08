@@ -266,6 +266,11 @@ mysql:
   password: your_password
 ```
 
+The schema analysis and the schema-based feature checks then cover that
+database alone. Server configuration, status counters, the process list,
+replication and user accounts belong to the whole server, so they still
+describe the whole server.
+
 ### Combined MySQL + Cloud Discovery
 
 ```yaml

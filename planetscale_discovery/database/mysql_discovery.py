@@ -172,6 +172,10 @@ class MySQLDiscovery:
 
         self.logger.info(f"Running MySQL analysis modules: {modules}")
 
+        # The schema and feature analyzers limit themselves to this database.
+        # Empty means every non-system database on the server.
+        analyzer_config = {"database": self.connection_params.get("database") or ""}
+
         for module_name in modules:
             if module_name not in available_modules:
                 self.logger.warning(f"Unknown MySQL module: {module_name}")
@@ -179,7 +183,9 @@ class MySQLDiscovery:
 
             try:
                 self.logger.info(f"Running {module_name} analysis...")
-                analyzer = available_modules[module_name](self.connection)
+                analyzer = available_modules[module_name](
+                    self.connection, analyzer_config
+                )
                 module_results = analyzer.analyze()
                 self.results["analysis_results"][module_name] = module_results
 
