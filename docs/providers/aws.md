@@ -62,8 +62,7 @@ Create an IAM policy with the following comprehensive permissions for complete i
             "Sid": "PlanetScaleDiscoveryCloudWatch",
             "Effect": "Allow",
             "Action": [
-                "cloudwatch:GetMetricStatistics",
-                "cloudwatch:ListMetrics"
+                "cloudwatch:GetMetricData"
             ],
             "Resource": "*"
         },
@@ -325,10 +324,55 @@ If not specified, the tool defaults to `us-east-1`.
 - Transit gateway attachments
 
 ### Operational
-- CloudWatch metrics
-- CPU, memory, storage utilization
+
+The tool reads 7 days of CloudWatch metrics from the `AWS/RDS` namespace at a
+one-hour period. It batches a region into as few `GetMetricData` calls as the
+API allows. One call carries 500 queries, which covers a region with up to nine
+Aurora Serverless instances.
+
+Each instance carries:
+
+- CPU utilization, and average active sessions (`DBLoad`) where Performance
+  Insights is on
+- Freeable memory, swap use, and buffer cache hit ratio
 - Connection counts
-- Replication lag (if applicable)
+- Read and write IOPS, throughput and latency
+- Commit latency and throughput
+- Network receive and transmit throughput
+- Transaction ID headroom and replication slot lag
+- Replica lag, deadlocks and engine uptime
+
+Each Aurora cluster carries:
+
+- `VolumeBytesUsed`, the real volume size. An Aurora cluster reports
+  `allocated_storage: 1` from the RDS API, because Aurora storage grows on
+  demand. The tool keeps both figures.
+- Snapshot, backup retention and total billed backup storage
+- Volume read and write IO counts
+- Global Database replication lag, replicated write IO and data transfer
+
+A plain RDS instance also carries free storage space, transaction log disk use,
+disk queue depth and EBS burst balances.
+
+#### Aurora Serverless capacity
+
+Aurora Serverless v2 reports `db.serverless` as its instance class, so the RDS
+API gives no vCPU or memory figure. The tool reads `ServerlessDatabaseCapacity`,
+which is the Aurora Capacity Units (ACU) the instance actually held, and
+`ACUUtilization`, which shows whether the configured maximum limited the
+workload.
+
+AWS documents one ACU as approximately 2 GiB of memory, so the payload converts
+observed ACU to `effective_memory_gib`. AWS does not publish a vCPU figure per
+ACU. The payload therefore carries its `vcpu_per_acu` assumption in
+`capacity.assumptions` next to the raw ACU figures, so you can apply your own
+ratio.
+
+`CPUUtilization` on `db.serverless` is a percentage of the capacity allocated at
+that moment, not of the configured maximum. A 46% average means nothing on its
+own, because the allocation moves. The tool joins the CPU and ACU series by
+timestamp to produce `capacity.observed_busy_vcpu`, which carries its method and
+this caveat inline.
 
 ## Troubleshooting
 

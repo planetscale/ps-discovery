@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Common values of declared columns.** The workload bundle now has `distributions.json`. It holds the most common values from `pg_stats` for each column under `database.workload.distributions`. Values ship verbatim unless `hash_values: true`. The capture role needs `SELECT` on each declared column. See [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
+- **Aurora Serverless capacity and real storage.** The AWS analyzer reads CloudWatch metrics for each RDS instance and Aurora cluster in one `GetMetricData` call per region. Each `db.serverless` instance records its observed ACU range and the memory that it gives. Aurora clusters record `VolumeBytesUsed` and their backup and snapshot storage. See [AWS Setup](docs/providers/aws.md).
+
+### Changed
+
+- The AWS IAM policy needs `cloudwatch:GetMetricData` in place of `cloudwatch:GetMetricStatistics`.
 
 ## [2.1.0] - 2026-10-05
 

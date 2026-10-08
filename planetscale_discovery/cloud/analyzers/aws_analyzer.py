@@ -4,9 +4,10 @@ AWS Cloud Database Environment Analyzer
 Analyzes AWS RDS, Aurora, and related infrastructure.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 import logging
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 try:
     import boto3
@@ -22,6 +23,29 @@ except ImportError:
 
 from ...common.base_analyzer import CloudAnalyzer
 from ...common.utils import generate_timestamp
+from .aws_metrics import (
+    AURORA_ACU_MEMORY_GIB,
+    AURORA_ACU_VCPU,
+    BYTES_PER_GIB,
+    CAPACITY_TYPE_PROVISIONED,
+    CAPACITY_TYPE_SERVERLESS_V1,
+    CAPACITY_TYPE_SERVERLESS_V2,
+    CLUSTER_DIMENSION,
+    INSTANCE_DIMENSION,
+    METRIC_PERIOD_SECONDS,
+    METRIC_WINDOW_DAYS,
+    P95_BASIS,
+    SERVERLESS_INSTANCE_CLASS,
+    MetricTarget,
+    Series,
+    acu_to_memory_gib,
+    build_metric_queries,
+    chunk_queries,
+    cluster_metric_table,
+    derive_serverless_capacity,
+    instance_metric_table,
+    summarize_target,
+)
 
 
 class AWSAnalyzer(CloudAnalyzer):
@@ -38,8 +62,9 @@ class AWSAnalyzer(CloudAnalyzer):
         else:
             config_dict = config
 
-        super().__init__(config_dict, logger)
+        super().__init__(config_dict, "aws", logger)
         self.session = None
+        self._cloudwatch_denied = False
         # Extract regions from config dict or attribute
         if hasattr(config, "regions"):
             self.regions = config.regions if config.regions else ["us-east-1"]
@@ -172,7 +197,7 @@ class AWSAnalyzer(CloudAnalyzer):
             "costs": {},
             "summary": {},
             "complexity_factors": {},
-            "metadata": self.get_analysis_metadata(),
+            "metadata": {},
         }
 
         # Check if we have a target database for focused analysis
@@ -225,6 +250,7 @@ class AWSAnalyzer(CloudAnalyzer):
         analysis_results["complexity_factors"] = self._assess_complexity(
             analysis_results["resources"]
         )
+        analysis_results["metadata"] = self.get_analysis_metadata()
 
         return analysis_results
 
@@ -252,6 +278,12 @@ class AWSAnalyzer(CloudAnalyzer):
 
         # Analyze security
         region_analysis["security_groups"] = self._analyze_security_groups(region)
+
+        self._collect_region_metrics(
+            region,
+            region_analysis["rds_instances"],
+            region_analysis["aurora_clusters"],
+        )
 
         return region_analysis
 
@@ -436,14 +468,9 @@ class AWSAnalyzer(CloudAnalyzer):
                     "status": db_instance.get("DBInstanceStatus"),
                     "availability_zone": db_instance.get("AvailabilityZone"),
                     "region": region,
+                    "db_cluster_identifier": db_instance.get("DBClusterIdentifier"),
+                    "dbi_resource_id": db_instance.get("DbiResourceId"),
                 }
-
-                # Get additional details
-                instance_analysis.update(
-                    self._get_rds_instance_details(
-                        rds_client, db_instance["DBInstanceIdentifier"]
-                    )
-                )
 
                 instances.append(instance_analysis)
 
@@ -671,43 +698,324 @@ class AWSAnalyzer(CloudAnalyzer):
 
         return subnet_groups
 
-    def _get_rds_instance_details(self, rds_client, instance_id: str) -> Dict[str, Any]:
-        """Get additional RDS instance details."""
-        details = {}
+    def _metric_window(self) -> Tuple[datetime, datetime, int]:
+        """Return the start, end and period of the CloudWatch metric window."""
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(days=METRIC_WINDOW_DAYS)
+        return start_time, end_time, METRIC_PERIOD_SECONDS
 
-        try:
-            # Get metrics from CloudWatch
-            cloudwatch = self.session.client(
-                "cloudwatch", region_name=rds_client.meta.region_name
-            )
+    def _fetch_metric_data(
+        self,
+        cloudwatch,
+        queries: List[Dict[str, Any]],
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Dict[str, Series]:
+        """Fetch every query in as few GetMetricData calls as CloudWatch allows."""
+        results: Dict[str, Series] = {}
+        if self._cloudwatch_denied:
+            return results
 
-            # Get recent CPU utilization
-            end_time = datetime.utcnow()
-            start_time = end_time - timedelta(days=7)
+        for batch in chunk_queries(queries):
+            next_token = None
 
-            metrics_response = cloudwatch.get_metric_statistics(
-                Namespace="AWS/RDS",
-                MetricName="CPUUtilization",
-                Dimensions=[{"Name": "DBInstanceIdentifier", "Value": instance_id}],
-                StartTime=start_time,
-                EndTime=end_time,
-                Period=86400,  # Daily
-                Statistics=["Average", "Maximum"],
-            )
+            while True:
+                request = {
+                    "MetricDataQueries": batch,
+                    "StartTime": start_time,
+                    "EndTime": end_time,
+                    "ScanBy": "TimestampAscending",
+                }
+                if next_token:
+                    request["NextToken"] = next_token
 
-            if metrics_response["Datapoints"]:
-                cpu_data = sorted(
-                    metrics_response["Datapoints"], key=lambda x: x["Timestamp"]
+                try:
+                    response = cloudwatch.get_metric_data(**request)
+                except ClientError as e:
+                    code = e.response.get("Error", {}).get("Code")
+                    if code in ("AccessDenied", "AccessDeniedException"):
+                        if not self._cloudwatch_denied:
+                            self._cloudwatch_denied = True
+                            self.add_warning(
+                                "CloudWatch metrics unavailable: the role needs "
+                                "cloudwatch:GetMetricData"
+                            )
+                        return results
+                    self.add_warning(f"Failed to fetch CloudWatch metrics: {e}")
+                    return results
+                except Exception as e:
+                    self.add_warning(f"Failed to fetch CloudWatch metrics: {e}")
+                    return results
+
+                for item in response.get("MetricDataResults", []):
+                    query_id = item.get("Id")
+                    timestamps = list(item.get("Timestamps", []))
+                    values = list(item.get("Values", []))
+                    existing = results.get(query_id)
+                    if existing:
+                        results[query_id] = Series(
+                            existing.timestamps + timestamps,
+                            existing.values + values,
+                        )
+                    else:
+                        results[query_id] = Series(timestamps, values)
+
+                next_token = response.get("NextToken")
+                if not next_token:
+                    break
+
+        return results
+
+    def _collect_region_metrics(
+        self,
+        region: str,
+        instances: List[Dict[str, Any]],
+        clusters: List[Dict[str, Any]],
+    ) -> None:
+        """Attach CloudWatch metrics to every instance and cluster in a region."""
+        targets: List[MetricTarget] = []
+
+        for instance in instances:
+            identifier = instance.get("db_instance_identifier")
+            if not identifier:
+                continue
+            targets.append(
+                MetricTarget(
+                    key=f"instance:{identifier}",
+                    dimension_name=INSTANCE_DIMENSION,
+                    dimension_value=identifier,
+                    table=instance_metric_table(
+                        instance.get("engine") or "",
+                        instance.get("db_instance_class") or "",
+                    ),
                 )
-                details["cpu_utilization_avg"] = sum(
-                    d["Average"] for d in cpu_data
-                ) / len(cpu_data)
-                details["cpu_utilization_max"] = max(d["Maximum"] for d in cpu_data)
+            )
 
+        for cluster in clusters:
+            identifier = cluster.get("identifier") or cluster.get(
+                "db_cluster_identifier"
+            )
+            if not identifier:
+                continue
+            targets.append(
+                MetricTarget(
+                    key=f"cluster:{identifier}",
+                    dimension_name=CLUSTER_DIMENSION,
+                    dimension_value=identifier,
+                    table=cluster_metric_table(
+                        cluster.get("engine_mode") or "provisioned"
+                    ),
+                )
+            )
+
+        if not targets:
+            return
+
+        start_time, end_time, period = self._metric_window()
+        queries, routing = build_metric_queries(targets, period)
+
+        raw: Dict[str, Series] = {}
+        try:
+            cloudwatch = self.session.client("cloudwatch", region_name=region)
         except Exception as e:
-            self.add_warning(f"Failed to get metrics for instance {instance_id}: {e}")
+            self.add_warning(f"Could not reach CloudWatch in {region}: {e}")
+        else:
+            raw = self._fetch_metric_data(cloudwatch, queries, start_time, end_time)
 
-        return details
+        collection_error = None if raw else "no CloudWatch data returned"
+
+        series_by_target: Dict[str, Dict[Tuple[str, str], Series]] = defaultdict(dict)
+        for query_id, series in raw.items():
+            target_key, metric_name, stat = routing[query_id]
+            series_by_target[target_key][(metric_name, stat)] = series
+
+        window = {
+            "start": start_time.isoformat(),
+            "end": end_time.isoformat(),
+            "period_seconds": period,
+            "days": METRIC_WINDOW_DAYS,
+            "p95_basis": P95_BASIS,
+        }
+
+        tables = {target.key: target.table for target in targets}
+
+        for instance in instances:
+            key = f"instance:{instance.get('db_instance_identifier')}"
+            if key in tables:
+                self._attach_instance_metrics(
+                    instance,
+                    tables[key],
+                    series_by_target.get(key, {}),
+                    window,
+                    collection_error,
+                )
+
+        for cluster in clusters:
+            identifier = cluster.get("identifier") or cluster.get(
+                "db_cluster_identifier"
+            )
+            key = f"cluster:{identifier}"
+            if key in tables:
+                self._attach_cluster_metrics(
+                    cluster,
+                    tables[key],
+                    series_by_target.get(key, {}),
+                    window,
+                    collection_error,
+                )
+
+    def _build_metrics_block(
+        self,
+        table: Dict[str, Tuple[str, Tuple[str, ...]]],
+        series: Dict[Tuple[str, str], Series],
+        window: Dict[str, Any],
+        collection_error: Optional[str],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Assemble one resource's metrics block and return its summary too."""
+        summary, datapoint_counts, unavailable = summarize_target(table, series)
+
+        metrics: Dict[str, Any] = {"window": window}
+        metrics.update(summary)
+        metrics["datapoint_counts"] = datapoint_counts
+        metrics["unavailable"] = unavailable
+        metrics["collection_error"] = collection_error
+
+        return metrics, summary
+
+    def _attach_instance_metrics(
+        self,
+        instance: Dict[str, Any],
+        table: Dict[str, Tuple[str, Tuple[str, ...]]],
+        series: Dict[Tuple[str, str], Series],
+        window: Dict[str, Any],
+        collection_error: Optional[str],
+    ) -> None:
+        """Attach the metrics, capacity and storage blocks to one instance."""
+        metrics, summary = self._build_metrics_block(
+            table, series, window, collection_error
+        )
+        instance["metrics"] = metrics
+
+        cpu = summary.get("cpu_utilization_pct") or {}
+        if "avg" in cpu:
+            instance["cpu_utilization_avg"] = cpu["avg"]
+        if "max" in cpu:
+            instance["cpu_utilization_max"] = cpu["max"]
+
+        instance["capacity"] = self._build_instance_capacity(instance, summary, series)
+
+        storage = self._build_instance_storage(instance, summary)
+        if storage:
+            instance["storage"] = storage
+
+    def _build_instance_capacity(
+        self,
+        instance: Dict[str, Any],
+        summary: Dict[str, Any],
+        series: Dict[Tuple[str, str], Series],
+    ) -> Dict[str, Any]:
+        """Describe what the instance actually had available to it."""
+        instance_class = instance.get("db_instance_class") or ""
+        db_load = summary.get("db_load")
+
+        if instance_class != SERVERLESS_INSTANCE_CLASS:
+            capacity: Dict[str, Any] = {
+                "type": CAPACITY_TYPE_PROVISIONED,
+                "instance_class": instance_class,
+            }
+            if db_load:
+                capacity["db_load_avg_active_sessions"] = db_load
+            return capacity
+
+        capacity = {
+            "type": CAPACITY_TYPE_SERVERLESS_V2,
+            "assumptions": {
+                "memory_gib_per_acu": AURORA_ACU_MEMORY_GIB,
+                "vcpu_per_acu": AURORA_ACU_VCPU,
+            },
+        }
+
+        acu = summary.get("serverless_database_capacity_acu")
+        if acu:
+            capacity["acu"] = acu
+            capacity["effective_memory_gib"] = acu_to_memory_gib(acu)
+
+        capacity["observed_busy_vcpu"] = derive_serverless_capacity(
+            series.get(("ServerlessDatabaseCapacity", "Average")),
+            series.get(("CPUUtilization", "Average")),
+        )
+        if db_load:
+            capacity["db_load_avg_active_sessions"] = db_load
+
+        return capacity
+
+    def _build_instance_storage(
+        self, instance: Dict[str, Any], summary: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Report real storage use where the describe API only gives a ceiling."""
+        storage: Dict[str, Any] = {}
+
+        local_free = summary.get("free_local_storage_bytes")
+        if local_free:
+            storage["local_free_bytes"] = local_free
+
+        free_space = summary.get("free_storage_space_bytes")
+        if free_space:
+            allocated_gib = instance.get("allocated_storage") or 0
+            storage["allocated_gib"] = allocated_gib
+            storage["free_bytes"] = free_space
+            if allocated_gib and "min" in free_space:
+                storage["used_gib_max"] = (
+                    allocated_gib - free_space["min"] / BYTES_PER_GIB
+                )
+
+        return storage
+
+    def _attach_cluster_metrics(
+        self,
+        cluster: Dict[str, Any],
+        table: Dict[str, Tuple[str, Tuple[str, ...]]],
+        series: Dict[Tuple[str, str], Series],
+        window: Dict[str, Any],
+        collection_error: Optional[str],
+    ) -> None:
+        """Attach the metrics, storage and v1 capacity blocks to one cluster."""
+        metrics, summary = self._build_metrics_block(
+            table, series, window, collection_error
+        )
+        cluster["metrics"] = metrics
+
+        storage: Dict[str, Any] = {
+            "allocated_storage_gb": cluster.get("allocated_storage")
+        }
+        for summary_key, storage_key in (
+            ("volume_bytes_used", "volume_used_bytes"),
+            ("snapshot_storage_bytes", "snapshot_storage_bytes"),
+            ("backup_retention_storage_bytes", "backup_retention_storage_bytes"),
+            ("total_backup_storage_billed_bytes", "total_backup_storage_billed_bytes"),
+        ):
+            figures = summary.get(summary_key)
+            if figures:
+                storage[storage_key] = figures
+
+        volume = summary.get("volume_bytes_used") or {}
+        if "max" in volume:
+            storage["volume_used_gib"] = volume["max"] / BYTES_PER_GIB
+        cluster["storage"] = storage
+
+        if cluster.get("engine_mode") == "serverless":
+            capacity: Dict[str, Any] = {
+                "type": CAPACITY_TYPE_SERVERLESS_V1,
+                "assumptions": {
+                    "memory_gib_per_acu": AURORA_ACU_MEMORY_GIB,
+                    "vcpu_per_acu": AURORA_ACU_VCPU,
+                },
+            }
+            acu = summary.get("serverless_database_capacity_acu")
+            if acu:
+                capacity["acu"] = acu
+                capacity["effective_memory_gib"] = acu_to_memory_gib(acu)
+            cluster["capacity"] = capacity
 
     def _get_aurora_serverless_details(
         self, rds_client, cluster: Dict[str, Any]
@@ -1742,8 +2050,6 @@ class AWSAnalyzer(CloudAnalyzer):
     ) -> Dict[str, Any]:
         """Analyze a single RDS instance that we already have data for."""
         try:
-            cloudwatch = self.session.client("cloudwatch", region_name=region)
-
             # Build analysis similar to existing RDS analysis
             analysis = {
                 "db_instance_identifier": instance_data.get("DBInstanceIdentifier"),
@@ -1784,18 +2090,11 @@ class AWSAnalyzer(CloudAnalyzer):
                     "PerformanceInsightsEnabled", False
                 ),
                 "monitoring_interval": instance_data.get("MonitoringInterval", 0),
+                "db_cluster_identifier": instance_data.get("DBClusterIdentifier"),
+                "dbi_resource_id": instance_data.get("DbiResourceId"),
             }
 
-            # Get CloudWatch metrics for this instance
-            try:
-                analysis["cloudwatch_metrics"] = self._get_rds_cloudwatch_metrics(
-                    cloudwatch, instance_data.get("DBInstanceIdentifier"), region
-                )
-            except Exception as e:
-                self.logger.warning(
-                    f"Could not get CloudWatch metrics for {instance_data.get('DBInstanceIdentifier')}: {e}"
-                )
-                analysis["cloudwatch_metrics"] = {}
+            self._collect_region_metrics(region, [analysis], [])
 
             return analysis
 
@@ -1809,7 +2108,7 @@ class AWSAnalyzer(CloudAnalyzer):
         """Analyze a single Aurora cluster that we already have data for."""
         try:
             # Build analysis similar to existing Aurora analysis
-            return {
+            analysis = {
                 "db_cluster_identifier": cluster_data.get("DBClusterIdentifier"),
                 "engine": cluster_data.get("Engine"),
                 "engine_version": cluster_data.get("EngineVersion"),
@@ -1846,6 +2145,15 @@ class AWSAnalyzer(CloudAnalyzer):
                     for member in cluster_data.get("DBClusterMembers", [])
                 ],
             }
+
+            if analysis["engine_mode"] == "serverless" or cluster_data.get(
+                "ServerlessV2ScalingConfiguration"
+            ):
+                analysis.update(self._get_aurora_serverless_details(None, cluster_data))
+
+            self._collect_region_metrics(region, [], [analysis])
+
+            return analysis
         except Exception as e:
             self.logger.error(f"Error analyzing Aurora cluster: {e}")
             return {}
