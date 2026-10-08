@@ -188,6 +188,12 @@ class TestUserSchemaFilter:
         for system_db in SYSTEM_DATABASES:
             assert f"'{system_db}'" in clause
 
+    def test_filter_uses_configured_database(self):
+        analyzer = MySQLFeatureAnalyzer(MagicMock(), config={"database": "billing"})
+        clause = analyzer._user_schema_filter("table_schema")
+
+        assert clause == "table_schema = 0x62696c6c696e67"
+
 
 class TestAnalyzeTopLevel:
     def test_analyze_returns_technologies_key(self):

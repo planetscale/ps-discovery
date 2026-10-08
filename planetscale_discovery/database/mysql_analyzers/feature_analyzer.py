@@ -180,5 +180,9 @@ class MySQLFeatureAnalyzer(DatabaseAnalyzer):
         return provider not in ("", "none")
 
     def _user_schema_filter(self, col: str) -> str:
+        database = self.config.get("database")
+        if database:
+            # Hex literal: see MySQLSchemaAnalyzer._user_databases_filter.
+            return f"{col} = 0x{database.encode('utf-8').hex()}"
         quoted = ", ".join(f"'{db}'" for db in SYSTEM_DATABASES)
         return f"{col} NOT IN ({quoted})"

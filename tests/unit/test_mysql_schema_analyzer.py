@@ -28,6 +28,23 @@ class TestMySQLSchemaAnalyzer:
         connection, _ = mock_connection
         return MySQLSchemaAnalyzer(connection)
 
+    def test_configured_database_limits_catalog_and_table_query(self, mock_connection):
+        connection, cursor = mock_connection
+        database = "app' OR 1=1"
+        analyzer = MySQLSchemaAnalyzer(connection, config={"database": database})
+
+        assert analyzer._get_database_list() == [database]
+        cursor.execute.assert_not_called()
+        with patch.object(analyzer, "execute_query", return_value=[]) as query:
+            analyzer._get_table_analysis()
+
+        sql = query.call_args.args[0]
+        assert f"t.table_schema = 0x{database.encode().hex()}" in sql
+        assert database not in sql
+
+    def test_empty_database_keeps_all_user_databases(self, analyzer):
+        assert analyzer._user_databases_filter().startswith("table_schema NOT IN (")
+
     # ---------------------------------------------------------------
     # analyze() - structure includes new keys
     # ---------------------------------------------------------------

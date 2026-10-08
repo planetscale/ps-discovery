@@ -179,7 +179,10 @@ class MySQLDiscovery:
 
             try:
                 self.logger.info(f"Running {module_name} analysis...")
-                analyzer = available_modules[module_name](self.connection)
+                analyzer = available_modules[module_name](
+                    self.connection,
+                    config={"database": self.connection_params.get("database", "")},
+                )
                 module_results = analyzer.analyze()
                 self.results["analysis_results"][module_name] = module_results
 

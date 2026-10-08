@@ -253,7 +253,9 @@ mysql:
 
 ### Target a Specific Database
 
-Set the `database` field to focus on one database:
+Set the `database` field to limit schema discovery and schema-based feature
+detection to one database. Configuration, performance, replication, and security
+checks still describe the server as a whole:
 
 ```yaml
 engine: mysql

@@ -117,6 +117,26 @@ class TestSSLHandling:
         assert captured.get("ssl_disabled") is True
 
 
+class TestDatabaseScope:
+    @pytest.mark.parametrize("database", ["app", ""])
+    def test_run_analysis_passes_database_scope_to_analyzers(
+        self, base_params, database
+    ):
+        base_params["database"] = database
+        discovery = MySQLDiscovery(base_params)
+        discovery.connection = MagicMock()
+
+        with patch(
+            "planetscale_discovery.database.mysql_discovery.MySQLSchemaAnalyzer"
+        ) as analyzer_class:
+            analyzer_class.return_value.analyze.return_value = {}
+            discovery.run_analysis(["schema"])
+
+        analyzer_class.assert_called_once_with(
+            discovery.connection, config={"database": database}
+        )
+
+
 class TestScanForErrors:
     """Verify _scan_for_errors catches partial failures."""
 

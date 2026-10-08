@@ -242,11 +242,21 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
         return merged
 
     def _user_databases_filter(self, col: str = "table_schema") -> str:
-        """SQL fragment to exclude system databases."""
+        """Limit metadata queries to the configured database, if any."""
+        database = self.config.get("database")
+        if database:
+            # A hex literal keeps the configured name out of SQL syntax without
+            # relying on the connection's string-escaping mode. Left as a plain
+            # literal, it takes the column's character set in the comparison,
+            # like the quoted system database names below.
+            return f"{col} = 0x{database.encode('utf-8').hex()}"
         quoted = ", ".join(f"'{db}'" for db in SYSTEM_DATABASES)
         return f"{col} NOT IN ({quoted})"
 
     def _get_database_list(self) -> List[str]:
+        database = self.config.get("database")
+        if database:
+            return [database]
         try:
             cursor = self.connection.cursor()
             cursor.execute("SHOW DATABASES")
