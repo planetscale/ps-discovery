@@ -7,22 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-09
+
 ### Added
 
-- **Common values of declared columns.** The workload bundle now has `distributions.json`. It holds the most common values from `pg_stats` for each column under `database.workload.distributions`. Values ship verbatim unless `hash_values: true`. The capture role needs `SELECT` on each declared column. See [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
-- **Aurora Serverless capacity and real storage.** The AWS analyzer reads CloudWatch metrics for each RDS instance and Aurora cluster in one `GetMetricData` call per region. Each `db.serverless` instance records its observed ACU range and the memory that it gives. Aurora clusters record `VolumeBytesUsed` and their backup and snapshot storage. See [AWS Setup](docs/providers/aws.md).
+- **Common values of declared columns.** The workload bundle has a new `distributions.json` with the most common values of each declared column. See [Recording the common values of chosen columns](docs/workload_capture.md#recording-the-common-values-of-chosen-columns).
+- **Aurora Serverless capacity and storage.** The AWS analyzer records the ACU range of each `db.serverless` instance and the storage of each Aurora cluster. See [AWS Setup](docs/providers/aws.md).
 
 ### Changed
 
-- The AWS IAM policy needs `cloudwatch:GetMetricData` in place of `cloudwatch:GetMetricStatistics`.
-
-### Changed
-
-- **Query log capture settings.** `capture_log_type` is required when `capture_log` is on, and is `statement` or `pgaudit`. `capture_log_source` is now `file` or `log_fdw`, and defaults to `file`. The tool reads whether an exported file is plain text, csvlog or a pgAudit JSON export. The old `capture_log_source` values `pgaudit`, `pgaudit-json`, `stderr` and `auto` are rejected, and the error names the settings that replace them. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
+- The AWS IAM policy needs `cloudwatch:GetMetricData`, not `GetMetricStatistics`.
+- **Query log capture settings.** `capture_log_source` is now `file` or `log_fdw`, and the new `capture_log_type` is `statement` or `pgaudit`. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
 
 ### Fixed
 
-- **`mysql.database` did not limit MySQL discovery to one database.** The setting only chose the connection's default database, and the schema analysis and feature checks scanned every non-system database on the server. They now cover the configured database alone. An empty `database` still covers every non-system database.
+- `mysql.database` now limits MySQL discovery to that database.
 
 ## [2.1.0] - 2026-10-05
 
