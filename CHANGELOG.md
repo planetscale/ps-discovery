@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The AWS IAM policy needs `cloudwatch:GetMetricData` in place of `cloudwatch:GetMetricStatistics`.
 
+### Changed
+
+- **Query log capture settings.** `capture_log_type` is required when `capture_log` is on, and is `statement` or `pgaudit`. `capture_log_source` is now `file` or `log_fdw`, and defaults to `file`. The tool reads whether an exported file is plain text, csvlog or a pgAudit JSON export. The old `capture_log_source` values `pgaudit`, `pgaudit-json`, `stderr` and `auto` are rejected, and the error names the settings that replace them. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
+
 ## [2.1.0] - 2026-10-05
 
 ### Added

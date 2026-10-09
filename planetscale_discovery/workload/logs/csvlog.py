@@ -21,6 +21,26 @@ PARAMETERS_RE = re.compile(r"^Parameters:\s*(.*)$", re.S)
 
 ERROR_SEVERITIES = ("ERROR", "FATAL", "PANIC")
 
+# csvlog log_time is a timestamp alone; a text line's first field also holds the severity.
+_TIMESTAMP_ONLY = re.compile(
+    r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"(?:[ ]?[A-Za-z0-9+\-]+(?::\d{2})?)?"
+)
+_SEVERITY_ONLY = re.compile(
+    r"LOG|DETAIL|STATEMENT|ERROR|FATAL|PANIC|WARNING|NOTICE|INFO|HINT|CONTEXT"
+    r"|DEBUG\d?"
+)
+
+
+def is_csvlog_row(row: List[str]) -> bool:
+    """True when a parsed row has a csvlog shape, not a plain text line."""
+    if len(row) not in KNOWN_WIDTHS:
+        return False
+    if _TIMESTAMP_ONLY.fullmatch(row[0].strip()) is None:
+        return False
+    severity = row[COLUMNS.index("error_severity")].strip()
+    return _SEVERITY_ONLY.fullmatch(severity) is not None
+
 
 def read_records(source: Iterable[str]) -> Iterator[Dict[str, Any]]:
     for row in csv.reader(source):

@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 from planetscale_discovery import __version__
-from planetscale_discovery.config.config_manager import WorkloadConfig
+from planetscale_discovery.config.config_manager import (
+    WorkloadConfig,
+    workload_log_errors,
+)
 from planetscale_discovery.workload.bundle import bundle_dir_name, write_bundle
 from planetscale_discovery.workload.codes import label
 from planetscale_discovery.workload.collect import (
@@ -41,9 +44,8 @@ EXIT_CAPABILITY = 5
 WORKLOAD_COMMANDS = ("init", "collect", "finalize", "status")
 
 SOURCE_LIVE = "log_fdw"
-SOURCE_LIVE_ALIAS = "auto"
-SOURCE_PGAUDIT_JSON = "pgaudit-json"
-SOURCE_STDERR = "stderr"
+# Packaging is sniffed from the file; this only selects the pgAudit parser.
+TYPE_PGAUDIT = "pgaudit"
 
 # The reuse boundary: the schema comes from the existing analyzer, not a new query.
 CATALOG_MODULES = ["schema"]
@@ -83,11 +85,14 @@ Two snapshots are the minimum, since a window needs two readings to difference.
 
 Set 'capture_log: true' under database.workload to also read the server's query
 log, which carries the transaction shapes and the literal values that
-pg_stat_statements does not record. The default source is pgAudit: you export
-the window and name the file in capture_log_file. On RDS and Aurora,
-capture_log_source: log_fdw reads the log over this connection instead, and
-each collect then watches it for capture_log_seconds. 'init --check' reports
-whether this server can supply it.
+pg_stat_statements does not record. capture_log_type is required: 'statement'
+needs no extension and reads statement: records, and 'pgaudit' reads pgaudit
+records. If a log contains both record types, the capture consumes only the
+configured record type and not both. The default source is a file you export and
+name in capture_log_file. The tool reads whether that file is plain text, csvlog,
+or a pgAudit JSON export. On RDS and Aurora, capture_log_source: log_fdw reads
+the csv log over this connection instead, and each collect then watches it for
+capture_log_seconds. 'init --check' reports whether this server can supply it.
 
 Declare the columns your migration engineer names under 'distributions:' in
 database.workload. Each collect records their most common values from pg_stats,
@@ -246,11 +251,20 @@ def handle_workload(args, config, logger) -> int:
         )
         return EXIT_USAGE
 
-    if not _workload_config(config).enabled:
+    workload = _workload_config(config)
+    if not workload.enabled:
         logger.error(
             "workload capture is disabled. Set database.workload.enabled: "
             "true in the config file to run this command."
         )
+        return EXIT_USAGE
+
+    # Discovery validation runs after this command has already exited, so a
+    # bad source or type has to be rejected here or collect treats it as a file.
+    log_errors = workload_log_errors(workload)
+    if log_errors:
+        for error in log_errors:
+            logger.error(error)
         return EXIT_USAGE
 
     if command == "init":
@@ -268,8 +282,6 @@ def _workload_config(config) -> WorkloadConfig:
     # Type-checked, or a stub config answers getattr for every field.
     candidate = getattr(getattr(config, "database", None), "workload", None)
     workload = candidate if isinstance(candidate, WorkloadConfig) else WorkloadConfig()
-    if workload.capture_log_source == SOURCE_LIVE_ALIAS:
-        workload.capture_log_source = SOURCE_LIVE
     return workload
 
 
@@ -466,7 +478,7 @@ def _init(args, config, logger) -> int:
 
 
 def _report_log_readiness(connection, workload, logger) -> None:
-    """Say at init whether this server can supply what capture_log asks for."""
+    """Init report for capture_log. A missing type is already rejected."""
     if workload.capture_log_source != SOURCE_LIVE:
         if not workload.capture_log_file:
             logger.warning(
@@ -478,7 +490,7 @@ def _report_log_readiness(connection, workload, logger) -> None:
             )
             return
         logger.info(
-            f"capture_log is on, reading {workload.capture_log_source} records "
+            f"capture_log is on, reading {workload.capture_log_type} records "
             f"from {workload.capture_log_file}"
         )
         return
@@ -497,7 +509,7 @@ def _report_log_readiness(connection, workload, logger) -> None:
         "capture_log is on, but this server's log cannot be read over this "
         "connection, so every collect will record a snapshot only. Run "
         "'workload init --check' for what would have to change, or export the "
-        "log and set capture_log_source and capture_log_file."
+        "log and set capture_log_type, capture_log_source, and capture_log_file."
     )
 
 
@@ -690,6 +702,9 @@ def _capture_log_window(store, config, workload, logger) -> None:
         for warning in burst.get("warnings") or []:
             logger.warning(f"  {warning}")
         return
+    # A collect that did not fail still carries warnings, including skipped files.
+    for warning in burst.get("warnings") or []:
+        logger.warning(warning)
     _report_burst(burst, store.append_burst(burst), logger)
 
 
@@ -697,8 +712,10 @@ def _collect_exported_log(store, workload, logger) -> int:
     """Read a log the operator exported. Opens no database connection."""
     from planetscale_discovery.workload.burst import (
         ObjectLoggingError,
+        collect_csv_file,
         collect_pgaudit_file,
         collect_stderr_file,
+        sniff_packaging,
     )
 
     path = workload.capture_log_file
@@ -709,18 +726,43 @@ def _collect_exported_log(store, workload, logger) -> int:
         )
         return EXIT_USAGE
 
+    # Encoding is a property of the file, not a config key.
     try:
-        if workload.capture_log_source == SOURCE_STDERR:
-            burst = collect_stderr_file(
-                path, already_read=store.log_files_read(), logger=logger
+        packaging = sniff_packaging(path)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            f"could not read {path}, so this collect recorded a snapshot "
+            f"only: {exc}"
+        )
+        return EXIT_OK
+    logger.info(f"log packaging read from the file as {packaging}")
+    # The JSON reader only understands a PgAuditEntry export.
+    if packaging == "json" and workload.capture_log_type != TYPE_PGAUDIT:
+        logger.warning(
+            f"{path} is a JSON log export, which is read only when "
+            "capture_log_type is pgaudit. No log window was recorded."
+        )
+        return EXIT_OK
+
+    already_read = store.log_files_read()
+    # Type selects the logger. Packaging selects the reader.
+    try:
+        if packaging == "json":
+            burst = collect_pgaudit_file(
+                path, json_export=True, already_read=already_read, logger=logger
+            )
+        elif packaging == "csv":
+            burst = collect_csv_file(
+                path,
+                audit=workload.capture_log_type == TYPE_PGAUDIT,
+                already_read=already_read,
+            )
+        elif workload.capture_log_type == TYPE_PGAUDIT:
+            burst = collect_pgaudit_file(
+                path, json_export=False, already_read=already_read, logger=logger
             )
         else:
-            burst = collect_pgaudit_file(
-                path,
-                json_export=workload.capture_log_source == SOURCE_PGAUDIT_JSON,
-                already_read=store.log_files_read(),
-                logger=logger,
-            )
+            burst = collect_stderr_file(path, already_read=already_read, logger=logger)
     except ObjectLoggingError as exc:
         logger.warning(f"{path} cannot be used, so no log window was recorded: {exc}")
         return EXIT_OK
@@ -1006,7 +1048,7 @@ def _check(args, config, logger) -> int:
 
     pgaudit = log["pgaudit"]
     print("")
-    print(f"pgAudit:   {pgaudit['state']} (the default source)")
+    print(f"pgAudit:   {pgaudit['state']} (set capture_log_type: pgaudit to read it)")
     for name, value in pgaudit["settings"].items():
         if value is not None:
             print(f"           {name} = {value}")

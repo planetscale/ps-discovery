@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from planetscale_discovery.workload.logs.csvlog import to_statement
 from planetscale_discovery.workload.logs.pgaudit import (
     DEFAULT_PREFIX,
     ObjectLoggingError,
@@ -9,8 +10,10 @@ from planetscale_discovery.workload.logs.pgaudit import (
     new_summary,
     read_jsonl_records,
     read_log_records,
+    records_from_csvlog,
     sniff_prefix,
 )
+from planetscale_discovery.workload.logs.record import COLUMNS, WIDTH_PG13
 
 
 def _audit_line(pid, statement_id, sql, audit_type="SESSION", command="SELECT"):
@@ -69,6 +72,55 @@ def _chunk_payload(session, statement_id, chunk_count, chunk_index, statement_pa
         },
         "timestamp": "2024-01-15T10:30:00Z",
     }
+
+
+class TestRecordsFromCsvlog:
+    def test_an_audit_message_becomes_a_statement(self):
+        row = {name: "" for name in COLUMNS[:WIDTH_PG13]}
+        row["log_time"] = "2024-01-01 00:00:00.000 UTC"
+        row["session_id"] = "5f1.3"
+        row["error_severity"] = "LOG"
+        row["message"] = 'AUDIT: SESSION,1,1,READ,SELECT,,,"select 1",<not logged>'
+
+        records = list(records_from_csvlog([row]))
+
+        assert len(records) == 1
+        statement = to_statement(records[0])
+        assert statement["sql"] == "select 1"
+        assert statement["session_id"] == "5f1.3"
+
+    def test_a_non_audit_row_is_ignored(self):
+        row = {name: "" for name in COLUMNS[:WIDTH_PG13]}
+        row["message"] = "connection received: host=127.0.0.1"
+        assert list(records_from_csvlog([row])) == []
+
+    def test_an_error_row_is_counted_and_not_yielded(self):
+        """The bug: a csvlog ERROR row was ignored, so the unattached-error count stayed zero."""
+        error = {name: "" for name in COLUMNS[:WIDTH_PG13]}
+        error["session_id"] = 12345
+        error["error_severity"] = "ERROR"
+        error["message"] = "division by zero"
+        by_process = dict(error)
+        by_process["session_id"] = ""
+        by_process["process_id"] = 99
+        fatal = dict(error)
+        fatal["error_severity"] = "FATAL"
+        fatal["session_id"] = 7
+        summary = new_summary()
+
+        assert list(records_from_csvlog([error, by_process, fatal], summary)) == []
+        assert summary["errors"] == {"12345": 1, "99": 1}
+
+    def test_an_integer_process_id_still_raises_on_a_repeated_statement(self):
+        """The bug: an integer process_id raised AttributeError, so collect skipped the file instead of rejecting object logging."""
+        row = {name: "" for name in COLUMNS[:WIDTH_PG13]}
+        row["session_id"] = None
+        row["process_id"] = 12345
+        row["error_severity"] = "LOG"
+        row["message"] = 'AUDIT: SESSION,1,1,READ,SELECT,,,"select 1",<not logged>'
+
+        with pytest.raises(ObjectLoggingError):
+            list(records_from_csvlog([dict(row), dict(row)]))
 
 
 class TestReadJsonlRecords:

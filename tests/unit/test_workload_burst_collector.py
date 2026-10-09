@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from planetscale_discovery.workload.burst.collector import (
     STATUS_FAILED,
     BurstCollector,
@@ -9,6 +11,7 @@ from planetscale_discovery.workload.burst.collector import (
     _session_summary,
     _table_name,
 )
+from planetscale_discovery.workload.logs.pgaudit import ObjectLoggingError
 from planetscale_discovery.workload.logs.timestamps import instant_utc
 
 
@@ -233,6 +236,79 @@ class TestReadFile:
         assert results[0]["log_file"] == "some.csv"
         assert results[0]["sql"] == "select 2"
         assert collector._skipped_before_watermark == 1
+
+
+def _audit_row(message):
+    return {
+        "log_time": "2024-01-01 00:00:00.000 UTC",
+        "session_id": "5f1.3",
+        "error_severity": "LOG",
+        "message": message,
+    }
+
+
+def _collect_live_rows(rows, log_type="pgaudit"):
+    """Run collect() through the mocked log_fdw read, with no database."""
+    connection = MagicMock()
+    cursor = MagicMock()
+    cursor.__iter__.return_value = iter(rows)
+    connection.cursor.return_value.__enter__.return_value = cursor
+    collector = BurstCollector(connection, config={"capture_log_type": log_type})
+    collector._sql = FakeSql(
+        execute_ok=True,
+        one_map={
+            "pg_foreign_server": None,
+            "pg_extension": {"schema": "public"},
+            "information_schema.columns": {"columns": 24},
+        },
+        all_map={
+            "list_postgres_log_files": [
+                {"file_name": "postgresql.csv", "file_size": 12}
+            ],
+        },
+    )
+    return collector.collect()
+
+
+class TestStatementRowsStayOnTheStatementParser:
+    """The bug: a statement capture on log_fdw parsed AUDIT lines and dropped
+    statement lines."""
+
+    def test_a_statement_row_is_kept_and_an_audit_row_is_dropped(self):
+        result = _collect_live_rows(
+            [
+                {
+                    "log_time": "2024-01-01 00:00:00.000 UTC",
+                    "session_id": "5f1.3",
+                    "error_severity": "LOG",
+                    "message": "statement: select from_statement",
+                },
+                _audit_row(
+                    'AUDIT: SESSION,1,1,READ,SELECT,,,"select from_audit",<not logged>'
+                ),
+            ],
+            log_type="statement",
+        )
+        assert [row["sql"] for row in result["statements"]] == ["select from_statement"]
+        assert "loss_summary" not in result
+
+
+class TestPgauditRowsAreParsedOnTheLiveRead:
+    """The bug: log_fdw handed AUDIT lines to to_statement, which drops them,
+    so a pgAudit capture stored an empty window."""
+
+    def test_an_audit_row_becomes_a_statement(self):
+        result = _collect_live_rows(
+            [_audit_row('AUDIT: SESSION,1,1,READ,SELECT,,,"select 1",<not logged>')]
+        )
+        assert result["statements"][0]["sql"] == "select 1"
+        assert "malformed" in result["loss_summary"]
+
+    def test_an_object_audit_row_aborts_the_window(self):
+        with pytest.raises(ObjectLoggingError):
+            _collect_live_rows(
+                [_audit_row('AUDIT: OBJECT,1,1,READ,SELECT,,,"select 1",<not logged>')]
+            )
 
 
 class TestEventWindow:

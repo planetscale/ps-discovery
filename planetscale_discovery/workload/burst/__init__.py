@@ -7,8 +7,10 @@ from planetscale_discovery.workload.burst.collector import (
 )
 from planetscale_discovery.workload.burst.coverage import coverage, representativeness
 from planetscale_discovery.workload.burst.importer import (
+    collect_csv_file,
     collect_pgaudit_file,
     collect_stderr_file,
+    sniff_packaging,
 )
 from planetscale_discovery.workload.burst.readiness import LogCaptureProbe
 from planetscale_discovery.workload.logs.pgaudit import ObjectLoggingError
@@ -22,8 +24,10 @@ __all__ = [
     "find_leftovers",
     "coverage",
     "representativeness",
+    "collect_csv_file",
     "collect_pgaudit_file",
     "collect_stderr_file",
+    "sniff_packaging",
     "LogCaptureProbe",
     "ObjectLoggingError",
 ]

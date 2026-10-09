@@ -392,8 +392,8 @@ The directory is mode `0700`. Delete it when you have the bundle. To stop
 collection, remove the cron entry and delete the directory.
 
 Nothing persists on the database server with `capture_log` off, and nothing
-persists with the default `pgaudit` source either, which reads a file you
-exported. Only `capture_log_source: log_fdw` writes to the server: each collect
+persists when `capture_log_source` is `file`, which reads a log you exported.
+Only `capture_log_source: log_fdw` writes to the server: each collect
 creates a work schema, a foreign server and the `log_fdw` extension to read the
 log, and drops all three when it finishes. If a collect is killed between the
 two, the next one clears what was left behind, and
@@ -687,13 +687,16 @@ This is a setting, not a command. Nothing about the flow changes: the same
 database:
   workload:
     capture_log: true
-    capture_log_source: pgaudit
-    capture_log_file: pgaudit-capture.log
+    capture_log_type: statement
+    capture_log_file: exported.log
 ```
 
-`pgaudit` is the default source. You turn statement logging on for one role,
-export the window through your provider's own tooling, and name the file. Each
-`collect` takes its snapshot as before and then reads the file.
+`capture_log_type` is required. `statement` reads the server's statement log
+and needs no extension. `pgaudit` reads pgAudit. `capture_log_source` defaults
+to `file`: you export the window and name it in `capture_log_file`. Each
+`collect` takes its snapshot as before and then reads the file. The tool reads
+the file's encoding itself: plain text, csvlog, or a Cloud SQL or AlloyDB
+pgAudit JSON export.
 
 With `capture_log_source: log_fdw`, the tool reads the server's log over its own
 connection instead, and each `collect` watches the log for
@@ -712,42 +715,42 @@ reason as a warning and exits 0. A capture never fails because of this.
 
 ### Where the log comes from
 
-`capture_log_source` selects how the log is read.
+`capture_log_type` selects what was logged. `capture_log_source` selects where
+the log is read. `capture_log_type` is required when `capture_log` is on.
+`statement` needs no extension. `pgaudit` logs one role's traffic, it needs no
+write of any kind to your database, and every setting it uses can be changed
+without a restart after the extension is enabled.
 
-**pgAudit is the default.** It logs one role's traffic, it needs no write of any
-kind to your database, and every setting it uses can be changed without a
-restart. Use another source only where pgAudit cannot run.
+`capture_log_source` defaults to `file`. `log_fdw` reads the csv log the server
+is already writing, over this connection, on RDS and Aurora. That read is
+always csvlog. pgAudit over it is `capture_log_type: pgaudit` plus
+`capture_log_source: log_fdw`.
 
-| Platform | `capture_log_source` | Reads the log by |
-| --- | --- | --- |
-| RDS, Aurora | `pgaudit` | a file you export |
-| RDS, Aurora, no pgAudit available | `log_fdw` | SQL, over `log_fdw` |
-| Cloud SQL, AlloyDB | `pgaudit` or `pgaudit-json` | a file you export |
-| Supabase | `pgaudit` | a file you export |
-| Self-managed | `pgaudit`, or `stderr` with no extension | the log file on the host |
-| Neon, Heroku Postgres, PlanetScale | cannot supply a log | see the provider's guide |
+| `capture_log_type` | Supported `capture_log_source` values |
+| --- | --- |
+| `statement` | `file` (plain text or csvlog). `log_fdw` on RDS and Aurora, which reads csvlog over this connection |
+| `pgaudit` | `file` (plain text, csvlog, or a Cloud SQL or AlloyDB JSON export). `log_fdw` on RDS and Aurora, which reads csvlog over this connection |
 
-`ps-discovery workload init --check` reports which row your server is on. It
-opens a connection, prints what the server can supply, creates no session and
-changes nothing. Add `--json` to sweep an estate.
+`ps-discovery workload init --check` reports what this server can supply. It
+opens a connection, creates no session and changes nothing. Add `--json` to
+sweep an estate.
 
 `log_fdw` reads the log the server is already writing, over this tool's own
 connection, so it needs no export and no restart. It needs the `log_fdw`
 extension, csvlog output and a role holding `rds_superuser`, and it is the only
 source that creates objects in your database.
-[The AWS guide](providers/aws.md#log_fdw-or-pgaudit) compares it with pgAudit in
-full. To get statements into the log in the first place, set
+[The AWS guide](providers/aws.md#log-source) compares `file` and `log_fdw`. To get statements into the log in the first place, set
 `log_min_duration_statement = 0` for the window; see
 [Set the logging up yourself](#set-the-logging-up-yourself).
 
-For the three file sources, export the log through the provider's own tooling
-and name the file:
+For a file source, export the log through the provider's own tooling and name
+the file:
 
 ```yaml
 database:
   workload:
     capture_log: true
-    capture_log_source: pgaudit
+    capture_log_type: pgaudit
     capture_log_file: exported.log
 ```
 
@@ -762,18 +765,20 @@ read and the run says that it took no snapshot. A session of nothing but
 imports has no window to measure the log against, so run at least two `collect`s
 that can connect.
 
-`pgaudit-json` reads Cloud SQL's and AlloyDB's JSON export, either one
-`PgAuditEntry` payload per line or a `gcloud logging read --format=json` array.
-`stderr` reads a plain server log, for hosts where pgAudit cannot be installed
-at all.
+A file is classified before it is parsed. A leading `{` or `[` is the Cloud
+SQL and AlloyDB `PgAuditEntry` export, either one payload per line or a
+`gcloud logging read --format=json` array, and it is read only when
+`capture_log_type` is `pgaudit`. A csvlog row is csv. Anything else with a
+severity marker (`LOG:`, `ERROR:`, and the rest) is plain text.
+`capture_log_type: statement` pointed at a JSON export records no log window.
 
 Per-provider export steps:
-[RDS and Aurora](providers/aws.md#capturing-transaction-shapes-with-pgaudit),
+[RDS and Aurora](providers/aws.md#capturing-transaction-shapes),
 [Cloud SQL and AlloyDB](providers/gcp.md#capturing-transaction-shapes-with-pgaudit),
 [Supabase](providers/supabase.md#capturing-transaction-shapes-with-pgaudit).
 [Neon](providers/neon.md#capturing-transaction-shapes-with-pgaudit) and
 [Heroku](providers/heroku.md#capturing-transaction-shapes-with-pgaudit) cannot
-produce this source; their guides say why.
+produce a log this capture can read; their guides say why.
 
 ### Permissions for log capture
 
@@ -856,8 +861,8 @@ statement and corrupts the record pairing. Keep `log_statement` at `'none'`
 during the window, or every statement is logged twice.
 
 Without pgAudit, set `log_min_duration_statement = 0` for the window instead,
-leave `log_line_prefix` as it is (the tool reads it from the file), and use
-`capture_log_source: stderr`. No extension is needed. The trade-off: the plain
+leave `log_line_prefix` as it is (the tool reads it from the file), and set
+`capture_log_type: statement`. No extension is needed. The trade-off: the plain
 log carries durations and pgAudit does not, but a busy server logs a great deal
 at `log_min_duration_statement = 0`.
 
@@ -874,10 +879,10 @@ needs another.
 | AlloyDB | the `alloydb.enable_pgaudit` flag, restart, `CREATE EXTENSION pgaudit;` |
 | Supabase | enable pgAudit in the dashboard, or `CREATE EXTENSION pgaudit;`; no preload step |
 
-Do this on RDS and Aurora too. A pgAudit capture writes nothing to your
-database and logs one role rather than the whole server. Use `log_fdw` where
-the reboot cannot be scheduled; see
-[log_fdw or pgAudit](providers/aws.md#log_fdw-or-pgaudit).
+Do this on RDS and Aurora too. A pgAudit capture logs one role. With
+`capture_log_source: file` the tool writes nothing to the database. Without
+the reboot, set `capture_log_type: statement`. See
+[Log type](providers/aws.md#log-type).
 
 Some limits carry into every pgAudit capture. None of them stops a capture
 being useful, but each one qualifies what a transaction shape proves.
