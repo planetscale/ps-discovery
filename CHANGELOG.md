@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Query log capture settings.** `capture_log_type` is required when `capture_log` is on, and is `statement` or `pgaudit`. `capture_log_source` is now `file` or `log_fdw`, and defaults to `file`. The tool reads whether an exported file is plain text, csvlog or a pgAudit JSON export. The old `capture_log_source` values `pgaudit`, `pgaudit-json`, `stderr` and `auto` are rejected, and the error names the settings that replace them. See [Capturing transaction shapes and values](docs/workload_capture.md#capturing-transaction-shapes-and-values).
 
+### Fixed
+
+- **`mysql.database` did not limit MySQL discovery to one database.** The setting only chose the connection's default database, and the schema analysis and feature checks scanned every non-system database on the server. They now cover the configured database alone. An empty `database` still covers every non-system database.
+
 ## [2.1.0] - 2026-10-05
 
 ### Added

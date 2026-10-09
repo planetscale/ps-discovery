@@ -233,3 +233,48 @@ class TestCollectAnalyzerIssues:
             "schema", SimpleNamespace(errors=[], warnings=[])
         )
         assert discovery.results["analysis_gaps"] == []
+
+
+class TestDatabaseScope:
+    """mysql.database limits schema discovery to that one database.
+
+    These run the real schema and feature analyzers and record every statement
+    they send, so a query that ignores the setting is caught wherever it lives.
+    """
+
+    def _run(self, params):
+        executed = []
+        cursor = MagicMock()
+        cursor.execute.side_effect = lambda query, args=None: executed.append(
+            (" ".join(query.split()), args)
+        )
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        discovery = MySQLDiscovery(params)
+        discovery.connection = connection
+        discovery.run_analysis(["schema", "features"])
+        return executed
+
+    def test_configured_database_is_the_only_one_queried(self, base_params):
+        # Before the fix, every non-system database on the server was scanned.
+        executed = self._run(base_params)
+
+        assert not any(q.startswith("SHOW DATABASES") for q, _ in executed)
+        info_schema = [(q, a) for q, a in executed if "information_schema." in q]
+        assert info_schema
+        for query, args in info_schema:
+            assert args == ("app",), query
+            assert "NOT IN" not in query, query
+            # Fails on a second %s or a stray % (LIKE 'x%') in a bound query.
+            query % ("'app'",)
+
+    def test_empty_database_covers_every_non_system_database(self, base_params):
+        executed = self._run({**base_params, "database": ""})
+
+        assert any(q.startswith("SHOW DATABASES") for q, _ in executed)
+        info_schema = [(q, a) for q, a in executed if "information_schema." in q]
+        assert info_schema
+        for query, args in info_schema:
+            assert args is None, query
+            assert "NOT IN ('" in query, query
