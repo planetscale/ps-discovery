@@ -170,10 +170,11 @@ class GCPAnalyzer(CloudAnalyzer):
             "costs": {},
             "summary": {},
             "complexity_factors": {},
-            "metadata": self.get_analysis_metadata(),
+            "metadata": {},
         }
 
         if not HAS_GCP_LIBS:
+            analysis_results["metadata"] = self.get_analysis_metadata()
             return analysis_results
 
         for region in self.regions:
@@ -193,6 +194,7 @@ class GCPAnalyzer(CloudAnalyzer):
         analysis_results["complexity_factors"] = self._assess_complexity(
             analysis_results["resources"]
         )
+        analysis_results["metadata"] = self.get_analysis_metadata()
 
         return analysis_results
 
