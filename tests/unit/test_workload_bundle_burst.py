@@ -120,15 +120,14 @@ class TestBurstsInWindow:
         assert included == []
         assert excluded == [b]
 
-    def test_a_live_read_after_the_window_is_kept(self):
-        """The bug: log_fdw watches the log after its own snapshot, so the
-        last window of every capture fell outside and was dropped."""
+    def test_a_live_read_after_the_window_is_excluded(self):
+        """A live window after the last snapshot has no counters, like any other."""
         b = burst(
             "2026-08-25 12:00:05+00:00", "2026-08-25 12:10:00+00:00", source="log_fdw"
         )
         included, excluded, unreadable, undated = _bursts_in_window([b], self.merged())
-        assert included == [b]
-        assert excluded == []
+        assert included == []
+        assert excluded == [b]
 
     def test_a_live_read_before_the_window_is_still_excluded(self):
         b = burst(

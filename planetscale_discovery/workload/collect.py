@@ -549,7 +549,9 @@ class WorkloadCollector(DatabaseAnalyzer):
             "userid": _int(row.get("userid")),
             "dbid": _int(row.get("dbid")),
             "queryid": _text(row.get("queryid")),
-            "toplevel": bool(row.get("toplevel", True)),
+            # None before PostgreSQL 14, which has no toplevel column. A
+            # missing value is unknown, not a top-level or a nested call.
+            "toplevel": _bool(row.get("toplevel")),
             "query": redacted,
             "query_kind": None if masked else statement_kind(raw),
             "text_unavailable": masked,
@@ -694,6 +696,10 @@ def _number(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _bool(value):
+    return None if value is None else bool(value)
 
 
 def _int(value):

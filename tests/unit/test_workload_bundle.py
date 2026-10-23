@@ -440,6 +440,27 @@ class TestCaveats:
             "records statements, not transactions" in c for c in manifest["caveats"]
         )
 
+    def test_evictions_during_the_window_are_disclosed(self, tmp_path):
+        """manifest.json records the eviction, but no reader of it sees why."""
+        manifest = write_bundle(
+            tmp_path,
+            merged([stmt("a")], pgss={"max": 5000, "evicted": True}),
+            SCHEMA,
+            "t",
+        )
+        caveat = next(c for c in manifest["caveats"] if "was full" in c)
+        assert "pg_stat_statements.max (now 5000)" in caveat
+
+    @pytest.mark.parametrize("evicted", [False, None])
+    def test_no_eviction_or_an_unknown_one_is_not_a_caveat(self, tmp_path, evicted):
+        manifest = write_bundle(
+            tmp_path,
+            merged([stmt("a")], pgss={"max": 5000, "evicted": evicted}),
+            SCHEMA,
+            "t",
+        )
+        assert not any("was full" in c for c in manifest["caveats"])
+
     def test_never_analyzed_tables_are_disclosed(self, tmp_path):
         schema = {
             "table_analysis": [
@@ -645,3 +666,40 @@ class TestAnIdleDatabaseSaysSo:
     def test_a_capture_with_traffic_is_not(self, tmp_path):
         summary = write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t")
         assert not any("No queries ran" in c for c in summary["caveats"])
+
+
+class TestNestedCalls:
+    """A statement that a trigger runs is not one the application sent."""
+
+    def _nested(self, sid, calls, nested_calls):
+        query = "UPDATE orders SET id = $1 WHERE id = NEW.id"
+        return dict(stmt(sid, "UPDATE", query, calls), nested_calls=nested_calls)
+
+    def test_the_metrics_line_carries_the_nested_calls(self):
+        sql = render_workload_sql([self._nested("a", 10, 4)], 60.0)
+        assert (
+            "-- neki:metrics calls=10 total_exec_time_ms=5.000 rows=10 "
+            "nested_calls=4\n"
+        ) in sql
+
+    def test_an_unknown_split_is_left_off_the_metrics_line(self):
+        """0 would claim that no call was nested."""
+        sql = render_workload_sql([self._nested("a", 10, None)], 60.0)
+        assert "nested_calls" not in sql
+
+    def test_nested_statements_are_counted_in_the_caveats(self, tmp_path):
+        statements = [
+            self._nested("a", 10, 10),
+            self._nested("b", 10, 4),
+            self._nested("c", 10, 0),
+        ]
+        summary = write_bundle(tmp_path, merged(statements), SCHEMA, "t")
+        caveat = next(c for c in summary["caveats"] if "nested_calls" in c)
+        assert caveat.startswith("2 statement(s) in workload.sql ran inside")
+        assert "1 only there, and 1 also" in caveat
+
+    def test_a_server_with_no_toplevel_column_is_named(self, tmp_path):
+        summary = write_bundle(
+            tmp_path, merged([stmt("a")], toplevel_known=False), SCHEMA, "t"
+        )
+        assert any("no toplevel column" in c for c in summary["caveats"])

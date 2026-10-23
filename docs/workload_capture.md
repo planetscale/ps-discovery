@@ -699,9 +699,10 @@ the file's encoding itself: plain text, csvlog, or a Cloud SQL or AlloyDB
 pgAudit JSON export.
 
 With `capture_log_source: log_fdw`, the tool reads the server's log over its own
-connection instead, and each `collect` watches the log for
-`capture_log_seconds` after its snapshot, so the log window always falls inside
-the snapshot window around it. **Keep the schedule interval longer than
+connection instead. Each `collect` watches the log for `capture_log_seconds`,
+takes its snapshot, and then reads the log. The log window therefore falls
+between the previous snapshot and this one, so the counters in `workload.sql`
+cover the same traffic as `burst.csv`. **Keep the schedule interval longer than
 `capture_log_seconds`**, or the next `collect` starts before this one returns.
 With the hourly crontab line `init` prints, anything up to about 45 minutes is
 safe.
@@ -1156,7 +1157,10 @@ function or procedure is attributed to the call rather than recorded on its own.
 If your application's work happens inside stored procedures, the query log will
 describe the calls rather than the queries. Set `pg_stat_statements.track = all`
 to record both. It costs more shared memory and more entries, so raise
-`pg_stat_statements.max` with it.
+`pg_stat_statements.max` with it. With `all`, `workload.sql` gives each
+statement a `nested_calls` count: the calls that ran inside a function,
+procedure or trigger. `coverage.json` leaves those calls out, because the query
+log never holds them.
 
 ### W202 statement_eviction_possible
 
