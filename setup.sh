@@ -225,7 +225,7 @@ else
 fi
 
 if [ "$engine_choice" = "mysql" ]; then
-    DEPS+=("PyMySQL>=1.1.0")
+    DEPS+=("PyMySQL>=1.2.0")
     INSTALLED_ENGINES="mysql"
 else
     DEPS+=("psycopg2-binary>=2.9.11")
