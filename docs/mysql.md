@@ -170,6 +170,8 @@ The `ssl_mode` setting controls how the connection to MySQL is secured:
 | `verify-ca` | Require SSL and verify the server certificate against the CA |
 | `verify-identity` | Require SSL, verify the certificate, and verify the hostname |
 
+With `required`, `verify-ca` or `verify-identity`, the connection fails when the server offers no TLS. With `preferred`, the connection continues without TLS. The tool needs PyMySQL 1.2.0 or later, which stops before it sends the login.
+
 For PlanetScale and most cloud-hosted MySQL instances, use `required` or higher.
 
 ## What Data Is Collected

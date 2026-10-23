@@ -4,6 +4,7 @@ Main coordinator for comprehensive MySQL environment analysis.
 """
 
 import logging
+import ssl
 from datetime import datetime, timezone
 from typing import Dict, Any
 
@@ -13,6 +14,23 @@ from .mysql_analyzers.performance_analyzer import MySQLPerformanceAnalyzer
 from .mysql_analyzers.replication_analyzer import MySQLReplicationAnalyzer
 from .mysql_analyzers.feature_analyzer import MySQLFeatureAnalyzer
 from .mysql_analyzers.security_analyzer import MySQLSecurityAnalyzer
+
+# The ssl_mode values that must not connect without TLS.
+TLS_REQUIRED_MODES = ("required", "verify-ca", "verify-identity")
+
+# The first PyMySQL that stops before the login when TLS is required and the
+# server offers none.
+MIN_PYMYSQL = (1, 2, 0)
+
+
+def _uses_tls(connection) -> bool:
+    """Whether PyMySQL encrypted this connection.
+
+    PyMySQL has no public attribute for this. ``_sock`` is the socket it reads
+    and writes, and PyMySQL replaces it with an ``ssl.SSLSocket`` when TLS
+    starts.
+    """
+    return isinstance(getattr(connection, "_sock", None), ssl.SSLSocket)
 
 
 class MySQLDiscoveryTool:
@@ -89,10 +107,11 @@ class MySQLDiscovery:
             }
 
             # SSL handling — map MySQL-style ssl_mode to PyMySQL params.
-            #   disabled              -> ssl_disabled=True, no TLS
-            #   preferred / required  -> ssl={}, TLS on, no cert chain verification
-            #   verify-ca             -> ssl_ca required, verify chain only
-            #   verify-identity       -> ssl_ca required, verify chain + hostname
+            #   disabled         -> ssl_disabled=True, no TLS
+            #   preferred        -> no TLS option, TLS when the server offers it
+            #   required         -> TLS required, no cert chain verification
+            #   verify-ca        -> ssl_ca required, verify chain only
+            #   verify-identity  -> ssl_ca required, verify chain + hostname
             ssl_mode = (self.connection_params.get("ssl_mode", "") or "").lower()
             ssl_ca = self.connection_params.get("ssl_ca")
             ssl_cert = self.connection_params.get("ssl_cert")
@@ -100,8 +119,16 @@ class MySQLDiscovery:
 
             if ssl_mode in ("", "disabled"):
                 params["ssl_disabled"] = True
-            elif ssl_mode in ("preferred", "required"):
-                params["ssl"] = {}
+            elif ssl_mode == "preferred":
+                # Set no TLS option. PyMySQL then tries TLS without verifying
+                # the certificate, and continues without TLS when the server
+                # offers none.
+                pass
+            elif ssl_mode == "required":
+                # PyMySQL ignores an empty dict. A dict with a key turns TLS
+                # on, and PyMySQL 1.2.0 and later then fail when the server
+                # offers no TLS. With no CA, PyMySQL skips verification.
+                params["ssl"] = {"check_hostname": False, "verify_mode": False}
             elif ssl_mode in ("verify-ca", "verify-identity"):
                 if not ssl_ca:
                     self.logger.error(
@@ -124,11 +151,40 @@ class MySQLDiscovery:
                 )
                 params["ssl_disabled"] = True
 
+            # The floor is 1.2.0, but an existing install can be older, and
+            # nothing checks the version at install time. pymysql.__version__
+            # is the MySQLdb compatibility number, so read VERSION instead.
+            version = getattr(pymysql, "VERSION", None)
+            if (
+                ssl_mode in ("preferred",) + TLS_REQUIRED_MODES
+                and isinstance(version, tuple)
+                and tuple(version[:3]) < MIN_PYMYSQL
+            ):
+                self.logger.warning(
+                    f"PyMySQL {'.'.join(str(v) for v in version[:3])} is older "
+                    "than 1.2.0. With it, ssl_mode='preferred' never tries TLS, "
+                    "and a mode that requires TLS sends the login before this "
+                    "tool can refuse a connection without TLS. Upgrade PyMySQL."
+                )
+
             # Connect to specific database, or information_schema as fallback
             db = self.connection_params.get("database", "")
             params["database"] = db if db else "information_schema"
 
-            self.connection = pymysql.connect(**params)
+            connection = pymysql.connect(**params)
+
+            # PyMySQL before 1.2.0 does not stop when the server offers no
+            # TLS, even with an ssl dict. So a mode that requires TLS checks
+            # the socket, and refuses a connection that is not encrypted.
+            if ssl_mode in TLS_REQUIRED_MODES and not _uses_tls(connection):
+                connection.close()
+                self.logger.error(
+                    f"ssl_mode={ssl_mode!r} requires TLS, but the connection "
+                    "is not encrypted. Make sure the server offers TLS, and "
+                    "use PyMySQL 1.2.0 or later."
+                )
+                return False
+            self.connection = connection
 
             # Get connection info
             cursor = self.connection.cursor()

@@ -36,7 +36,7 @@ setup(
             "psycopg2-binary>=2.9",
         ],
         "mysql": [
-            "PyMySQL>=1.1.0",
+            "PyMySQL>=1.2.0",
         ],
         "aws": [
             "boto3>=1.42.52",
@@ -76,7 +76,7 @@ setup(
             "pglast>=7,<9",
         ],
         "all": [
-            "PyMySQL>=1.1.0",
+            "PyMySQL>=1.2.0",
             "pglast>=7,<9",
             "boto3>=1.42.52",
             "botocore>=1.42.52",
