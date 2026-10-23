@@ -50,6 +50,14 @@ Two more files appear only when the query log was captured:
 | `burst.csv` | the query log: every statement the server logged, **with literal values in the `parameters` column**, which is real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
 | `coverage.json` | how much of the aggregate workload the log windows observed, and whether they landed on ordinary traffic |
 
+Both checks in `coverage.json` compare the log with the calls that a client
+sent. A call that a function, procedure or trigger runs never reaches the log,
+so the checks leave out the `nested_calls` of each statement.
+`nested_calls_left_out` counts those calls, and `statements.only_nested` counts
+the statements that ran only inside a function, procedure or trigger. When the
+server cannot separate the two (PostgreSQL 13 and earlier), `nesting_unknown` is
+`true` and the checks count every call.
+
 Every capture declares the columns your migration engineer names, and the
 bundle then holds one more file:
 
@@ -106,11 +114,22 @@ Each record in `workload.sql` carries its counters as comments, so the file
 holds the traffic weight as well as the statement:
 
     -- neki:stmt id=<statement id>
-    -- neki:metrics calls=12904 total_exec_time_ms=88213.4 rows=1032320
+    -- neki:metrics calls=12904 total_exec_time_ms=88213.4 rows=1032320 nested_calls=0
     SELECT ... ;
 
 A query log alone weights every pattern equally, so the weight travels with the
 statement.
+
+`nested_calls` counts how many of the `calls` ran inside a function, procedure
+or trigger. It comes from the `toplevel` column of `pg_stat_statements`. A
+statement whose `nested_calls` equals `calls` ran only inside one, so it can
+name `NEW`, `OLD` or a function parameter, which exist only there. PostgreSQL
+records a nested statement only when `pg_stat_statements.track` is `all`.
+
+The header leaves `nested_calls` out when the server cannot say.
+`pg_stat_statements` has no `toplevel` column before PostgreSQL 14, and there
+one entry holds both kinds of call. The README's caveats name this case, and
+count the statements that ran nested.
 
 The planning tools do not read these headers yet. Their SQL loader supplies no
 count, so every pattern arrives weighted 1 and a rare statement carries the
@@ -191,6 +210,8 @@ when the server cannot say: `pg_stat_statements_info` arrived in PostgreSQL 14,
 so 12 and 13 report unknown rather than a `false` that would claim nothing was
 lost. Treat `null` as unknown, not as falsy.
 
+When `pgss.evicted` is `true`, the README's caveats say so too.
+
 ## Column statistics
 
 Row counts say how big a table is. They cannot say whether a column can spread
@@ -223,6 +244,14 @@ you declare are in [`distributions.json`](#value-distributions).
 
 The figures come from the last `ANALYZE`, so they are a sample and an estimate,
 and they describe one column at a time rather than a composite key.
+
+PostgreSQL shows a column in `pg_stats` only to a role that may `SELECT` the
+column. A role that holds only `pg_monitor`, as the capture guide sets up, sees
+only the columns you grant it. When no table in the capture has a row in
+`pg_stats`, the README's caveats say so and name the cause: no `ANALYZE` has
+run, the analyzed tables hold no rows, the role may not `SELECT` the columns,
+or no snapshot could read `pg_stats`. A snapshot that cannot read `pg_stats`
+does not replace an earlier reading, and the caveats count those snapshots.
 
 ## Value distributions
 

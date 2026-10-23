@@ -418,6 +418,52 @@ class TestTheWindowIsBounded:
         assert burst.call_args.kwargs["until"] == "END"
         assert len(session.burst_paths()) == 1
 
+    def test_the_snapshot_closes_the_window_before_the_log_is_read(
+        self, session, mocker
+    ):
+        """The bug: a snapshot before the watch left the last window uncounted."""
+        order = []
+        mocker.patch.object(cli_workload, "_connect", return_value=mocker.Mock())
+        snapshotter = mocker.Mock()
+        snapshotter.collect.side_effect = lambda: (
+            order.append("snapshot") or dict(SNAPSHOT)
+        )
+        mocker.patch.object(cli_workload, "_new_collector", return_value=snapshotter)
+        mocker.patch.object(
+            cli_workload,
+            "_wait",
+            side_effect=lambda seconds: order.append("wait") or False,
+        )
+        reader = mocker.Mock()
+        reader.collect.side_effect = lambda: (
+            order.append("read")
+            or {
+                "status": "ok",
+                "window_start": "2026-09-14T10:00:00Z",
+                "window_end": "2026-09-14T10:10:00Z",
+                "statements": [],
+                "sessions": {},
+                "files_read": ["a"],
+            }
+        )
+        mocker.patch(
+            "planetscale_discovery.workload.burst.BurstCollector",
+            return_value=reader,
+        )
+        workload = WorkloadConfig(
+            capture_log=True,
+            capture_log_type="statement",
+            capture_log_source="log_fdw",
+            capture_log_seconds=10,
+        )
+
+        assert (
+            _collect(_Args(session.directory), _Config(workload), mocker.Mock())
+            == EXIT_OK
+        )
+        assert order == ["wait", "snapshot", "read"]
+        assert len(session.snapshot_paths()) == 1
+
 
 class TestASuccessfulBurstReportsItsLoss:
     def test_warnings_are_logged_and_the_burst_is_stored(self, session, mocker):

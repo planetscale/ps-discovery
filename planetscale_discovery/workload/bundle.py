@@ -169,6 +169,7 @@ def write_bundle(
             outside_window,
             unreadable_bursts,
             distributions_summary,
+            plannable,
         ),
     }
     _write_text(out_dir / "README.md", _render_readme(summary, out_dir))
@@ -542,12 +543,15 @@ def render_workload_sql(
 
     for statement in sorted(statements, key=lambda s: s["id"]):
         counters = statement.get("counters") or {}
+        # Absent, not 0, when the server cannot say which calls were nested.
+        nested = statement.get("nested_calls")
         lines.append(f"-- neki:stmt id={statement['id']}")
         lines.append(
             "-- neki:metrics"
             f" calls={_num(counters.get('calls'))}"
             f" total_exec_time_ms={_ms(counters.get('total_exec_time'))}"
             f" rows={_num(counters.get('rows'))}"
+            + ("" if nested is None else f" nested_calls={_num(nested)}")
         )
         text = (statement.get("query") or "").rstrip().rstrip(";")
         lines.append(f"{text};")
@@ -697,6 +701,7 @@ def _caveats(
     outside_window=None,
     unreadable_bursts=None,
     distributions_summary=None,
+    plannable=None,
 ) -> List[str]:
     """Notes that change how the counts in this bundle should be read."""
     caveats: List[str] = []
@@ -736,6 +741,31 @@ def _caveats(
         caveats.append(
             "Sizes were measured once, so no growth figure could be derived. "
             "A growth rate needs a size reading at each end of the window."
+        )
+
+    empty_stats = _empty_column_stats(merged)
+    if empty_stats:
+        caveats.append(empty_stats)
+    failed_reads = merged.get("pg_stats_failed_reads") or 0
+    if failed_reads and merged.get("pg_stats_read"):
+        # Only the collect console showed these, and the bundle outlives it.
+        caveats.append(
+            f"{failed_reads} snapshot(s) could not read pg_stats "
+            f"({label('column_stats_read_failed')}). column_stats.json holds "
+            "the last reading that succeeded, taken at "
+            f"{merged.get('pg_stats_read_at') or 'an unknown time'}."
+        )
+
+    pgss = merged.get("pgss") or {}
+    if pgss.get("evicted"):
+        # The window's own evictions. W202 at init only says they are possible.
+        limit = f" (now {pgss['max']})" if pgss.get("max") else ""
+        caveats.append(
+            "pg_stat_statements was full during the window, so it discarded "
+            "entries. It discards the least-executed statements first. A "
+            "statement that ran rarely can be missing from workload.sql, or "
+            "its counts can be low. Raise pg_stat_statements.max"
+            f"{limit} before the next capture."
         )
 
     skipped = (merged.get("coverage") or {}).get("intervals_skipped") or []
@@ -801,6 +831,29 @@ def _caveats(
             "the system catalogs rather than your application's traffic."
         )
 
+    nested = [s for s in plannable or [] if s.get("nested_calls")]
+    if nested:
+        only = sum(
+            1
+            for s in nested
+            if s["nested_calls"] >= ((s.get("counters") or {}).get("calls") or 0)
+        )
+        caveats.append(
+            f"{len(nested)} statement(s) in workload.sql ran inside a function, "
+            f"procedure or trigger: {only} only there, and {len(nested) - only} "
+            "also as statements of their own. The nested_calls value on each "
+            "neki:metrics line counts those calls."
+        )
+    if merged.get("toplevel_known") is False:
+        caveats.append(
+            "This server's pg_stat_statements has no toplevel column, which "
+            "arrived in PostgreSQL 14. So workload.sql cannot show which "
+            "statements ran inside a function, procedure or trigger, and its "
+            "neki:metrics lines carry no nested_calls. With "
+            "pg_stat_statements.track set to 'all', those statements look like "
+            "statements your application sent."
+        )
+
     if parse.get("available") is False:
         caveats.append(
             "The schema file was not re-parsed before being written, because the "
@@ -864,6 +917,57 @@ def _caveats(
         )
 
     return caveats
+
+
+def _empty_column_stats(merged: Dict[str, Any]) -> Optional[str]:
+    """A caveat when no table in the capture has column statistics, or None.
+
+    An empty column_stats.json looks the same whatever the cause, so the caveat
+    names the cause that the capture can see. The analyze timestamps come from
+    pg_stat_user_tables, which pg_monitor can read. pg_stats shows a column only
+    to a role that may SELECT it, so the two sources can disagree.
+    """
+    tables = list((merged.get("tables") or {}).values())
+    if not tables or merged.get("columns"):
+        return None
+    effect = (
+        "column_stats.json is empty, and plantest_counts.json holds no NDV or "
+        "null fraction for any column."
+    )
+    if merged.get("pg_stats_read") is False:
+        return (
+            f"{effect} No snapshot could read pg_stats "
+            f"({label('column_stats_read_failed')})."
+        )
+    analyzed = [t for t in tables if t.get("last_analyze") or t.get("last_autoanalyze")]
+    # ANALYZE records no statistics for an empty table.
+    with_rows = sum(1 for t in analyzed if (t.get("estimated_rows") or 0) > 0)
+    seen = f"pg_stats showed no row for any of the {len(tables)} table(s)."
+    if with_rows:
+        return (
+            f"{effect} {seen} {with_rows} of those tables hold rows and record "
+            "an ANALYZE, so PostgreSQL holds statistics for them. pg_stats "
+            "hides a column from a role that may not SELECT the column, and "
+            "from a role that row-level security applies to. See 'Grant the "
+            "capture role each column' in the workload capture guide."
+        )
+    # No table both holds rows and records an ANALYZE. Name each group, so a
+    # capture with some of each gets advice for both.
+    causes = []
+    never = len(tables) - len(analyzed)
+    if never:
+        causes.append(
+            f"{never} table(s) record no ANALYZE, and PostgreSQL fills pg_stats "
+            "only when ANALYZE runs. Run ANALYZE, then run 'collect' again "
+            "before 'finalize'. pg_stats also hides a column from a role that "
+            "may not SELECT the column."
+        )
+    if analyzed:
+        causes.append(
+            f"{len(analyzed)} table(s) record an ANALYZE but hold no rows, and "
+            "ANALYZE records no statistics for an empty table."
+        )
+    return f"{effect} {seen} {' '.join(causes)}"
 
 
 def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:

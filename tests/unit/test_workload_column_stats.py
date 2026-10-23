@@ -146,3 +146,135 @@ class TestItIsWrittenToTheBundle:
 
     def test_it_counts_what_it_measured(self, tmp_path):
         assert self._write(tmp_path)["columns_measured"] == 1
+
+
+class TestAnEmptyReadingIsNamed:
+    """An empty column_stats.json must say why it is empty.
+
+    The capture role from the guide holds pg_monitor only, and pg_stats shows a
+    column only to a role that may SELECT it. A database that ANALYZE never
+    reached looks the same in the file, so the caveat names the cause the
+    capture can see.
+    """
+
+    def _caveats(self, tmp_path, **extra):
+        payload = merged([stmt("a")], **extra)
+        payload["server"] = SERVER
+        return write_bundle(tmp_path, payload, SCHEMA, "t")["caveats"]
+
+    def _tables(self, last_autoanalyze=None, estimated_rows=1000.0):
+        return {
+            "public.orders": {
+                "table": "public.orders",
+                "last_analyze": None,
+                "last_autoanalyze": last_autoanalyze,
+                "estimated_rows": estimated_rows,
+            }
+        }
+
+    def test_analyzed_tables_with_no_visible_statistics_name_the_grant(self, tmp_path):
+        caveats = self._caveats(
+            tmp_path,
+            tables=self._tables("2026-10-01 00:00:00+00"),
+            columns=[],
+            pg_stats_read=True,
+        )
+        caveat = next(c for c in caveats if "column_stats.json is empty" in c)
+        assert "may not SELECT" in caveat
+        assert "Run ANALYZE" not in caveat
+
+    def test_tables_that_were_never_analyzed_ask_for_analyze(self, tmp_path):
+        caveats = self._caveats(
+            tmp_path, tables=self._tables(None), columns=[], pg_stats_read=True
+        )
+        caveat = next(c for c in caveats if "column_stats.json is empty" in c)
+        assert "1 table(s) record no ANALYZE" in caveat
+        assert "Run ANALYZE" in caveat
+
+    def test_a_mix_of_empty_and_unanalyzed_tables_names_both(self, tmp_path):
+        tables = {
+            **self._tables("2026-10-01 00:00:00+00", estimated_rows=0.0),
+            "public.items": {
+                "table": "public.items",
+                "last_analyze": None,
+                "last_autoanalyze": None,
+                "estimated_rows": None,
+            },
+        }
+        caveats = self._caveats(tmp_path, tables=tables, columns=[], pg_stats_read=True)
+        caveat = next(c for c in caveats if "column_stats.json is empty" in c)
+        assert "1 table(s) record no ANALYZE" in caveat
+        assert "1 table(s) record an ANALYZE but hold no rows" in caveat
+
+    def test_an_analyzed_empty_table_is_not_blamed_on_the_grant(self, tmp_path):
+        caveats = self._caveats(
+            tmp_path,
+            tables=self._tables("2026-10-01 00:00:00+00", estimated_rows=0.0),
+            columns=[],
+            pg_stats_read=True,
+        )
+        caveat = next(c for c in caveats if "column_stats.json is empty" in c)
+        assert "hold no rows" in caveat
+        assert "SELECT" not in caveat
+
+    def test_a_failed_read_is_not_reported_as_an_empty_one(self, tmp_path):
+        caveats = self._caveats(
+            tmp_path, tables=self._tables(None), columns=[], pg_stats_read=False
+        )
+        caveat = next(c for c in caveats if "column_stats.json is empty" in c)
+        assert "W214" in caveat
+        assert "ANALYZE" not in caveat
+
+    def test_a_capture_with_column_statistics_has_no_such_caveat(self, tmp_path):
+        caveats = self._caveats(
+            tmp_path,
+            tables=self._tables(None),
+            columns=[dict(column("tenant_id"), first_seen={}, top_share=0.02)],
+            pg_stats_read=True,
+        )
+        assert not any("column_stats.json is empty" in c for c in caveats)
+
+    def test_a_failed_last_read_keeps_the_earlier_reading(self):
+        failed = snap("2026-08-25 11:00:00+00:00", [])
+        failed["warnings"] = [{"code": "column_stats_read_failed", "detail": "x"}]
+        result = merge_snapshots(
+            [snap("2026-08-25 10:00:00+00:00", [column("tenant_id")]), failed]
+        )
+        assert [c["column"] for c in result["columns"]] == ["tenant_id"]
+        assert result["pg_stats_read"] is True
+
+    def test_a_failed_read_after_a_good_one_is_named(self, tmp_path):
+        """A lost tick showed only on the collect console."""
+        caveats = self._caveats(
+            tmp_path,
+            tables=self._tables("2026-10-01 00:00:00+00"),
+            columns=[dict(column("tenant_id"), first_seen={}, top_share=0.02)],
+            pg_stats_read=True,
+            pg_stats_failed_reads=2,
+            pg_stats_read_at="2026-08-25 11:00:00+00:00",
+        )
+        caveat = next(c for c in caveats if "could not read pg_stats" in c)
+        assert caveat.startswith("2 snapshot(s)")
+        assert "taken at 2026-08-25 11:00:00+00:00" in caveat
+
+    def test_the_merge_counts_the_failed_reads(self):
+        failed = snap("2026-08-25 12:00:00+00:00", [])
+        failed["warnings"] = [{"code": "column_stats_read_failed", "detail": "x"}]
+        result = merge_snapshots(
+            [
+                snap("2026-08-25 10:00:00+00:00", [column("tenant_id")]),
+                snap("2026-08-25 11:00:00+00:00", [column("tenant_id")]),
+                failed,
+            ]
+        )
+        assert result["pg_stats_failed_reads"] == 1
+        assert result["pg_stats_read_at"] == "2026-08-25 11:00:00+00:00"
+
+    def test_no_reading_at_all_is_recorded_as_unread(self):
+        failed = [
+            dict(snap(at, []), warnings=[{"code": "column_stats_read_failed"}])
+            for at in ("2026-08-25 10:00:00+00:00", "2026-08-25 11:00:00+00:00")
+        ]
+        result = merge_snapshots(failed)
+        assert result["columns"] == []
+        assert result["pg_stats_read"] is False

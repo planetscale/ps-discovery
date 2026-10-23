@@ -668,10 +668,10 @@ database:
     capture_log_seconds: 600
 ```
 
-Each `collect` then watches the log for `capture_log_seconds` and reads that
-window over its own connection. Keep the schedule interval longer than
-`capture_log_seconds`. The same connection reads a pgAudit csv log when
-`capture_log_type` is `pgaudit` instead of `statement`.
+Each `collect` then watches the log for `capture_log_seconds`, takes its
+snapshot, and reads that window over its own connection. Keep the schedule
+interval longer than `capture_log_seconds`. The same connection reads a pgAudit
+csv log when `capture_log_type` is `pgaudit` instead of `statement`.
 
 **Turn it off afterwards:** return `log_min_duration_statement` to the value it
 had. RDS re-adds `stderr` alongside `csvlog`, so every event is written twice

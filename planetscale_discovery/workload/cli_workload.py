@@ -540,14 +540,16 @@ def _collect(args, config, logger) -> int:
         )
         return EXIT_CAP_REACHED
 
-    from_file = workload.capture_log and workload.capture_log_source != SOURCE_LIVE
+    if workload.capture_log and workload.capture_log_source == SOURCE_LIVE:
+        _capture_log_window(store, config, workload, logger)
+        return EXIT_OK
+
+    from_file = workload.capture_log
     _snapshot(store, config, logger, optional=from_file)
 
     # The snapshot is stored, so an unreadable log is never a non-zero exit.
     if from_file:
         return _collect_exported_log(store, workload, logger)
-    if workload.capture_log:
-        _capture_log_window(store, config, workload, logger)
     return EXIT_OK
 
 
@@ -660,7 +662,7 @@ def _collect_distributions(store, connection, config, logger) -> None:
 
 
 def _capture_log_window(store, config, workload, logger) -> None:
-    """Watch the server's log for capture_log_seconds, then read that window."""
+    """Watch the log for capture_log_seconds, snapshot, then read the window."""
     from planetscale_discovery.workload.burst import STATUS_FAILED, BurstCollector
 
     seconds = workload.capture_log_seconds
@@ -672,6 +674,9 @@ def _capture_log_window(store, config, workload, logger) -> None:
             f"{seconds}s. Storing what it holds"
         )
     until = _utc_now()
+
+    # After the watch so its traffic is counted; before the read so a failed read keeps it.
+    _snapshot(store, config, logger, optional=False)
 
     try:
         connection = _connect(config, logger)
@@ -1092,8 +1097,9 @@ def _print_cron_hint(session: str, workload: WorkloadConfig) -> None:
     print("")
     if watching:
         print(
-            f"Each 'collect' takes one snapshot, then watches the query log for "
-            f"{workload.capture_log_seconds}s. To collect hourly, add"
+            f"Each 'collect' watches the query log for "
+            f"{workload.capture_log_seconds}s, then takes one snapshot. To collect "
+            "hourly, add"
         )
     elif workload.capture_log:
         print(

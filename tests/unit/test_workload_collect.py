@@ -152,6 +152,20 @@ class TestStatementRows:
         assert row["query"] is None
         assert row["query_kind"] is None
 
+    def test_a_server_with_no_toplevel_column_reports_it_as_unknown(self):
+        """PostgreSQL 13 and earlier select NULL AS toplevel. bool(None) read
+        every statement there as nested."""
+        row = self._collector()._statement_row(
+            {"query": "SELECT 1", "calls": 1, "toplevel": None}
+        )
+        assert row["toplevel"] is None
+
+    def test_a_nested_row_is_recorded_as_nested(self):
+        row = self._collector()._statement_row(
+            {"query": "SELECT 1", "calls": 1, "toplevel": False}
+        )
+        assert row["toplevel"] is False
+
     def test_long_text_is_truncated_and_flagged(self):
         from unittest.mock import MagicMock
 
