@@ -320,7 +320,11 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             for row in rows:
                 table_info = dict(row)
 
-                # Get column information
+                # Get column information.
+                # default_sequence is the sequence that the column default
+                # calls when the default is one nextval() call and nothing
+                # else. The default text stays in the database: the query
+                # selects only the sequence name, from pg_depend.
                 try:
                     with self.connection.cursor() as detail_cursor:
                         detail_cursor.execute(
@@ -348,7 +352,18 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                                     AND dep.refobjsubid = a.attnum
                                     AND dep.deptype IN ('a', 'i')
                                     LIMIT 1
-                                ) as owned_sequence
+                                ) as owned_sequence,
+                                (
+                                    SELECT dep.refobjid::regclass::text
+                                    FROM pg_depend dep
+                                    JOIN pg_class seq ON seq.oid = dep.refobjid AND seq.relkind = 'S'
+                                    WHERE dep.classid = 'pg_attrdef'::regclass
+                                    AND dep.objid = d.oid
+                                    AND dep.refclassid = 'pg_class'::regclass
+                                    AND pg_get_expr(d.adbin, d.adrelid)
+                                        ~ '^nextval\\(''(?:[^'']|'''')+''::regclass\\)$'
+                                    LIMIT 1
+                                ) as default_sequence
                             FROM pg_attribute a
                             LEFT JOIN pg_attrdef d ON (a.attrelid = d.adrelid AND a.attnum = d.adnum)
                             WHERE a.attrelid = %s
@@ -378,6 +393,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                                 tablename,
                                 attname,
                                 n_distinct,
+                                null_frac,
                                 correlation
                             FROM pg_stats
                             WHERE schemaname = %s AND tablename = %s

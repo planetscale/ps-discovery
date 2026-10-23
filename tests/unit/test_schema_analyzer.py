@@ -540,6 +540,49 @@ class TestSchemaAnalyzer:
         assert result[0]["columns"][0]["column_name"] == "id"
         assert len(result[0]["statistics"]) == 1
 
+    def test_get_table_analysis_statistics_select_null_frac(self, mock_connection):
+        """The pg_stats query selects null_frac.
+
+        Without it a column with no NULLs reads the same as one whose NULL
+        share was never measured.
+        """
+        connection, _ = mock_connection
+        version_cursor, main_cursor, detail_cursor = (
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+        )
+        cursors = iter([version_cursor, main_cursor])
+
+        def cursor_factory():
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=next(cursors, detail_cursor))
+            ctx.__exit__ = MagicMock(return_value=None)
+            return ctx
+
+        connection.cursor.side_effect = cursor_factory
+        version_cursor.fetchone.return_value = {"server_version_num": "140011"}
+        main_cursor.fetchall.return_value = [
+            {
+                "schema_name": "public",
+                "table_name": "users",
+                "table_oid": 16385,
+                "table_type": "r",
+                "is_partition": False,
+            }
+        ]
+        detail_cursor.fetchall.return_value = []
+
+        SchemaAnalyzer(connection)._get_table_analysis()
+
+        stats_sql = [
+            c.args[0]
+            for c in detail_cursor.execute.call_args_list
+            if "FROM pg_stats" in c.args[0]
+        ]
+        assert len(stats_sql) == 1
+        assert "null_frac" in stats_sql[0]
+
     def test_get_table_analysis_empty(self, mock_connection):
         """Test table analysis with no tables returns empty list"""
         connection, _ = mock_connection
@@ -793,6 +836,35 @@ class TestSchemaAnalyzer:
             assert column in column_sql
         for column in absent:
             assert column not in column_sql
+
+    def test_get_table_analysis_column_default_sequence(
+        self, analyzer, mock_connection
+    ):
+        """Column query names the sequence a nextval() default calls, never the default text"""
+        _, cursor = mock_connection
+        cursor.fetchall.return_value = [
+            {"table_oid": 16385, "table_name": "users", "table_type": "r"}
+        ]
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=170000):
+            analyzer._get_table_analysis()
+
+        column_sql = next(
+            c.args[0]
+            for c in cursor.execute.call_args_list
+            if "FROM pg_attribute a" in c.args[0]
+        )
+        assert "as default_sequence" in column_sql
+        # The sequence comes from pg_depend, through the column's pg_attrdef row.
+        assert "dep.classid = 'pg_attrdef'::regclass" in column_sql
+        assert "dep.objid = d.oid" in column_sql
+        # Only a default that is one nextval() call names a sequence.
+        assert r"~ '^nextval\(''(?:[^'']|'''')+''::regclass\)$'" in column_sql
+        # The default text appears only in that filter. It is never a
+        # selected column, so it cannot reach the report.
+        assert column_sql.count("pg_get_expr") == 1
+        assert "AND pg_get_expr(d.adbin, d.adrelid)" in column_sql
+        assert "adsrc" not in column_sql
 
     # ---------------------------------------------------------------
     # _get_index_analysis()
