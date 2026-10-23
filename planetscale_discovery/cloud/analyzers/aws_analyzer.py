@@ -48,6 +48,40 @@ from .aws_metrics import (
 )
 
 
+def _rds_instance_replication(db_instance: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "read_replica_source_db_instance_identifier": db_instance.get(
+            "ReadReplicaSourceDBInstanceIdentifier"
+        ),
+        "read_replica_db_instance_identifiers": db_instance.get(
+            "ReadReplicaDBInstanceIdentifiers", []
+        ),
+        "read_replica_source_db_cluster_identifier": db_instance.get(
+            "ReadReplicaSourceDBClusterIdentifier"
+        ),
+        "read_replica_db_cluster_identifiers": db_instance.get(
+            "ReadReplicaDBClusterIdentifiers", []
+        ),
+        "replica_mode": db_instance.get("ReplicaMode"),
+    }
+
+
+def _rds_instance_billing(db_instance: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "storage_throughput": db_instance.get("StorageThroughput"),
+        "max_allocated_storage": db_instance.get("MaxAllocatedStorage"),
+        "dedicated_log_volume": db_instance.get("DedicatedLogVolume", False),
+        "engine_lifecycle_support": db_instance.get("EngineLifecycleSupport"),
+    }
+
+
+def _aurora_cluster_replication(db_cluster: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "replication_source_identifier": db_cluster.get("ReplicationSourceIdentifier"),
+        "read_replica_identifiers": db_cluster.get("ReadReplicaIdentifiers", []),
+    }
+
+
 class AWSAnalyzer(CloudAnalyzer):
     """AWS cloud database environment analyzer."""
 
@@ -470,6 +504,8 @@ class AWSAnalyzer(CloudAnalyzer):
                     "region": region,
                     "db_cluster_identifier": db_instance.get("DBClusterIdentifier"),
                     "dbi_resource_id": db_instance.get("DbiResourceId"),
+                    **_rds_instance_replication(db_instance),
+                    **_rds_instance_billing(db_instance),
                 }
 
                 instances.append(instance_analysis)
@@ -532,6 +568,7 @@ class AWSAnalyzer(CloudAnalyzer):
                     ),
                     "backtrack_window": db_cluster.get("BacktrackWindow", 0),
                     "region": region,
+                    **_aurora_cluster_replication(db_cluster),
                 }
 
                 # Get cluster members
@@ -2058,6 +2095,7 @@ class AWSAnalyzer(CloudAnalyzer):
                 "db_instance_class": instance_data.get("DBInstanceClass"),
                 "allocated_storage": instance_data.get("AllocatedStorage"),
                 "storage_type": instance_data.get("StorageType"),
+                "iops": instance_data.get("Iops"),
                 "storage_encrypted": instance_data.get("StorageEncrypted", False),
                 "kms_key_id": instance_data.get("KmsKeyId"),
                 "multi_az": instance_data.get("MultiAZ", False),
@@ -2092,6 +2130,8 @@ class AWSAnalyzer(CloudAnalyzer):
                 "monitoring_interval": instance_data.get("MonitoringInterval", 0),
                 "db_cluster_identifier": instance_data.get("DBClusterIdentifier"),
                 "dbi_resource_id": instance_data.get("DbiResourceId"),
+                **_rds_instance_replication(instance_data),
+                **_rds_instance_billing(instance_data),
             }
 
             self._collect_region_metrics(region, [analysis], [])
@@ -2144,6 +2184,7 @@ class AWSAnalyzer(CloudAnalyzer):
                     }
                     for member in cluster_data.get("DBClusterMembers", [])
                 ],
+                **_aurora_cluster_replication(cluster_data),
             }
 
             if analysis["engine_mode"] == "serverless" or cluster_data.get(
