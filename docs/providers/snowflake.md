@@ -171,7 +171,7 @@ GRANT CONNECT ON DATABASE your_database TO planetscale_discovery;
 GRANT pg_read_all_stats, pg_read_all_settings, pg_monitor TO planetscale_discovery;
 ```
 
-This login cannot read table rows. Discovery still reports the same tables, indexes, extensions, and settings as `snowflake_admin`. The one difference is per-column `n_distinct` / `correlation`, which Postgres only shows for tables the user can `SELECT`. Drop the login after the run:
+This login cannot read table rows. Discovery still reports the same tables, indexes, extensions, and settings as `snowflake_admin`. The one difference is per-column `n_distinct` / `null_frac` / `correlation`, which Postgres only shows for tables the user can `SELECT`. Drop the login after the run:
 
 ```sql
 REVOKE pg_read_all_stats, pg_read_all_settings, pg_monitor FROM planetscale_discovery;
@@ -311,7 +311,7 @@ Use `name` for the instance display name. Use `host` for the connection endpoint
 - Table contents or row data
 - Application code
 - Passwords, password hashes, private keys, or other credentials (used for the connection, never written to the report). Postgres roles appear only as names with a `has_password` flag
-- Column values. Column statistics are limited to `n_distinct` and `correlation`
+- Column values. Column statistics are limited to `n_distinct`, `null_frac` and `correlation`
 
 The report does include hostnames, instance names, the account locator, Postgres role names, and table, column, and index names.
 
