@@ -11,6 +11,8 @@ untouched server that produced "Statistics were reset 44 time(s)" for 43
 duplicated texts.
 """
 
+import pytest
+
 from planetscale_discovery.workload.merge import merge_snapshots, statement_id
 
 SERVER = {"database": "app", "database_oid": 1, "version_num": 170000}
@@ -140,3 +142,77 @@ class TestCumulativeSumsDuplicatesToo:
         record = merged["statements"][statement_id(COMMIT)]
         assert merged["basis"] == "cumulative"
         assert record["counters"]["calls"] == 1055
+
+
+TRIGGER = "UPDATE counts SET n = n + $1 WHERE org_id = NEW.org_id"
+
+
+class TestNestedCallsSurviveTheMerge:
+    """A top-level row and a nested row with the same text become one record.
+
+    With pg_stat_statements.track = all, a statement that a trigger runs is
+    recorded beside the statements the application sends. The record keeps
+    the nested part, so a reader can tell the two apart.
+    """
+
+    def _record(self, first_rows, second_rows, missing=()):
+        first, second = snap(first_rows, T0), snap(second_rows, T1)
+        for snapshot in (first, second):
+            snapshot["statement_columns_missing"] = list(missing)
+        merged = merge_snapshots([first, second])
+        return merged, merged["statements"][statement_id(TRIGGER)]
+
+    def test_the_nested_calls_are_counted_beside_the_total(self):
+        _, record = self._record(
+            [row(TRIGGER, 900, toplevel=True), row(TRIGGER, 40, toplevel=False)],
+            [row(TRIGGER, 950, toplevel=True), row(TRIGGER, 70, toplevel=False)],
+        )
+        assert record["counters"]["calls"] == 80
+        assert record["nested_calls"] == 30
+
+    def test_a_statement_only_a_trigger_runs_is_all_nested(self):
+        _, record = self._record(
+            [row(TRIGGER, 40, toplevel=False)], [row(TRIGGER, 70, toplevel=False)]
+        )
+        assert record["nested_calls"] == record["counters"]["calls"] == 30
+
+    def test_a_top_level_statement_has_no_nested_calls(self):
+        merged, record = self._record([row(TRIGGER, 900)], [row(TRIGGER, 950)])
+        assert record["nested_calls"] == 0
+        assert merged["toplevel_known"] is True
+
+    def test_a_server_with_no_toplevel_column_cannot_say(self):
+        """Snapshots from older versions of this tool stored False there."""
+        merged, record = self._record(
+            [row(TRIGGER, 40, toplevel=False)],
+            [row(TRIGGER, 70, toplevel=False)],
+            missing=("toplevel",),
+        )
+        assert record["nested_calls"] is None
+        assert merged["toplevel_known"] is False
+
+    @pytest.mark.parametrize("unknown", [1, 2])
+    def test_one_unknown_interval_makes_the_window_unknown(self, unknown):
+        """A nested count from the known interval alone would understate the
+        window, in either order. A flag reset per interval passed the suite."""
+        snapshots = [
+            snap([row(TRIGGER, calls, toplevel=False)], at)
+            for calls, at in ((40, T0), (70, T1), (90, "2026-08-25 10:20:00+00:00"))
+        ]
+        snapshots[unknown]["statement_columns_missing"] = ["toplevel"]
+        merged = merge_snapshots(snapshots)
+        record = merged["statements"][statement_id(TRIGGER)]
+        assert record["nested_calls"] is None
+        assert merged["toplevel_known"] is False
+
+    def test_one_snapshot_counts_the_nested_calls_as_well(self):
+        merged = merge_snapshots(
+            [
+                snap(
+                    [row(TRIGGER, 900, toplevel=True), row(TRIGGER, 4, toplevel=False)],
+                    T0,
+                )
+            ],
+            allow_partial=True,
+        )
+        assert merged["statements"][statement_id(TRIGGER)]["nested_calls"] == 4

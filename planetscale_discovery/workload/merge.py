@@ -45,10 +45,17 @@ def _column_stats(usable: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     evenly at the start of a capture and piles onto one value by the end is a
     different risk from one that was always lopsided, and a single reading
     cannot tell them apart.
+
+    A snapshot that could not read pg_stats holds no columns, which is not a
+    reading. The readings come from the snapshots that read it, so one failed
+    tick, the last one included, does not empty the file.
     """
-    first = {(c["table"], c["column"]): c for c in (usable[0].get("columns") or [])}
+    readings = [s for s in usable if _read_pg_stats(s)]
+    if not readings:
+        return []
+    first = {(c["table"], c["column"]): c for c in (readings[0].get("columns") or [])}
     out: List[Dict[str, Any]] = []
-    for current in usable[-1].get("columns") or []:
+    for current in readings[-1].get("columns") or []:
         earlier = first.get((current["table"], current["column"])) or {}
         top = current.get("top_frequencies") or []
         top_first = (earlier.get("top_frequencies") or [None])[0]
@@ -74,6 +81,25 @@ def _column_stats(usable: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def _read_pg_stats(snapshot: Dict[str, Any]) -> bool:
+    """Whether the snapshot read pg_stats, whatever the read returned."""
+    return not any(
+        w.get("code") == "column_stats_read_failed"
+        for w in (snapshot.get("warnings") or [])
+    )
+
+
+def _pg_stats_reads(usable: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Whether any snapshot read pg_stats, how many could not, and when the
+    reading that column_stats.json keeps was taken."""
+    read = [s for s in usable if _read_pg_stats(s)]
+    return {
+        "pg_stats_read": bool(read),
+        "pg_stats_failed_reads": len(usable) - len(read),
+        "pg_stats_read_at": read[-1].get("captured_at_server") if read else None,
+    }
 
 
 def _row_identity(entry: Dict[str, Any]) -> tuple:
@@ -180,6 +206,7 @@ def merge_snapshots(
             "window_end": usable[-1].get("captured_at_server"),
         },
         "pgss": _pgss_window(usable),
+        "toplevel_known": _toplevel_known(usable),
         "row_cap_reached": any(
             w.get("code") == "row_cap_reached"
             for s in usable
@@ -195,6 +222,8 @@ def merge_snapshots(
         # Carried so a reader can tell which database a window came from.
         "server": dict(usable[-1].get("server") or {}),
         "columns": _column_stats(usable),
+        # Separates "pg_stats returned no rows" from "pg_stats was never read".
+        **_pg_stats_reads(usable),
     }
 
 
@@ -254,6 +283,8 @@ def _cumulative(usable, snapshots, allow_partial) -> Dict[str, Any]:
                 "text_unavailable": entry.get("text_unavailable", False),
                 "queryids": [],
                 "counters": {},
+                "nested_counters": {},
+                "nesting_unknown": False,
                 "max_exec_time": None,
                 "min_exec_time": None,
             },
@@ -264,6 +295,7 @@ def _cumulative(usable, snapshots, allow_partial) -> Dict[str, Any]:
         for name, value in (entry.get("counters") or {}).items():
             if value is not None:
                 record["counters"][name] = record["counters"].get(name, 0.0) + value
+        _add_nested(record, snapshot, entry, {})
         record["max_exec_time"] = _max(
             record["max_exec_time"], _lifetime_value(entry, "max_exec_time")
         )
@@ -285,12 +317,14 @@ def _cumulative(usable, snapshots, allow_partial) -> Dict[str, Any]:
             "window_end": snapshot.get("captured_at_server"),
         },
         "resets_observed": 0,
+        "toplevel_known": _toplevel_known(usable),
         "statements": statements,
         "tables": {t["table"]: dict(t) for t in snapshot.get("tables") or []},
         "indexes": {_index_key(i): dict(i) for i in snapshot.get("indexes") or []},
         "lifetime": _lifetime(snapshot),
         "server": dict(snapshot.get("server") or {}),
         "columns": _column_stats(usable),
+        **_pg_stats_reads(usable),
         "totals": _totals(statements, None),
     }
 
@@ -349,6 +383,8 @@ def _accumulate_statements(previous, current, out) -> int:
                 "text_unavailable": entry.get("text_unavailable", False),
                 "queryids": [],
                 "counters": {},
+                "nested_counters": {},
+                "nesting_unknown": False,
                 "max_exec_time": None,
                 "min_exec_time": None,
             },
@@ -360,6 +396,7 @@ def _accumulate_statements(previous, current, out) -> int:
         prior = (before.get(_row_identity(entry)) or {}).get("counters") or {}
         if _add_counters(record["counters"], prior, entry.get("counters") or {}):
             resets += 1
+        _add_nested(record, current, entry, prior)
 
         # Lifetime values: carried, never differenced. The collector keeps them
         # beside `counters` for that reason, so read the record itself first.
@@ -370,6 +407,41 @@ def _accumulate_statements(previous, current, out) -> int:
             record["min_exec_time"], _lifetime_value(entry, "min_exec_time")
         )
     return resets
+
+
+def _add_nested(record, snapshot, entry, prior) -> None:
+    """Add the row's calls from inside a function, procedure or trigger.
+
+    The output keys each statement by its text, so a top-level row and a nested
+    row with the same text become one record. The nested part is kept beside
+    the record's counters, so the split survives the merge.
+    """
+    nested = _nested(snapshot, entry)
+    if nested is None:
+        record["nesting_unknown"] = True
+    elif nested:
+        # A reset is already counted once, with the record's own counters.
+        _add_counters(record["nested_counters"], prior, entry.get("counters") or {})
+
+
+def _nested(snapshot, entry) -> Optional[bool]:
+    """Whether the row counts calls from inside a function, procedure or trigger.
+
+    None when the server cannot say. Before PostgreSQL 14 pg_stat_statements
+    has no toplevel column, and one row holds both kinds of call. Snapshots
+    from older versions of this tool stored that missing value as False, so
+    the snapshot's own list of missing columns decides, not the row.
+    """
+    if "toplevel" in (snapshot.get("statement_columns_missing") or []):
+        return None
+    toplevel = entry.get("toplevel")
+    return None if toplevel is None else not toplevel
+
+
+def _toplevel_known(usable: Sequence[Dict[str, Any]]) -> bool:
+    return not any(
+        "toplevel" in (s.get("statement_columns_missing") or []) for s in usable
+    )
 
 
 def _accumulate_relations(previous, current, tables, indexes) -> int:
@@ -535,6 +607,13 @@ def _finish_statements(statements, covered_seconds) -> None:
         record["mean_exec_time"] = (total / calls) if calls and total else None
         record["calls_per_second"] = (
             (calls / covered_seconds) if covered_seconds and calls else None
+        )
+        # The calls that ran inside a function, procedure or trigger, out of
+        # calls. None when the server cannot separate the two.
+        record["nested_calls"] = (
+            None
+            if record.get("nesting_unknown")
+            else (record.get("nested_counters") or {}).get("calls") or 0.0
         )
 
 

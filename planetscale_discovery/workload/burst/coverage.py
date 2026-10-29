@@ -1,6 +1,12 @@
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 MISSED_REPORTED = 20
+
+NESTING_UNKNOWN = (
+    ". This server's pg_stat_statements cannot separate the calls that ran "
+    "inside a function, procedure or trigger. With pg_stat_statements.track "
+    "set to 'all', the window rate includes them, so the ratio reads low"
+)
 
 STATUS_OK = "ok"
 STATUS_NO_JOIN_KEY = "no_join_key"
@@ -47,16 +53,22 @@ def coverage(
     total_time = 0.0
     seen_calls = 0.0
     seen_time = 0.0
+    matched = 0
+    only_nested = 0
     missed: List[Dict[str, Any]] = []
 
     for record in aggregate:
-        counters = record.get("counters") or {}
-        calls = float(counters.get("calls") or 0)
-        exec_time = float(counters.get("total_exec_time") or 0)
+        calls, exec_time, nested = _top_level(record)
+        if nested and not calls:
+            # The log never holds a statement that only a function,
+            # procedure or trigger ran.
+            only_nested += 1
+            continue
         total_calls += calls
         total_time += exec_time
 
         if _observed(record, observed_ids):
+            matched += 1
             seen_calls += calls
             seen_time += exec_time
         else:
@@ -70,7 +82,7 @@ def coverage(
             )
 
     missed.sort(key=lambda item: item["calls"], reverse=True)
-    matched = len(aggregate) - len(missed)
+    nested_calls, nesting_unknown = _nested_split(aggregate)
 
     return {
         "status": STATUS_OK,
@@ -79,6 +91,7 @@ def coverage(
             "in_aggregate": len(aggregate),
             "observed_in_burst": matched,
             "not_observed": len(missed),
+            "only_nested": only_nested,
         },
         "calls": {
             "total": total_calls,
@@ -92,6 +105,8 @@ def coverage(
         },
         "heaviest_not_observed": missed[:MISSED_REPORTED],
         "not_observed_calls": sum(item["calls"] for item in missed),
+        "nested_calls_left_out": nested_calls,
+        "nesting_unknown": nesting_unknown,
     }
 
 
@@ -103,7 +118,23 @@ def representativeness(
     statements = list(burst_statements)
     window_seconds = merged.get("covered_seconds")
     totals = merged.get("totals") or {}
-    window_calls = float(totals.get("calls") or 0)
+    nested_calls, nesting_unknown = _nested_split(
+        (merged.get("statements") or {}).values()
+    )
+    # totals.calls also counts the calls that ran nested, which the log never
+    # holds.
+    all_calls = float(totals.get("calls") or 0)
+    window_calls = max(all_calls - nested_calls, 0.0)
+
+    if all_calls and not window_calls:
+        return {
+            "known": False,
+            "detail": (
+                "every call in the aggregate window ran inside a function, "
+                "procedure or trigger, and the log holds only the statements "
+                "that a client sent"
+            ),
+        }
 
     if not (burst_seconds and window_seconds and window_calls):
         return {
@@ -123,8 +154,46 @@ def representativeness(
         "burst_statements_per_second": burst_rate,
         "window_calls_per_second": window_rate,
         "ratio": ratio,
-        "detail": _representativeness_detail(ratio),
+        "nested_calls_left_out": nested_calls,
+        "nesting_unknown": nesting_unknown,
+        "detail": _representativeness_detail(ratio)
+        + (NESTING_UNKNOWN if nesting_unknown else ""),
     }
+
+
+def _top_level(record: Dict[str, Any]) -> Tuple[float, float, Optional[float]]:
+    """The calls and execution time of the statement as a client sent it.
+
+    The query log holds only the statements that a client sends. A call that a
+    function, procedure or trigger runs never reaches the log. The record sums
+    its top-level and nested rows, so the nested part is subtracted. The third
+    value is the nested calls, or None when the server cannot separate them.
+    """
+    counters = record.get("counters") or {}
+    calls = float(counters.get("calls") or 0)
+    exec_time = float(counters.get("total_exec_time") or 0)
+    nested = record.get("nested_calls")
+    if nested is None:
+        return calls, exec_time, None
+    nested_time = (record.get("nested_counters") or {}).get("total_exec_time")
+    return (
+        max(calls - float(nested), 0.0),
+        max(exec_time - float(nested_time or 0), 0.0),
+        float(nested),
+    )
+
+
+def _nested_split(records: Iterable[Dict[str, Any]]) -> Tuple[float, bool]:
+    """The nested calls, and whether a statement with calls could not say."""
+    nested_calls = 0.0
+    nesting_unknown = False
+    for record in records:
+        calls, _, nested = _top_level(record)
+        if nested is None:
+            nesting_unknown = nesting_unknown or calls > 0
+        else:
+            nested_calls += nested
+    return nested_calls, nesting_unknown
 
 
 def _representativeness_detail(ratio: Optional[float]) -> str:

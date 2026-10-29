@@ -86,22 +86,11 @@ def _bursts_in_window(bursts, merged):
         if start is None or end is None:
             undated.append(burst)
             included.append(burst)
-        elif end < window_start:
-            excluded.append(burst)
-        elif start > window_end and not _read_during_the_capture(burst):
+        elif end < window_start or start > window_end:
             excluded.append(burst)
         else:
             included.append(burst)
     return included, excluded, unreadable, undated
-
-
-def _read_during_the_capture(burst: Dict[str, Any]) -> bool:
-    """A live read watches the log after its own snapshot, so the last window
-    of a capture always starts after the last snapshot it is measured against.
-    """
-    from planetscale_discovery.workload.burst.collector import SOURCE_LIVE
-
-    return burst.get("source") == SOURCE_LIVE
 
 
 def _scope_burst(burst: Dict[str, Any], known: Set[str]) -> Dict[str, Any]:
