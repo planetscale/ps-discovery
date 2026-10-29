@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-29
+
+### Added
+
+- **PostgreSQL `null_frac` and default sequences.** Column statistics now record `null_frac`. Each column whose default is one `nextval()` call names that sequence in `default_sequence`.
+- **AWS replica links and billing fields.** Each RDS instance and Aurora cluster records its replica source and its replicas. Each RDS instance also records storage throughput, maximum allocated storage, the dedicated log volume and extended support. See [AWS Setup](docs/providers/aws.md).
+- **Nested calls in workload bundles.** Each `neki:metrics` line in `workload.sql` has a `nested_calls` count, and the `coverage.json` checks count only top-level calls. See [Workload Bundle Format](docs/workload-bundle.md).
+
+### Changed
+
+- The workload bundle README caveats give the cause when `column_stats.json` is empty, and say when `pg_stat_statements` evicted entries.
+- The minimum PyMySQL version is now 1.2.0.
+
+### Fixed
+
+- **MySQL `ssl_mode: required` connected without TLS.** A server that offers no TLS now causes the connection to fail. See [MySQL Setup](docs/mysql.md).
+- **`log_fdw` counters did not match `burst.csv`.** Each `collect` now takes its snapshot after the log watch, so the counters in `workload.sql` cover the same traffic as `burst.csv`.
+
 ## [2.2.0] - 2026-10-09
 
 ### Added
