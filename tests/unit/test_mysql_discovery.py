@@ -4,6 +4,8 @@ analysis-gap extraction.
 """
 
 import pytest
+import socket
+from ssl import CERT_NONE, SSLSocket
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -30,6 +32,7 @@ class TestSSLHandling:
         def fake_connect(**kwargs):
             captured.update(kwargs)
             conn = MagicMock()
+            conn._sock = MagicMock(spec=SSLSocket)
             cursor = MagicMock()
             cursor.fetchone.return_value = ("8.0.34", "ps@%", "app")
             conn.cursor.return_value = cursor
@@ -54,16 +57,98 @@ class TestSSLHandling:
         captured = self._capture_connect_params(base_params)
         assert captured.get("ssl_disabled") is True
 
-    def test_ssl_required_enables_tls_without_verification(self, base_params):
-        base_params["ssl_mode"] = "required"
-        captured = self._capture_connect_params(base_params)
-        assert captured.get("ssl") == {}
-        assert "ssl_disabled" not in captured
+    def _pymysql_connection(self, params):
+        """What PyMySQL itself makes of the params, with no server.
 
-    def test_ssl_preferred_enables_tls(self, base_params):
+        Asserting on the params alone passed while ``required`` connected
+        without TLS: PyMySQL ignores an empty ssl dict.
+        """
+        pymysql = pytest.importorskip("pymysql")
+        captured = self._capture_connect_params(params)
+        return pymysql.connections.Connection(defer_connect=True, **captured)
+
+    def test_ssl_required_requires_tls_without_verification(self, base_params):
+        # Catches ssl={}, which PyMySQL ignores, so the connection was plaintext.
+        base_params["ssl_mode"] = "required"
+        conn = self._pymysql_connection(base_params)
+        assert conn.ssl is True
+        assert conn._ssl_required is True
+        assert conn.ctx.verify_mode == CERT_NONE
+        assert conn.ctx.check_hostname is False
+
+    def test_ssl_preferred_tries_tls_and_may_fall_back(self, base_params):
+        # Catches a preferred mode that never tries TLS, or that refuses a
+        # server with no TLS, which is the behavior of required.
         base_params["ssl_mode"] = "preferred"
-        captured = self._capture_connect_params(base_params)
-        assert captured.get("ssl") == {}
+        conn = self._pymysql_connection(base_params)
+        assert conn.ssl is True
+        assert conn._ssl_required is False
+        assert conn.ctx.verify_mode == CERT_NONE
+
+    def _connect_without_tls(self, params):
+        """connect() when PyMySQL returns a connection without TLS. PyMySQL
+        before 1.2.0 can do that even with an ssl dict."""
+        conn = MagicMock()
+        conn._sock = MagicMock(spec=socket.socket)
+        conn.cursor.return_value.fetchone.return_value = ("8.0.34", "ps@%", "app")
+        fake_pymysql = MagicMock()
+        fake_pymysql.connect.return_value = conn
+        with patch.dict("sys.modules", {"pymysql": fake_pymysql}):
+            discovery = MySQLDiscovery(params)
+            return discovery.connect(), discovery, conn
+
+    # A literal list, not the production constant: narrowing the constant must
+    # fail this test, not shrink it.
+    @pytest.mark.parametrize("mode", ["required", "verify-ca", "verify-identity"])
+    def test_mode_that_requires_tls_refuses_a_plaintext_connection(
+        self, base_params, mode
+    ):
+        # Catches an old PyMySQL that drops TLS without an error.
+        base_params["ssl_mode"] = mode
+        base_params["ssl_ca"] = "/etc/ssl/ca.pem"
+        connected, discovery, conn = self._connect_without_tls(base_params)
+        assert connected is False
+        assert discovery.connection is None
+        conn.close.assert_called_once()
+
+    def test_preferred_accepts_a_plaintext_connection(self, base_params):
+        base_params["ssl_mode"] = "preferred"
+        connected, discovery, conn = self._connect_without_tls(base_params)
+        assert connected is True
+        assert discovery.connection is conn
+
+    @pytest.mark.parametrize("mode", [None, "disabled", "garbage"])
+    def test_a_mode_without_tls_accepts_a_plaintext_connection(self, base_params, mode):
+        # Catches a socket check that reaches past the modes that require TLS.
+        # The other tests of these modes always hand back a TLS socket.
+        if mode is not None:
+            base_params["ssl_mode"] = mode
+        connected, discovery, conn = self._connect_without_tls(base_params)
+        assert connected is True
+        assert discovery.connection is conn
+
+    @pytest.mark.parametrize(
+        "version, mode, warned",
+        [
+            ((1, 1, 2, "final"), "required", True),
+            ((1, 1, 2, "final"), "preferred", True),
+            ((1, 1, 2, "final"), "disabled", False),
+            ((1, 2, 0, "final"), "required", False),
+        ],
+    )
+    def test_an_old_pymysql_is_named_when_tls_matters(
+        self, base_params, caplog, version, mode, warned
+    ):
+        # The floor constrains a fresh install only. An old install still runs.
+        base_params["ssl_mode"] = mode
+        fake_pymysql = MagicMock()
+        fake_pymysql.VERSION = version
+        conn = fake_pymysql.connect.return_value
+        conn._sock = MagicMock(spec=SSLSocket)
+        conn.cursor.return_value.fetchone.return_value = ("8.0.34", "ps@%", "app")
+        with patch.dict("sys.modules", {"pymysql": fake_pymysql}):
+            MySQLDiscovery(base_params).connect()
+        assert ("older than 1.2.0" in caplog.text) is warned
 
     def test_verify_ca_requires_ssl_ca(self, base_params):
         base_params["ssl_mode"] = "verify-ca"
