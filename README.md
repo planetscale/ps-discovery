@@ -387,6 +387,8 @@ workload capture also collects the values described below.
 
 **What is NOT collected:** Table contents, customer records, application code, or credentials. Passwords are used only for connection and are never stored in output. Literal values from queries are not collected either, unless you turn on `capture_log`.
 
+**Schema definitions.** Schema metadata includes the text of definitions written into your schema: view and function bodies, CHECK constraints, index, policy and partition expressions, and each column's default and generated expression. A definition can hold a literal that its author wrote, such as `DEFAULT 'pending'`. None of it is a value read from a row. The migration team needs this text to hand your schema back to you with a sharding design applied.
+
 **Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by `$N` placeholders, so `SELECT * FROM orders WHERE email = $1` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
 
 **A workload capture records values from your data in two files.** The bundle README names each one:

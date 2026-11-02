@@ -274,9 +274,8 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             identity_col = (
                 "a.attidentity" if has_declarative_partitioning else "''"
             ) + " as identity_kind"
-            generated_col = (
-                "a.attgenerated" if version_num >= 120000 else "''"
-            ) + " as generated_kind"
+            generated_attr = "a.attgenerated" if version_num >= 120000 else "''"
+            generated_col = generated_attr + " as generated_kind"
 
             with self.connection.cursor() as cursor:
                 # Build query based on version
@@ -323,8 +322,9 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 # Get column information.
                 # default_sequence is the sequence that the column default
                 # calls when the default is one nextval() call and nothing
-                # else. The default text stays in the database: the query
-                # selects only the sequence name, from pg_depend.
+                # else. A generated column keeps its expression in the
+                # default slot, so the expression goes to generated_expression
+                # and never to default_expression.
                 try:
                     with self.connection.cursor() as detail_cursor:
                         detail_cursor.execute(
@@ -363,7 +363,13 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                                     AND pg_get_expr(d.adbin, d.adrelid)
                                         ~ '^nextval\\(''(?:[^'']|'''')+''::regclass\\)$'
                                     LIMIT 1
-                                ) as default_sequence
+                                ) as default_sequence,
+                                CASE WHEN {generated_attr} = ''
+                                    THEN pg_get_expr(d.adbin, d.adrelid)
+                                END as default_expression,
+                                CASE WHEN {generated_attr} <> ''
+                                    THEN pg_get_expr(d.adbin, d.adrelid)
+                                END as generated_expression
                             FROM pg_attribute a
                             LEFT JOIN pg_attrdef d ON (a.attrelid = d.adrelid AND a.attnum = d.adnum)
                             WHERE a.attrelid = %s
@@ -732,7 +738,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                         pg_size_pretty(pg_relation_size(child_class.oid)) as partition_size_human,
                         child_class.reltuples::bigint as estimated_rows
                     FROM pg_inherits i
-                    JOIN pg_class parent_class ON i.inhparent = parent_class.oid
+                    JOIN pg_class parent_class ON i.inhparent = parent_class.oid AND parent_class.relkind = 'p'
                     JOIN pg_namespace parent_ns ON parent_class.relnamespace = parent_ns.oid
                     JOIN pg_class child_class ON i.inhrelid = child_class.oid
                     JOIN pg_namespace child_ns ON child_class.relnamespace = child_ns.oid

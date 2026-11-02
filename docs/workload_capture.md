@@ -509,6 +509,11 @@ the counts and frequencies. For the columns you declare in
 [step 6](#6-declare-the-columns-your-migration-engineer-names), it also reads
 `most_common_vals`, the most common values themselves.
 
+PostgreSQL shows a column in `pg_stats` only to a role that may `SELECT` it.
+The capture role holds `pg_monitor` and nothing else, so the counts cover only
+the columns you grant it, which in practice are the declared ones. See
+[Grant the capture role each column](#grant-the-capture-role-each-column).
+
 It also calls `pg_total_relation_size`, `pg_relation_size` and
 `pg_indexes_size` on each table and index in scope. These report how many bytes
 an object occupies on disk. They read no row, take no lock, and need no

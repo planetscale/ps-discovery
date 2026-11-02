@@ -36,7 +36,7 @@ a customer.
 | --- | --- |
 | `workload.sql` | the query log: one statement per record, `;`-terminated, with `-- neki:` metric headers |
 | `schema.sql` | sequences, tables, indexes, constraints, views, and foreign keys last |
-| `plantest_counts.json` | row count per table, plus NDV and null fraction for indexed and constrained columns |
+| `plantest_counts.json` | row count per table, plus NDV and null fraction for the indexed and constrained columns the capture role may `SELECT` ([why](#column-statistics)) |
 | `plantest_counts-card.json` | identical bytes, under the second name the planning tools open |
 | `manifest.json` | when the capture ran, and over which intervals |
 | `column_stats.json` | per-column value distribution, for judging a shard key |

@@ -184,6 +184,12 @@ statistics, infrastructure topology, and user and role names.
 password is used for the connection and is never written to the output. Literal
 values from queries are not collected either, unless you turn on `capture_log`.
 
+Schema metadata includes the text of definitions written into the schema: view
+and function bodies, CHECK constraints, index, policy and partition
+expressions, and each column's default and generated expression. A definition
+can hold a literal its author wrote, such as `DEFAULT 'pending'`, but never a
+value read from a row.
+
 Where the tool reports a statement, it replaces every literal value with a
 placeholder and removes comments. It records the shape of a query, not the data
 in it.

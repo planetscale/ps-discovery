@@ -403,13 +403,13 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
                     SELECT
                         schemaname,
                         tablename,
-                        pg_total_relation_size(schemaname||'.'||tablename) as total_size_bytes,
-                        pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as total_size_human,
-                        pg_relation_size(schemaname||'.'||tablename) as table_size_bytes,
-                        pg_size_pretty(pg_relation_size(schemaname||'.'||tablename)) as table_size_human
+                        pg_total_relation_size(format('%I.%I', schemaname, tablename)) as total_size_bytes,
+                        pg_size_pretty(pg_total_relation_size(format('%I.%I', schemaname, tablename))) as total_size_human,
+                        pg_relation_size(format('%I.%I', schemaname, tablename)) as table_size_bytes,
+                        pg_size_pretty(pg_relation_size(format('%I.%I', schemaname, tablename))) as table_size_human
                     FROM pg_tables
                     WHERE schemaname NOT IN ('information_schema', 'pg_catalog')
-                    ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+                    ORDER BY pg_total_relation_size(format('%I.%I', schemaname, tablename)) DESC
                     LIMIT 20
                 """)
                 largest_tables = [dict(row) for row in cursor.fetchall()]
