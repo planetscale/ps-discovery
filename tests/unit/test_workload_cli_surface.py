@@ -189,6 +189,11 @@ class TestFinalizeSchemaScoping:
             "planetscale_discovery.workload.cli_workload.WorkloadStore",
             return_value=store,
         )
+        # finalize reads the schema again when it can connect. No test connects.
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload._connect",
+            side_effect=OSError("no database in a unit test"),
+        )
         return store
 
     def test_database_schemas_is_the_fallback(self, mocker):
@@ -285,3 +290,92 @@ class TestLogCaptureSurface:
         args = parser().parse_args(["workload", "init", "--check"])
         assert args.session is None
         assert args.check is True
+
+
+class TestFinalizeReadsTheSchemaAgain:
+    """A migration during the window left statements that the schema from init
+    could not describe."""
+
+    STORED = {
+        "table_analysis": [
+            {
+                "schema_name": "public",
+                "table_name": "orders",
+                "columns": [{"column_name": "id"}],
+            }
+        ]
+    }
+    FRESH = {
+        "table_analysis": [
+            {
+                "schema_name": "public",
+                "table_name": "orders",
+                "columns": [{"column_name": "id"}, {"column_name": "access_path"}],
+            }
+        ]
+    }
+    MERGED = {"coverage": {"window_start": "2026-09-30 17:23:00+00"}}
+
+    def _store(self, mocker):
+        store = mocker.Mock()
+        store.read_schema.return_value = self.STORED
+        return store
+
+    def _connection(self, mocker):
+        connection = mocker.MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = {"now": "2026-10-05 14:20:00+00"}
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload._connect",
+            return_value=connection,
+        )
+        return connection
+
+    def test_a_connection_reads_the_schema_again(self, mocker):
+        from planetscale_discovery.workload.cli_workload import _finalize_schema
+
+        connection = self._connection(mocker)
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload._collect_schema",
+            return_value=self.FRESH,
+        )
+        schema, read = _finalize_schema(
+            self._store(mocker), self.MERGED, mocker.Mock(), mocker.Mock()
+        )
+        assert schema is self.FRESH
+        assert read["read"] == "finalize"
+        assert read["at"] == "2026-10-05 14:20:00+00"
+        connection.close.assert_called_once()
+
+    def test_no_connection_falls_back_to_the_schema_from_init(self, mocker):
+        from planetscale_discovery.workload.cli_workload import _finalize_schema
+
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload._connect",
+            side_effect=OSError("connection refused"),
+        )
+        schema, read = _finalize_schema(
+            self._store(mocker), self.MERGED, mocker.Mock(), mocker.Mock()
+        )
+        assert schema is self.STORED
+        assert read == {
+            "read": "init",
+            "before": "2026-09-30 17:23:00+00",
+            "error": "connection refused",
+        }
+
+    def test_an_empty_read_does_not_replace_the_schema_from_init(self, mocker):
+        """The analyzer returns an empty result, not an error, when a
+        privilege is missing."""
+        from planetscale_discovery.workload.cli_workload import _finalize_schema
+
+        self._connection(mocker)
+        mocker.patch(
+            "planetscale_discovery.workload.cli_workload._collect_schema",
+            return_value={},
+        )
+        schema, read = _finalize_schema(
+            self._store(mocker), self.MERGED, mocker.Mock(), mocker.Mock()
+        )
+        assert schema is self.STORED
+        assert read["read"] == "init"

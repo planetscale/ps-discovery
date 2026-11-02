@@ -11,6 +11,7 @@ from planetscale_discovery.workload.collect import (
     INDEX_SQL,
     PGSS_COLUMNS_SQL,
     PGSS_MAX_SQL,
+    SCHEMA_FINGERPRINT_SQL,
     SERVER_SQL,
     TABLE_SQL,
     WorkloadCollector,
@@ -55,6 +56,8 @@ def what_is_read(sql):
         return "pgss_max"
     if sql == CLOCK_SQL:
         return "clock"
+    if sql == SCHEMA_FINGERPRINT_SQL:
+        return "fingerprint"
     if "pg_extension" in sql:
         return "pgss_schema"
     if "dealloc" in sql:
@@ -73,6 +76,7 @@ ROWS = {
     "pgss_max": [{"m": "5000"}],
     "dealloc": [{"dealloc": 0}],
     "clock": [{"captured_at_server": "2026-09-23 15:24:52+00"}],
+    "fingerprint": [{"fingerprint": "a" * 64}],
 }
 
 

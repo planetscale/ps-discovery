@@ -379,13 +379,24 @@ is a config setting on this same flow, not a separate step.
 commands the same directory. It holds:
 
     workload-session/
-      schema.json                      the schema, captured once by init
+      schema.json                      the schema that init read
+      schemas/
+        schema-<fingerprint>.json.gz        one per schema the capture saw
       snapshots/
         snapshot-20260826T211338.json.gz    one file per collect
         snapshot-20260826T211522.json.gz
       bursts/
         burst-20260826T211400.json.gz       one per collect, with capture_log on
       workload-<capture id>/           the bundle, written by finalize
+
+Each `collect` records a fingerprint of the schema: one SHA-256 digest of the
+relations, columns, defaults, views, sequences, indexes and constraints. When
+the fingerprint is new to the session, `collect` reads the whole schema and keeps a copy in `schemas/`. A
+schema that does not change is read once, by `init`. A new partition is a new
+table, so a table that gets a partition every day adds one copy a day. The
+copies count toward `max_session_mb`, and they stop at a quarter of it. After
+that, `collect` records the fingerprint, keeps no copy, and reports
+[W218](#w218-schema_copy_failed). The snapshots continue.
 
 You can name the directory anything and put it anywhere the cron user can write.
 The directory is mode `0700`. Delete it when you have the bundle. To stop
@@ -458,8 +469,17 @@ the next tick. A gap costs you that interval and nothing else.
 Run `finalize` when you have enough snapshots. It writes the bundle and prints a
 summary, the caveats, and where to send the result.
 
-`finalize` reads only the session directory, so you can run it as often as you
-like, and you can run it again later after more snapshots arrive.
+`finalize` reads the session directory, and it connects to the database to read
+the schema again. A migration during the window changes the schema that the
+statements ran against, and the schema that `init` stored does not show it. The
+bundle README says when the schema was read, and when the fingerprints show that
+it changed. When `finalize` cannot connect, it uses the stored copy that matches
+the last snapshot. A session with no such copy uses the schema that `init`
+stored. The README says which.
+
+You can run `finalize` as often as you like, and you can run it again later
+after more snapshots arrive. To repair a bundle whose schema is out of date, run
+`finalize` again where it can connect.
 
 ## Deliver the bundle
 
@@ -509,14 +529,23 @@ the counts and frequencies. For the columns you declare in
 [step 6](#6-declare-the-columns-your-migration-engineer-names), it also reads
 `most_common_vals`, the most common values themselves.
 
+Each `collect` also reads a fingerprint of the schema from `pg_class`,
+`pg_attribute`, `pg_attrdef`, `pg_index`, `pg_constraint`, `pg_sequence` and
+`pg_namespace`. It is one SHA-256 digest of the definitions, and it holds no name
+or value in readable form.
+
 It also calls `pg_total_relation_size`, `pg_relation_size` and
 `pg_indexes_size` on each table and index in scope. These report how many bytes
 an object occupies on disk. They read no row, take no lock, and need no
 privilege beyond the ones above.
 
 The tool never runs `ANALYZE`, never calls `pg_stat_statements_reset()` and
-never terminates a backend. It holds no table locks, because the schema comes
-from catalog reads and not from `pg_dump`.
+never terminates a backend. It reads the schema from the catalogs, not with
+`pg_dump`. Some catalog functions, such as `pg_get_expr` and `pg_get_viewdef`,
+take an ACCESS SHARE lock on the table they describe, the same lock that a
+`SELECT` takes. The tool ends that transaction within the same `init`,
+`collect` or `finalize` step. So an `ALTER TABLE` that waits for the lock waits
+for seconds, not for the capture.
 
 Session settings apply to this tool's own connection only. The tool sets
 `default_transaction_read_only = on`, a statement timeout, a lock timeout, an
@@ -1316,6 +1345,46 @@ that says why the server ended the session, such as a restart, a failover, or
 `terminating connection due to administrator command`. A connection pooler or a
 proxy between the tool and the server can also close the connection. If every
 snapshot reports this code, check the pooler's query and transaction timeouts.
+
+### W219 schemas_exclude_tables
+
+Reported by `init`. `workload.schemas` leaves out a schema that holds tables with
+rows, or tables that PostgreSQL has not analyzed yet. PostgreSQL 14 and later
+report the row count of such a table as unknown, and a new schema is often in
+that state.
+
+A statement that names only tables in that schema is left out of `workload.sql`,
+and the capture collects no table activity for the schema. The bundle README
+counts those statements per schema. If your application uses the schema, add it
+to `workload.schemas` before the capture starts.
+
+`init` stores the schema of every non-system schema, and `pg_stat_statements` is
+not filtered by schema. So for a finished capture, add the schema and run
+`finalize` again: the statements come back, but the table activity for the
+schema stays missing.
+
+### W217 schema_fingerprint_failed
+
+A snapshot could not read the schema fingerprint.
+
+The snapshot keeps its other data. The bundle cannot date a schema change next
+to that snapshot exactly, and a change after the last fingerprint is not seen.
+The README counts the snapshots with no fingerprint. A single occurrence is
+usually transient, for example a statement timeout. If every tick reports it,
+check that the role can read `pg_class`, `pg_attribute`, `pg_attrdef`,
+`pg_index`, `pg_constraint` and `pg_sequence`.
+
+### W218 schema_copy_failed
+
+A snapshot saw a schema fingerprint that is new to the session, and `collect`
+could not keep a copy of the schema. The read failed, the schema analyzer
+returned no tables, the schema changed again during the read, or the copies
+already use a quarter of `max_session_mb`.
+
+The next `collect` tries again, because the copy is still missing. The bundle
+still dates the change, because the snapshot holds the fingerprint. The copy
+matters only when `finalize` cannot connect: `finalize` then renders an older
+stored schema, and the README says which one.
 
 ## What the capture cannot see
 

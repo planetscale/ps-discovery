@@ -32,12 +32,13 @@ FATAL_CODES: Dict[str, str] = {
 
 # The capture proceeds. Each qualifies the result.
 WARNING_CODES: Dict[str, str] = {
-    # Server settings, reported once by init.
+    # Server settings and the configured scope, reported once by init.
     "nested_statements_not_tracked": "W201",
     "statement_eviction_possible": "W202",
     "io_timing_off": "W203",
     "transaction_boundaries_invisible": "W204",
     "statement_text_may_be_masked": "W213",
+    "schemas_exclude_tables": "W219",
     # What one snapshot collected, reported by any collect.
     "relation_read_failed": "W205",
     "no_tables_in_scope": "W206",
@@ -48,6 +49,8 @@ WARNING_CODES: Dict[str, str] = {
     "row_cap_reached": "W211",
     "statement_text_masked": "W212",
     "column_stats_read_failed": "W214",
+    "schema_fingerprint_failed": "W217",
+    "schema_copy_failed": "W218",
     "connection_lost": "W216",
     # A stored query log window that finalize could not place in this capture.
     "burst_outside_window": "W215",
