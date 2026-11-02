@@ -3,10 +3,20 @@ PostgreSQL Performance Analysis Module
 Analyzes performance metrics, query statistics, and resource utilization.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
 from planetscale_discovery.common.sanitize import redact_sql
+from planetscale_discovery.database.citus import (
+    INDEX_READ_COUNTERS,
+    TABLE_COUNTER_KEYS,
+    CitusContext,
+    apply_logical_database_size,
+    citus_errors,
+    ShardStatistics,
+    invalid_index_flag,
+    size_pretty,
+)
 
 
 def _redact_query_field(row: Dict[str, Any], field: str = "query") -> Dict[str, Any]:
@@ -30,11 +40,28 @@ def _redact_statement_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [_redact_query_field(dict(row)) for row in rows]
 
 
+def _index_usage(index_stats: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Summarize index rows, listing the indexes that record no scan."""
+    unused_indexes = [idx for idx in index_stats if idx["idx_scan"] == 0]
+    return {
+        "all_indexes": index_stats,
+        "unused_indexes": unused_indexes,
+        "unused_count": len(unused_indexes),
+        "total_unused_size_bytes": sum(
+            idx["index_size_bytes"] for idx in unused_indexes
+        ),
+    }
+
+
+LARGEST_TABLES_LIMIT = 20
+
+
 class PerformanceAnalyzer(DatabaseAnalyzer):
     """Analyzes PostgreSQL performance metrics and usage patterns."""
 
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
+        self.citus: Optional[CitusContext] = self.config.get("citus")
 
     def analyze(self) -> Dict[str, Any]:
         """Run complete performance analysis."""
@@ -51,7 +78,139 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
             "replication_lag": self._get_replication_lag(),
         }
 
+        if self.citus is not None:
+            with citus_errors(
+                "Citus activity counters could not be combined.",
+                "performance analysis",
+            ):
+                self._apply_citus(results, self.citus)
+
         return results
+
+    def _apply_citus(self, results: Dict[str, Any], ctx: CitusContext) -> None:
+        """Fill the existing fields of Citus tables and indexes with logical values.
+
+        Reads and writes on a Citus table run on its shards, so the coordinator's
+        counters for the shell stay at zero.
+        """
+        stats = ctx.shard_statistics(self.connection)
+        indexes = {
+            (info["schema_name"], info["index_name"]): info
+            for info in stats.indexes.values()
+        }
+
+        for row in results["table_statistics"]:
+            table = ctx.table_by_name(row["schemaname"], row["tablename"])
+            if table is None:
+                continue
+            combined = stats.tables[table.oid]
+            coordinator = {key: row.get(key) for key in TABLE_COUNTER_KEYS}
+            row.update(combined["counters"])
+            row["citus"] = {
+                "table_type": table.table_type,
+                "source": "shards",
+                "shards_read": combined["shards_read"],
+                "shards_without_event": combined["shards_without_event"],
+                "coordinator": coordinator,
+            }
+
+        largest = results["resource_utilization"].get("largest_tables")
+        database_sizes = results["resource_utilization"].get("database_sizes")
+
+        pretty = size_pretty(
+            self.connection,
+            [info["index_size_bytes"] for info in stats.indexes.values()]
+            + [
+                value
+                for combined in stats.tables.values()
+                for value in (
+                    combined["table_size_bytes"],
+                    combined["total_size_bytes"],
+                )
+            ],
+        )
+
+        usage = results["index_usage"]
+        if "all_indexes" in usage:
+            for row in usage["all_indexes"]:
+                info = indexes.get((row["schemaname"], row["indexrelname"]))
+                if info is None:
+                    continue
+                row["citus"] = {
+                    "source": "shards",
+                    "shards_read": info["shards_read"],
+                    **invalid_index_flag(info),
+                    "coordinator": {
+                        key: row.get(key)
+                        for key in INDEX_READ_COUNTERS
+                        + ("index_size_bytes", "index_size_human")
+                    },
+                }
+                for key in INDEX_READ_COUNTERS:
+                    row[key] = info[key]
+                row["index_size_bytes"] = info["index_size_bytes"]
+                row["index_size_human"] = pretty.get(info["index_size_bytes"])
+            results["index_usage"] = _index_usage(usage["all_indexes"])
+
+        if largest is not None:
+            self._apply_citus_largest_tables(largest, stats, pretty, ctx)
+
+        if database_sizes is not None:
+            apply_logical_database_size(self.connection, ctx, database_sizes, "datname")
+            database_sizes.sort(key=lambda e: e.get("size_bytes") or 0, reverse=True)
+
+    def _apply_citus_largest_tables(
+        self,
+        largest: List[Dict[str, Any]],
+        stats: ShardStatistics,
+        pretty: Dict[int, str],
+        ctx: CitusContext,
+    ) -> None:
+        """Rank Citus tables by their logical size among the largest tables.
+
+        The query ranks by the shell's size, so a large distributed table
+        would be missing from the list.
+        """
+        listed = set()
+        for row in largest:
+            table = ctx.table_by_name(row["schemaname"], row["tablename"])
+            if table is None:
+                continue
+            listed.add(table.oid)
+            combined = stats.tables[table.oid]
+            row["citus"] = {
+                "source": "shards",
+                "coordinator": {
+                    key: row.get(key)
+                    for key in (
+                        "total_size_bytes",
+                        "total_size_human",
+                        "table_size_bytes",
+                        "table_size_human",
+                    )
+                },
+            }
+            row["total_size_bytes"] = combined["total_size_bytes"]
+            row["total_size_human"] = pretty.get(combined["total_size_bytes"])
+            row["table_size_bytes"] = combined["table_size_bytes"]
+            row["table_size_human"] = pretty.get(combined["table_size_bytes"])
+        for oid, table in ctx.tables.items():
+            if oid in listed:
+                continue
+            combined = stats.tables[oid]
+            largest.append(
+                {
+                    "schemaname": table.schema_name,
+                    "tablename": table.table_name,
+                    "total_size_bytes": combined["total_size_bytes"],
+                    "total_size_human": pretty.get(combined["total_size_bytes"]),
+                    "table_size_bytes": combined["table_size_bytes"],
+                    "table_size_human": pretty.get(combined["table_size_bytes"]),
+                    "citus": {"source": "shards", "coordinator": None},
+                }
+            )
+        largest.sort(key=lambda r: r.get("total_size_bytes") or 0, reverse=True)
+        del largest[LARGEST_TABLES_LIMIT:]
 
     def _get_connection_analysis(self) -> Dict[str, Any]:
         """Analyze current connections and connection patterns."""
@@ -328,17 +487,7 @@ class PerformanceAnalyzer(DatabaseAnalyzer):
 
                 index_stats = [dict(row) for row in cursor.fetchall()]
 
-                # Find unused indexes
-                unused_indexes = [idx for idx in index_stats if idx["idx_scan"] == 0]
-
-                return {
-                    "all_indexes": index_stats,
-                    "unused_indexes": unused_indexes,
-                    "unused_count": len(unused_indexes),
-                    "total_unused_size_bytes": sum(
-                        idx["index_size_bytes"] for idx in unused_indexes
-                    ),
-                }
+                return _index_usage(index_stats)
 
         except Exception as e:
             self.logger.error(f"Failed to get index usage: {e}")

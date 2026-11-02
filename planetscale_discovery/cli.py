@@ -516,6 +516,22 @@ def _db_summary_lines_postgres(analysis: Dict, conn_info: Dict) -> List[str]:
         if total_size > 0:
             lines.append(f"- **Total Size:** {_format_bytes(total_size)}")
 
+    citus_results = analysis.get("citus", {})
+    if "summary" in citus_results:
+        citus_summary = citus_results["summary"]
+        version = citus_results.get("version", {}).get("extension_version", "")
+        counts = citus_summary.get("table_counts", {})
+        lines.append(
+            f"- **Citus:** {version}, {citus_summary.get('node_count', 0)} node(s)"
+        )
+        lines.append(
+            "- **Citus Tables:** "
+            + ", ".join(f"{count} {kind}" for kind, count in sorted(counts.items()))
+        )
+        storage = citus_summary.get("cluster_storage_bytes")
+        if storage is not None:
+            lines.append(f"- **Cluster Storage:** {_format_bytes(storage)}")
+
     features_results = analysis.get("features", {})
     if "extensions_analysis" in features_results:
         extensions = features_results["extensions_analysis"].get(
@@ -999,9 +1015,20 @@ def _format_bytes(bytes_value: int) -> str:
 
 def _handle_database_error(e: Exception, logger: Any, engine: str = "postgres") -> None:
     """Print user-friendly database connection error messages."""
+    from .database.citus import CitusClusterError
+
     error_str = str(e)
 
-    if any(
+    # Checked first: a Citus remote error can contain "Connection refused",
+    # which the next branch would blame on the coordinator's host and port.
+    if isinstance(e, CitusClusterError):
+        logger.error(
+            f"Citus discovery stopped. Every node of the Citus cluster must be up "
+            f"and must accept the discovery role, and the role needs the Citus "
+            f"privileges listed in docs/citus.md. No database result was written.\n"
+            f"  {error_str}"
+        )
+    elif any(
         s in error_str
         for s in ["could not connect to server", "Connection refused", "Can't connect"]
     ):
@@ -1286,6 +1313,9 @@ def generate_combined_summary(results: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                     "analysis_gaps": len(analysis_gaps),
                 }
+                citus_summary = analysis.get("citus", {}).get("summary")
+                if citus_summary:
+                    summary["database_summary"]["citus"] = citus_summary
 
     # Extract cloud summary
     if results.get("cloud_results"):

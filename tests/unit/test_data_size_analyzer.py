@@ -369,3 +369,54 @@ class TestDataSizeAnalyzerIntegration:
         assert col["toast_storage_strategy"] == "EXTENDED"
         assert col["count_gt_1kb"] == 250
         assert col["percent_gt_1kb"] == 25.0
+
+
+class TestCitusTables:
+    def test_a_citus_table_is_skipped_and_never_read(self):
+        """Catches an unsampled scan of every shard through a shell table.
+
+        The shell reports 0 rows and 8 kB, so both safeguards would pass it.
+        """
+        from planetscale_discovery.database.citus import CitusContext, CitusTable
+
+        # Classified as accounts_old and listed as pgbench_accounts: matched by
+        # oid, a table renamed between the two queries is still recognized.
+        ctx = CitusContext(extension_version="14.1-1")
+        ctx.tables = {
+            17515: CitusTable(
+                oid=17515,
+                schema_name="public",
+                table_name="accounts_old",
+                table_type="distributed",
+                partmethod="h",
+                repmodel="s",
+                colocation_id=3,
+                distribution_column="bid",
+                autoconverted=False,
+                shard_count=32,
+                access_method="heap",
+            )
+        }
+        analyzer = DataSizeAnalyzer(MagicMock(), {"enabled": True, "citus": ctx})
+        tables = [
+            {
+                "schema_name": "public",
+                "table_name": name,
+                "table_oid": oid,
+                "size_bytes": 8192,
+                "size_gb": 0.0,
+                "estimated_rows": 0,
+            }
+            for name, oid in (("pgbench_accounts", 17515), ("unsharded_t1", 17572))
+        ]
+        analyzer._get_tables_to_analyze = MagicMock(return_value=tables)
+        analyzer._analyze_table = MagicMock(return_value=None)
+
+        results = analyzer.analyze()
+
+        analyzed = [c.args[1] for c in analyzer._analyze_table.call_args_list]
+        assert analyzed == ["unsharded_t1"]
+        assert results["tables_skipped"] == [
+            {"schema": "public", "table": "pgbench_accounts", "reason": "citus_table"}
+        ]
+        assert analyzer.warnings

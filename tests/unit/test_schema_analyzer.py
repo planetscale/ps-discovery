@@ -1537,3 +1537,66 @@ class TestSchemaAnalyzer:
         analyzer = SchemaAnalyzer(connection, config=config)
 
         assert analyzer.config == config
+
+
+class TestCitusExclusions:
+    """Shards and the extension's own objects never appear as customer objects."""
+
+    def statements(self, with_citus):
+        from planetscale_discovery.database import citus
+        from tests.fixtures.database_responses import FakeConnection, citus_handlers
+
+        version = [("SHOW server_version_num", [{"server_version_num": "180006"}])]
+        connection = FakeConnection(version + (citus_handlers() if with_citus else []))
+        ctx = None
+        if with_citus:
+            ctx = citus.detect_citus(connection)
+            citus.preflight(connection, ctx)
+            connection.executed.clear()
+        analyzer = SchemaAnalyzer(connection, config={"citus": ctx} if ctx else {})
+        analyzer.analyze()
+        return connection.statements()
+
+    def query(self, statements, marker):
+        return next(s for s in statements if marker in s)
+
+    @pytest.mark.parametrize(
+        "marker, oid",
+        [
+            ("c.relhassubclass as has_inheritance", "c.oid"),
+            ("pg_get_indexdef(i.oid) as index_definition", "t.oid"),
+            ("FROM pg_constraint con", "con.conrelid"),
+            ("WHERE c.relkind IN ('v', 'm')", "c.oid"),
+            ("child_class.relispartition = true", "child_class.oid"),
+        ],
+    )
+    def test_shard_relations_are_excluded(self, marker, oid):
+        """Catches a shard placement on the coordinator reported as a table.
+
+        pg_constraint returns the coordinator's shard constraints when shards
+        are visible to the connection.
+        """
+        sql = self.query(self.statements(True), marker)
+        assert f"NOT pg_catalog.relation_is_a_known_shard({oid})" in sql
+
+    @pytest.mark.parametrize(
+        "marker, catalog",
+        [
+            ("WHERE c.relkind IN ('v', 'm')", "pg_catalog.pg_class"),
+            ("as is_system_schema", "pg_catalog.pg_namespace"),
+            ("p.prosrc as source_code", "pg_catalog.pg_proc"),
+        ],
+    )
+    def test_extension_objects_are_excluded(self, marker, catalog):
+        """Catches public.citus_tables reported as a customer view, and the
+        citus_internal schema and its functions as customer objects."""
+        sql = self.query(self.statements(True), marker)
+        assert f"citus_dep.classid = '{catalog}'::pg_catalog.regclass" in sql
+
+    def test_no_citus_predicate_without_citus(self):
+        """Catches a Citus predicate in the schema read's SQL on a server without Citus,
+        which workload capture also runs.
+        """
+        for sql in self.statements(False):
+            assert "relation_is_a_known_shard" not in sql
+            assert "citus" not in sql

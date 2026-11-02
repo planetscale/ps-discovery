@@ -843,3 +843,33 @@ class TestRoleMembershipVersionCompatibility:
         assert result["role_memberships"] == []
         assert len(analyzer.warnings) == 1
         assert "Role memberships unavailable" in analyzer.warnings[0]["message"]
+
+
+class TestCitusExclusions:
+    def statements(self, with_citus):
+        from planetscale_discovery.database import citus
+        from tests.fixtures.database_responses import FakeConnection, citus_handlers
+
+        connection = FakeConnection(citus_handlers() if with_citus else [])
+        ctx = None
+        if with_citus:
+            ctx = citus.detect_citus(connection)
+            citus.preflight(connection, ctx)
+            connection.executed.clear()
+        SecurityAnalyzer(connection, config={"citus": ctx} if ctx else {}).analyze()
+        return connection.statements()
+
+    @pytest.mark.parametrize(
+        "marker",
+        ["n.nspacl as schema_acl", "c.relacl as table_acl", "p.proacl as function_acl"],
+    )
+    def test_privileges_on_the_extension_objects_are_excluded(self, marker):
+        """Catches grants on citus_internal and the Citus views reported as
+        grants on customer objects."""
+        sql = next(s for s in self.statements(True) if marker in s)
+        assert "citus_ext.extname IN ('citus', 'citus_columnar')" in sql
+
+    def test_no_citus_predicate_without_citus(self):
+        """Catches a Citus predicate in this analyzer's SQL on a server without Citus."""
+        for sql in self.statements(False):
+            assert "citus" not in sql

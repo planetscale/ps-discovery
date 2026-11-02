@@ -469,7 +469,7 @@ Deliberately out of scope in this release:
 
 | Not collected | Why |
 | --- | --- |
-| **Azure Cosmos DB for PostgreSQL** (Citus) | Planned as a follow-up. It uses a separate SDK and a different cluster/node model. |
+| **Azure Cosmos DB for PostgreSQL** (Citus) | It uses a separate SDK and a different cluster and node model. |
 | **Actual storage *used*** | Only *provisioned* storage size is collected. Live usage would require Azure Monitor, an additional permission, and one metrics call per server. |
 | **Private endpoints** | Flexible Server uses VNet injection or public access with firewall rules, both of which are collected. |
 | **Database lists per server** | The database module already enumerates databases on the server it connects to. |

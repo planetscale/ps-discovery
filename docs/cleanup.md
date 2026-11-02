@@ -18,6 +18,18 @@ DROP USER IF EXISTS planetscale_discovery;
 -- DROP USER planetscale_discovery;
 ```
 
+On a database with the Citus extension, run the cleanup on the coordinator.
+With `citus.enable_create_role_propagation` on, which is the default, the
+dropped role is propagated to every node. Then confirm on every node that the
+role is gone. Each row of the result should show `0`:
+
+```sql
+SELECT nodeid, success, result
+FROM run_command_on_all_nodes(
+  $$SELECT count(*) FROM pg_roles WHERE rolname = 'planetscale_discovery'$$
+);
+```
+
 ## Verify No Temporary Objects Remain
 
 Check that no temporary objects were left behind:
