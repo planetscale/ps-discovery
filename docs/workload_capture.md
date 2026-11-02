@@ -770,7 +770,8 @@ connection, so it needs no export and no restart. It needs the `log_fdw`
 extension, csvlog output and a role holding `rds_superuser`, and it is the only
 source that creates objects in your database.
 [The AWS guide](providers/aws.md#log-source) compares `file` and `log_fdw`. To get statements into the log in the first place, set
-`log_min_duration_statement = 0` for the window; see
+`log_min_duration_statement = 0` for the window, or sample whole transactions
+with `log_transaction_sample_rate`; see
 [Set the logging up yourself](#set-the-logging-up-yourself).
 
 For a file source, export the log through the provider's own tooling and name
@@ -896,6 +897,76 @@ leave `log_line_prefix` as it is (the tool reads it from the file), and set
 log carries durations and pgAudit does not, but a busy server logs a great deal
 at `log_min_duration_statement = 0`.
 
+#### Sample whole transactions instead
+
+On PostgreSQL 12 and later, `log_transaction_sample_rate` logs a random share of
+the transactions, with every statement of each one. At a low rate it can run
+for the whole capture rather than a few minutes, so the log sees the same days
+the snapshots do. Each sampled transaction arrives whole, which a duration
+threshold cannot give you: a threshold keeps the slow statement and drops the
+fast ones from the same transaction.
+
+Set these for the window, where this server's configuration lives (the
+parameter group on RDS and Aurora, database flags on Cloud SQL, or
+`postgresql.conf` and a reload). None needs a restart.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `log_transaction_sample_rate` | for example `0.001` | the share of transactions logged |
+| `log_min_duration_statement` | `-1` | a threshold also logs slow statements from transactions outside the sample, each a fragment of its transaction |
+| `log_statement` | `none` | `ddl` or `mod` adds fragments the same way. `all` logs everything, so the sample has no effect |
+| `log_destination` | include `csvlog` | carries the session and transaction ids whatever `log_line_prefix` says |
+| `compute_query_id` | `on` (PostgreSQL 14 and later) | lets `coverage.json` join the log to `pg_stat_statements` |
+
+Then tell the tool the rate the log was written at:
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_type: statement
+    capture_log_file: exported.csv
+    capture_log_sample_rate: 0.001
+```
+
+`capture_log_sample_rate` applies to `capture_log_type: statement`. With
+`capture_log_source: log_fdw` the tool reads the rate from the server when it
+reads the log, so the setting is optional there. When both are present and
+disagree, the configured rate is recorded, with a warning. A file read with no
+rate configured is treated as a complete log.
+
+If you set the rate on the application's role with `ALTER ROLE app SET
+log_transaction_sample_rate`, also set `capture_log_sample_rate`, with
+`log_fdw` too. The tool reads the settings its own session sees, and a role's
+setting applies only to that role's sessions. Without the setting, the log is
+read as complete, and `init --check` does not see the rate either. A rate set
+server-wide or with `ALTER DATABASE` on the captured database is visible to the
+tool.
+
+A log that runs for the whole capture is exported once, after the last
+scheduled `collect`. Name it in `capture_log_file` and run `collect` once more.
+
+**Choosing the rate.** The log holds about `rate × calls` of each statement. A
+transaction your application runs 20 times in the window is likely to be
+missing at a rate of 0.001, and `coverage.json` says so: each statement the log
+missed carries `expected_in_log` and `chance_absent`. A statement that runs many
+times inside one transaction is missed more often than its `chance_absent`
+says; [Workload Bundle Format](workload-bundle.md) explains why. Volume is the rate times
+what a full log would write, roughly 150 to 300 bytes per statement, and three
+lines per statement over the extended query protocol. A server running 10,000
+statements a second, sampled at 0.001, logs about 2.6 million statements over
+three days: 0.4 to 0.8 GB, or up to 2.3 GB over the extended protocol.
+
+**Bind values.** `burst.csv` keeps the values the log carries. On PostgreSQL 13
+and later, `log_parameter_max_length = 0` keeps bind values out of the log. The
+transaction shapes remain, but per-value access skew is lost, and a client that
+builds its SQL with literals still puts them in the statement text.
+
+`ps-discovery workload init --check` reports a sample rate whose meaning other
+settings change: `sampled_log_holds_unsampled_statements` when a threshold or
+`log_statement` adds fragments, and `transaction_sample_rate_has_no_effect`
+when the log is complete anyway.
+
 ### Enable pgAudit once
 
 Every provider needs one restart to enable pgAudit. After that, no capture
@@ -933,7 +1004,7 @@ money or disk:
 
 1. **The statement logging you turned on.** Reset it on the role, as step 3 of
    the recipe above. Without pgAudit, return `log_min_duration_statement` to
-   the value it had. `finalize` prints this reminder when the bundle holds a
+   the value it had, and `log_transaction_sample_rate` to `0`. `finalize` prints this reminder when the bundle holds a
    log window.
 2. **The exported log files.** Delete them once the bundle is built and
    delivered. They hold literal values from your queries.

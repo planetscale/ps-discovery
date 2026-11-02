@@ -1,6 +1,15 @@
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+import math
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 MISSED_REPORTED = 20
+
+# A statement this likely to be absent from the log by chance is not a gap.
+LIKELY_BY_CHANCE = 0.05
+
+SAMPLED = (
+    ". The log is a sample of the server's transactions, so the burst rate "
+    "is scaled up by the sample rate before it is compared"
+)
 
 NESTING_UNKNOWN = (
     ". This server's pg_stat_statements cannot separate the calls that ran "
@@ -16,6 +25,7 @@ STATUS_NO_AGGREGATE = "no_aggregate"
 def coverage(
     burst_statements: Iterable[Dict[str, Any]], merged: Dict[str, Any]
 ) -> Dict[str, Any]:
+    burst_statements = list(burst_statements)
     aggregate = list((merged.get("statements") or {}).values())
     observed_ids = {
         statement["query_id"]
@@ -84,6 +94,21 @@ def coverage(
     missed.sort(key=lambda item: item["calls"], reverse=True)
     nested_calls, nesting_unknown = _nested_split(aggregate)
 
+    # The share of the window's calls the log holds. It folds in a sample rate
+    # and a log that covers part of the window, and assumes no even spread in time.
+    # chance_absent treats each call as its own transaction. A sample takes
+    # transactions, so calls that share one are missed together, and the true
+    # chance is higher: this is a lower bound. pg_stat_statements has no
+    # per-statement transaction count to do better.
+    by_chance: Optional[int] = None
+    if total_calls:
+        share = min(len(burst_statements) / total_calls, 1.0)
+        for item in missed:
+            expected = item["calls"] * share
+            item["expected_in_log"] = expected
+            item["chance_absent"] = math.exp(-expected)
+        by_chance = sum(1 for m in missed if m["chance_absent"] >= LIKELY_BY_CHANCE)
+
     return {
         "status": STATUS_OK,
         "joined_on": "query_id",
@@ -105,6 +130,7 @@ def coverage(
         },
         "heaviest_not_observed": missed[:MISSED_REPORTED],
         "not_observed_calls": sum(item["calls"] for item in missed),
+        "not_observed_likely_by_chance": by_chance,
         "nested_calls_left_out": nested_calls,
         "nesting_unknown": nesting_unknown,
     }
@@ -114,7 +140,14 @@ def representativeness(
     burst_statements: Iterable[Dict[str, Any]],
     merged: Dict[str, Any],
     burst_seconds: Optional[float],
+    estimated_statements: Optional[float] = None,
+    sample_rates: Sequence[float] = (),
 ) -> Dict[str, Any]:
+    """The burst's statement rate against the window's call rate.
+
+    A sampled log passes ``estimated_statements``, each burst's count divided by
+    its sample rate, and the rates themselves.
+    """
     statements = list(burst_statements)
     window_seconds = merged.get("covered_seconds")
     totals = merged.get("totals") or {}
@@ -146,10 +179,14 @@ def representativeness(
         }
 
     burst_rate = len(statements) / float(burst_seconds)
+    sampled = any(rate < 1 for rate in sample_rates)
+    compared = burst_rate
+    if sampled and estimated_statements is not None:
+        compared = estimated_statements / float(burst_seconds)
     window_rate = window_calls / float(window_seconds)
-    ratio = (burst_rate / window_rate) if window_rate else None
+    ratio = (compared / window_rate) if window_rate else None
 
-    return {
+    result = {
         "known": True,
         "burst_statements_per_second": burst_rate,
         "window_calls_per_second": window_rate,
@@ -157,8 +194,13 @@ def representativeness(
         "nested_calls_left_out": nested_calls,
         "nesting_unknown": nesting_unknown,
         "detail": _representativeness_detail(ratio)
+        + (SAMPLED if sampled else "")
         + (NESTING_UNKNOWN if nesting_unknown else ""),
     }
+    if sampled:
+        result["sample_rates"] = sorted(set(sample_rates))
+        result["estimated_statements_per_second"] = compared
+    return result
 
 
 def _top_level(record: Dict[str, Any]) -> Tuple[float, float, Optional[float]]:

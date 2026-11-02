@@ -131,7 +131,10 @@ class LogCaptureProbe(DatabaseAnalyzer):
                 fix=(
                     "Set log_min_duration_statement = 0 for every statement, or "
                     "log_transaction_sample_rate above 0 for whole sampled "
-                    "transactions. Both take effect on reload, with no restart."
+                    "transactions. Both take effect on reload, with no restart. "
+                    "This check sees its own session's settings: a setting made "
+                    "with ALTER ROLE on the application's role does not show "
+                    "here."
                 ),
                 where=provider,
             ),
@@ -249,9 +252,11 @@ class LogCaptureProbe(DatabaseAnalyzer):
         notes: List[Dict[str, str]] = []
 
         log_statement_on = (settings.get("log_statement") or "none") != "none"
-        logs_durations = _logs_every_statement(
-            settings.get("log_min_duration_statement")
-        )
+        logs_durations = _logs_durations(settings.get("log_min_duration_statement"))
+
+        sampling = sample_rate_note(settings)
+        if sampling:
+            notes.append(sampling)
 
         if log_statement_on and not logs_durations:
             notes.append(
@@ -522,11 +527,74 @@ def _prefix_escapes(prefix: Optional[str]) -> Dict[str, Any]:
 
 
 def _logging_statements(settings: Dict[str, Optional[str]]) -> bool:
-    if _logs_every_statement(settings.get("log_min_duration_statement")):
-        return True
-    if (settings.get("log_statement") or "none") != "none":
-        return True
-    return _positive(settings.get("log_transaction_sample_rate"))
+    return log_sample_rate(settings) is not None
+
+
+def log_sample_rate(settings: Dict[str, Optional[str]]) -> Optional[float]:
+    """The share of transactions the log holds whole: 1.0, a sample rate, or None.
+
+    None means the settings log no complete stream of transactions: a duration
+    threshold keeps only slow statements, and log_statement 'ddl' or 'mod' only
+    some kinds.
+    """
+    if _logs_everything(settings):
+        return 1.0
+    rate = _num(settings.get("log_transaction_sample_rate"))
+    if rate is not None and rate > 0:
+        return min(rate, 1.0)
+    return None
+
+
+def sample_rate_note(settings: Dict[str, Optional[str]]) -> Optional[Dict[str, str]]:
+    """A note when other logging settings change what a sample rate means."""
+    rate = _num(settings.get("log_transaction_sample_rate")) or 0.0
+    if not 0 < rate < 1:
+        return None
+    full = _full_log_setting(settings)
+    if full:
+        return {
+            "code": "transaction_sample_rate_has_no_effect",
+            "detail": (
+                f"log_transaction_sample_rate is {rate:g}, but {full} already "
+                "logs every statement, so the log is complete rather than a "
+                "sample"
+            ),
+        }
+    outside = _outside_sample_setting(settings)
+    if outside:
+        return {
+            "code": "sampled_log_holds_unsampled_statements",
+            "detail": (
+                f"log_transaction_sample_rate is {rate:g}, and {outside} also "
+                "logs statements from transactions outside the sample. Each one "
+                "is a fragment of its transaction, and no line says which kind "
+                "it is. Set log_min_duration_statement = -1 and log_statement = "
+                "none for the window"
+            ),
+        }
+    return None
+
+
+def _logs_everything(settings: Dict[str, Optional[str]]) -> bool:
+    return _full_log_setting(settings) is not None
+
+
+def _full_log_setting(settings: Dict[str, Optional[str]]) -> Optional[str]:
+    if _num(settings.get("log_min_duration_statement")) == 0:
+        return "log_min_duration_statement = 0"
+    if (settings.get("log_statement") or "none") == "all":
+        return "log_statement = 'all'"
+    return None
+
+
+def _outside_sample_setting(settings: Dict[str, Optional[str]]) -> Optional[str]:
+    threshold = _num(settings.get("log_min_duration_statement"))
+    if threshold is not None and threshold > 0:
+        return f"log_min_duration_statement = {settings['log_min_duration_statement']}"
+    log_statement = settings.get("log_statement") or "none"
+    if log_statement in ("ddl", "mod"):
+        return f"log_statement = '{log_statement}'"
+    return None
 
 
 def _tiers(requirements: Dict[str, Dict[str, Any]]) -> Dict[str, bool]:
@@ -555,12 +623,7 @@ def _num(value: Optional[str]) -> Optional[float]:
         return None
 
 
-def _positive(value: Optional[str]) -> bool:
-    number = _num(value)
-    return number is not None and number > 0
-
-
-def _logs_every_statement(value: Optional[str]) -> bool:
+def _logs_durations(value: Optional[str]) -> bool:
     # log_min_duration_statement is "on" at 0 and "off" at -1, not the reverse.
     number = _num(value)
     return number is not None and number >= 0

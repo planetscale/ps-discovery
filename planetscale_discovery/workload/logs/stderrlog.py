@@ -18,7 +18,8 @@ ESCAPES: Dict[str, Tuple[str, Optional[str]]] = {
     "n": (r"\d+\.\d+", "log_time"),
     "p": (r"\d+", "process_id"),
     "c": (r"[0-9a-f]+\.[0-9a-f]+", "session_id"),
-    "v": (r"\d+/\d+", "virtual_transaction_id"),
+    # Empty for a background process, which has no virtual transaction.
+    "v": (r"(?:\d+/\d+)?", "virtual_transaction_id"),
     "x": (r"\d+", "transaction_id"),
     "u": (_WORD, "user_name"),
     "d": (_WORD, "database_name"),
