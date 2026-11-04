@@ -69,6 +69,7 @@ class DataSizeAnalyzer(DatabaseAnalyzer):
                 "64kb": 65536,
             },
         )
+        self.citus = self.config.get("citus")
 
     def analyze(self) -> Dict[str, Any]:
         """
@@ -111,10 +112,26 @@ class DataSizeAnalyzer(DatabaseAnalyzer):
         # Get list of tables to analyze
         tables = self._get_tables_to_analyze()
 
+        citus_skipped = 0
         for table in tables:
             schema_name = table["schema_name"]
             table_name = table["table_name"]
             table_size_gb = table["size_gb"]
+
+            # The coordinator holds only a Citus table's shell, so its size and
+            # row estimate would pass both safeguards, and every column query
+            # would scan every shard in the cluster without sampling.
+            if self.citus is not None and table.get("table_oid") in self.citus.tables:
+                results["tables_skipped"].append(
+                    {
+                        "schema": schema_name,
+                        "table": table_name,
+                        "reason": "citus_table",
+                    }
+                )
+                results["summary"]["total_tables_skipped"] += 1
+                citus_skipped += 1
+                continue
 
             # Skip large tables if configured
             if table_size_gb > self.max_table_size_gb:
@@ -160,6 +177,12 @@ class DataSizeAnalyzer(DatabaseAnalyzer):
                     }
                 )
                 results["summary"]["total_tables_skipped"] += 1
+
+        if citus_skipped:
+            self.add_warning(
+                f"Skipped {citus_skipped} Citus table(s): data size analysis reads "
+                "rows, and on a Citus table it would read every shard in full"
+            )
 
         self.logger.info(
             f"Data size analysis complete: {results['summary']['total_tables_analyzed']} tables analyzed, "

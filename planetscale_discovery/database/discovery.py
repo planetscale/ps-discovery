@@ -20,6 +20,8 @@ from .analyzers.performance_analyzer import PerformanceAnalyzer
 from .analyzers.security_analyzer import SecurityAnalyzer
 from .analyzers.feature_analyzer import FeatureAnalyzer
 from .analyzers.data_size_analyzer import DataSizeAnalyzer
+from .analyzers.citus_analyzer import CitusAnalyzer
+from .citus import CitusClusterError, detect_citus, preflight
 
 
 class DatabaseDiscoveryTool:
@@ -47,6 +49,7 @@ class DatabaseDiscoveryTool:
             data_size_config=self.config.database.data_size,
             excluded_databases=self.config.database.excluded_databases,
             statement_timeout=self.config.database.statement_timeout,
+            citus_detection=True,
         )
         if not discovery.connect():
             raise ConnectionError("Failed to connect to PostgreSQL database")
@@ -77,6 +80,7 @@ class PostgreSQLDiscovery:
         data_size_config=None,
         excluded_databases=None,
         statement_timeout: str = "300s",
+        citus_detection: bool = False,
     ):
         # statement_timeout is a server GUC, not a libpq connection parameter, so
         # it is held separately. Leaving it inside connection_params would make
@@ -89,6 +93,10 @@ class PostgreSQLDiscovery:
         )
         self.data_size_config = data_size_config
         self.excluded_databases = excluded_databases or []
+        # Only callers that can stop on CitusClusterError opt in. Workload
+        # capture does not: its connection runs every query in one transaction.
+        self.citus_detection = citus_detection
+        self.citus = None
         self.connection = None
         self.results = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -148,11 +156,13 @@ class PostgreSQLDiscovery:
             "security": SecurityAnalyzer,
             "features": FeatureAnalyzer,
             "data_size": DataSizeAnalyzer,
+            "citus": CitusAnalyzer,
         }
 
-        # Run all modules if none specified
+        # Run all modules if none specified. The citus module is added only
+        # when the extension is detected.
         if modules is None:
-            modules = list(available_modules.keys())
+            modules = [name for name in available_modules if name != "citus"]
 
         self.logger.info(f"Running analysis modules: {modules}")
 
@@ -188,9 +198,21 @@ class PostgreSQLDiscovery:
             return self.results
 
         try:
+            # Raises CitusClusterError before any analyzer runs, so a cluster
+            # that cannot be read fails in seconds, not after a full run.
+            citus_ctx = self._prepare_citus(analyzer_connection)
+            if citus_ctx is not None and "citus" not in modules:
+                modules = list(modules) + ["citus"]
+            citus_config = {"citus": citus_ctx} if citus_ctx is not None else {}
+
             for module_name in modules:
                 if module_name not in available_modules:
                     self.logger.warning(f"Unknown module: {module_name}")
+                    continue
+                if module_name == "citus" and citus_ctx is None:
+                    self.logger.warning(
+                        "Skipping citus analysis: the citus extension was not detected"
+                    )
                     continue
 
                 try:
@@ -201,7 +223,10 @@ class PostgreSQLDiscovery:
                     if module_name == "schema":
                         analyzer = available_modules[module_name](
                             analyzer_connection,
-                            config={"excluded_databases": self.excluded_databases},
+                            config={
+                                "excluded_databases": self.excluded_databases,
+                                **citus_config,
+                            },
                         )
                     elif module_name == "data_size" and self.data_size_config:
                         # Pass configuration to data_size analyzer
@@ -215,7 +240,12 @@ class PostgreSQLDiscovery:
                                 "target_schemas": self.data_size_config.target_schemas,
                                 "check_column_types": self.data_size_config.check_column_types,
                                 "size_thresholds": self.data_size_config.size_thresholds,
+                                **citus_config,
                             },
+                        )
+                    elif citus_config:
+                        analyzer = available_modules[module_name](
+                            analyzer_connection, config=citus_config
                         )
                     else:
                         analyzer = available_modules[module_name](analyzer_connection)
@@ -232,6 +262,10 @@ class PostgreSQLDiscovery:
                         f"Completed {module_name} analysis in {elapsed:.1f}s"
                     )
 
+                except CitusClusterError:
+                    # Recorded as a module failure, it would let a report with
+                    # shell values for every Citus table be written.
+                    raise
                 except Exception as e:
                     self.logger.error(f"Failed to run {module_name} analysis: {e}")
                     self.results["analysis_results"][module_name] = {
@@ -251,6 +285,26 @@ class PostgreSQLDiscovery:
                 analyzer_connection.close()
 
         return self.results
+
+    def _prepare_citus(self, connection):
+        """Detect the citus extension and confirm the cluster can be read.
+
+        Returns the context when the extension is installed, else None. Raises
+        CitusClusterError when a node, shard or privilege is unavailable.
+        """
+        if not self.citus_detection:
+            return None
+        ctx = detect_citus(connection)
+        if ctx is None:
+            return None
+        self.logger.info(
+            f"Detected the citus extension {ctx.extension_version}; "
+            "checking every node and shard"
+        )
+        preflight(connection, ctx)
+        self.citus = ctx
+        self.results["connection_info"]["citus"] = ctx.connection_info()
+        return ctx
 
     def _add_analysis_gap(
         self,
