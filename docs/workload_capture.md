@@ -379,13 +379,24 @@ is a config setting on this same flow, not a separate step.
 commands the same directory. It holds:
 
     workload-session/
-      schema.json                      the schema, captured once by init
+      schema.json                      the schema that init read
+      schemas/
+        schema-<fingerprint>.json.gz        one per schema the capture saw
       snapshots/
         snapshot-20260826T211338.json.gz    one file per collect
         snapshot-20260826T211522.json.gz
       bursts/
         burst-20260826T211400.json.gz       one per collect, with capture_log on
       workload-<capture id>/           the bundle, written by finalize
+
+Each `collect` records a fingerprint of the schema: one SHA-256 digest of the
+relations, columns, defaults, views, sequences, indexes and constraints. When
+the fingerprint is new to the session, `collect` reads the whole schema and keeps a copy in `schemas/`. A
+schema that does not change is read once, by `init`. A new partition is a new
+table, so a table that gets a partition every day adds one copy a day. The
+copies count toward `max_session_mb`, and they stop at a quarter of it. After
+that, `collect` records the fingerprint, keeps no copy, and reports
+[W218](#w218-schema_copy_failed). The snapshots continue.
 
 You can name the directory anything and put it anywhere the cron user can write.
 The directory is mode `0700`. Delete it when you have the bundle. To stop
@@ -458,8 +469,17 @@ the next tick. A gap costs you that interval and nothing else.
 Run `finalize` when you have enough snapshots. It writes the bundle and prints a
 summary, the caveats, and where to send the result.
 
-`finalize` reads only the session directory, so you can run it as often as you
-like, and you can run it again later after more snapshots arrive.
+`finalize` reads the session directory, and it connects to the database to read
+the schema again. A migration during the window changes the schema that the
+statements ran against, and the schema that `init` stored does not show it. The
+bundle README says when the schema was read, and when the fingerprints show that
+it changed. When `finalize` cannot connect, it uses the stored copy that matches
+the last snapshot. A session with no such copy uses the schema that `init`
+stored. The README says which.
+
+You can run `finalize` as often as you like, and you can run it again later
+after more snapshots arrive. To repair a bundle whose schema is out of date, run
+`finalize` again where it can connect.
 
 ## Deliver the bundle
 
@@ -514,14 +534,23 @@ The capture role holds `pg_monitor` and nothing else, so the counts cover only
 the columns you grant it, which in practice are the declared ones. See
 [Grant the capture role each column](#grant-the-capture-role-each-column).
 
+Each `collect` also reads a fingerprint of the schema from `pg_class`,
+`pg_attribute`, `pg_attrdef`, `pg_index`, `pg_constraint`, `pg_sequence` and
+`pg_namespace`. It is one SHA-256 digest of the definitions, and it holds no name
+or value in readable form.
+
 It also calls `pg_total_relation_size`, `pg_relation_size` and
 `pg_indexes_size` on each table and index in scope. These report how many bytes
 an object occupies on disk. They read no row, take no lock, and need no
 privilege beyond the ones above.
 
 The tool never runs `ANALYZE`, never calls `pg_stat_statements_reset()` and
-never terminates a backend. It holds no table locks, because the schema comes
-from catalog reads and not from `pg_dump`.
+never terminates a backend. It reads the schema from the catalogs, not with
+`pg_dump`. Some catalog functions, such as `pg_get_expr` and `pg_get_viewdef`,
+take an ACCESS SHARE lock on the table they describe, the same lock that a
+`SELECT` takes. The tool ends that transaction within the same `init`,
+`collect` or `finalize` step. So an `ALTER TABLE` that waits for the lock waits
+for seconds, not for the capture.
 
 Session settings apply to this tool's own connection only. The tool sets
 `default_transaction_read_only = on`, a statement timeout, a lock timeout, an
@@ -746,7 +775,8 @@ connection, so it needs no export and no restart. It needs the `log_fdw`
 extension, csvlog output and a role holding `rds_superuser`, and it is the only
 source that creates objects in your database.
 [The AWS guide](providers/aws.md#log-source) compares `file` and `log_fdw`. To get statements into the log in the first place, set
-`log_min_duration_statement = 0` for the window; see
+`log_min_duration_statement = 0` for the window, or sample whole transactions
+with `log_transaction_sample_rate`; see
 [Set the logging up yourself](#set-the-logging-up-yourself).
 
 For a file source, export the log through the provider's own tooling and name
@@ -872,6 +902,76 @@ leave `log_line_prefix` as it is (the tool reads it from the file), and set
 log carries durations and pgAudit does not, but a busy server logs a great deal
 at `log_min_duration_statement = 0`.
 
+#### Sample whole transactions instead
+
+On PostgreSQL 12 and later, `log_transaction_sample_rate` logs a random share of
+the transactions, with every statement of each one. At a low rate it can run
+for the whole capture rather than a few minutes, so the log sees the same days
+the snapshots do. Each sampled transaction arrives whole, which a duration
+threshold cannot give you: a threshold keeps the slow statement and drops the
+fast ones from the same transaction.
+
+Set these for the window, where this server's configuration lives (the
+parameter group on RDS and Aurora, database flags on Cloud SQL, or
+`postgresql.conf` and a reload). None needs a restart.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `log_transaction_sample_rate` | for example `0.001` | the share of transactions logged |
+| `log_min_duration_statement` | `-1` | a threshold also logs slow statements from transactions outside the sample, each a fragment of its transaction |
+| `log_statement` | `none` | `ddl` or `mod` adds fragments the same way. `all` logs everything, so the sample has no effect |
+| `log_destination` | include `csvlog` | carries the session and transaction ids whatever `log_line_prefix` says |
+| `compute_query_id` | `on` (PostgreSQL 14 and later) | lets `coverage.json` join the log to `pg_stat_statements` |
+
+Then tell the tool the rate the log was written at:
+
+```yaml
+database:
+  workload:
+    capture_log: true
+    capture_log_type: statement
+    capture_log_file: exported.csv
+    capture_log_sample_rate: 0.001
+```
+
+`capture_log_sample_rate` applies to `capture_log_type: statement`. With
+`capture_log_source: log_fdw` the tool reads the rate from the server when it
+reads the log, so the setting is optional there. When both are present and
+disagree, the configured rate is recorded, with a warning. A file read with no
+rate configured is treated as a complete log.
+
+If you set the rate on the application's role with `ALTER ROLE app SET
+log_transaction_sample_rate`, also set `capture_log_sample_rate`, with
+`log_fdw` too. The tool reads the settings its own session sees, and a role's
+setting applies only to that role's sessions. Without the setting, the log is
+read as complete, and `init --check` does not see the rate either. A rate set
+server-wide or with `ALTER DATABASE` on the captured database is visible to the
+tool.
+
+A log that runs for the whole capture is exported once, after the last
+scheduled `collect`. Name it in `capture_log_file` and run `collect` once more.
+
+**Choosing the rate.** The log holds about `rate × calls` of each statement. A
+transaction your application runs 20 times in the window is likely to be
+missing at a rate of 0.001, and `coverage.json` says so: each statement the log
+missed carries `expected_in_log` and `chance_absent`. A statement that runs many
+times inside one transaction is missed more often than its `chance_absent`
+says; [Workload Bundle Format](workload-bundle.md) explains why. Volume is the rate times
+what a full log would write, roughly 150 to 300 bytes per statement, and three
+lines per statement over the extended query protocol. A server running 10,000
+statements a second, sampled at 0.001, logs about 2.6 million statements over
+three days: 0.4 to 0.8 GB, or up to 2.3 GB over the extended protocol.
+
+**Bind values.** `burst.csv` keeps the values the log carries. On PostgreSQL 13
+and later, `log_parameter_max_length = 0` keeps bind values out of the log. The
+transaction shapes remain, but per-value access skew is lost, and a client that
+builds its SQL with literals still puts them in the statement text.
+
+`ps-discovery workload init --check` reports a sample rate whose meaning other
+settings change: `sampled_log_holds_unsampled_statements` when a threshold or
+`log_statement` adds fragments, and `transaction_sample_rate_has_no_effect`
+when the log is complete anyway.
+
 ### Enable pgAudit once
 
 Every provider needs one restart to enable pgAudit. After that, no capture
@@ -909,7 +1009,7 @@ money or disk:
 
 1. **The statement logging you turned on.** Reset it on the role, as step 3 of
    the recipe above. Without pgAudit, return `log_min_duration_statement` to
-   the value it had. `finalize` prints this reminder when the bundle holds a
+   the value it had, and `log_transaction_sample_rate` to `0`. `finalize` prints this reminder when the bundle holds a
    log window.
 2. **The exported log files.** Delete them once the bundle is built and
    delivered. They hold literal values from your queries.
@@ -1321,6 +1421,46 @@ that says why the server ended the session, such as a restart, a failover, or
 `terminating connection due to administrator command`. A connection pooler or a
 proxy between the tool and the server can also close the connection. If every
 snapshot reports this code, check the pooler's query and transaction timeouts.
+
+### W219 schemas_exclude_tables
+
+Reported by `init`. `workload.schemas` leaves out a schema that holds tables with
+rows, or tables that PostgreSQL has not analyzed yet. PostgreSQL 14 and later
+report the row count of such a table as unknown, and a new schema is often in
+that state.
+
+A statement that names only tables in that schema is left out of `workload.sql`,
+and the capture collects no table activity for the schema. The bundle README
+counts those statements per schema. If your application uses the schema, add it
+to `workload.schemas` before the capture starts.
+
+`init` stores the schema of every non-system schema, and `pg_stat_statements` is
+not filtered by schema. So for a finished capture, add the schema and run
+`finalize` again: the statements come back, but the table activity for the
+schema stays missing.
+
+### W217 schema_fingerprint_failed
+
+A snapshot could not read the schema fingerprint.
+
+The snapshot keeps its other data. The bundle cannot date a schema change next
+to that snapshot exactly, and a change after the last fingerprint is not seen.
+The README counts the snapshots with no fingerprint. A single occurrence is
+usually transient, for example a statement timeout. If every tick reports it,
+check that the role can read `pg_class`, `pg_attribute`, `pg_attrdef`,
+`pg_index`, `pg_constraint` and `pg_sequence`.
+
+### W218 schema_copy_failed
+
+A snapshot saw a schema fingerprint that is new to the session, and `collect`
+could not keep a copy of the schema. The read failed, the schema analyzer
+returned no tables, the schema changed again during the read, or the copies
+already use a quarter of `max_session_mb`.
+
+The next `collect` tries again, because the copy is still missing. The bundle
+still dates the change, because the snapshot holds the fingerprint. The copy
+matters only when `finalize` cannot connect: `finalize` then renders an older
+stored schema, and the README says which one.
 
 ## What the capture cannot see
 

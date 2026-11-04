@@ -3,6 +3,10 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
 from planetscale_discovery.common.utils import generate_timestamp
+from planetscale_discovery.workload.burst.readiness import (
+    log_sample_rate,
+    sample_rate_note,
+)
 from planetscale_discovery.workload.burst.sql import SafeCursor
 from planetscale_discovery.workload.logs.csvlog import to_statement
 from planetscale_discovery.workload.logs.pgaudit import (
@@ -117,6 +121,11 @@ class BurstCollector(DatabaseAnalyzer):
                 self._audit_last = []
             log_timezone = self._log_timezone()
             self._log_tz = log_timezone
+            sample, sample_warnings = sampling(
+                (self.config or {}).get("capture_log_type"),
+                (self.config or {}).get("capture_log_sample_rate"),
+                self._sampling_settings(),
+            )
             self._since_instant = instant_utc(self.since, log_timezone)
             self._until_instant = instant_utc(self.until, log_timezone)
             self._skipped_before_watermark = 0
@@ -156,7 +165,10 @@ class BurstCollector(DatabaseAnalyzer):
             result["log_timezone"] = log_timezone
             result["sessions"] = _session_summary(statements)
             result["status"] = STATUS_OK if result["files_read"] else STATUS_DEGRADED
-            result["warnings"] = list(self.errors_seen) + _skip_warnings(result)
+            result.update(sample)
+            result["warnings"] = (
+                list(self.errors_seen) + _skip_warnings(result) + sample_warnings
+            )
             # Same loss warnings a pgAudit file import reports.
             if self._audit and self._audit_summary is not None:
                 result["warnings"] = list(result["warnings"]) + summary_warnings(
@@ -334,6 +346,18 @@ class BurstCollector(DatabaseAnalyzer):
         value = (row or {}).get("now")
         return str(value) if value is not None else None
 
+    def _sampling_settings(self) -> Optional[Dict[str, Optional[str]]]:
+        row = self._sql.one_or_none(
+            "SELECT current_setting('log_min_duration_statement', true)"
+            " AS log_min_duration_statement,"
+            " current_setting('log_statement', true) AS log_statement,"
+            " current_setting('log_transaction_sample_rate', true)"
+            " AS log_transaction_sample_rate"
+        )
+        if row is None:
+            return None
+        return {name: None if v is None else str(v) for name, v in row.items()}
+
     def _log_timezone(self) -> Optional[str]:
         try:
             row = self._sql.one("SHOW log_timezone")
@@ -343,6 +367,54 @@ class BurstCollector(DatabaseAnalyzer):
             return None
         value = list(row.values())[0]
         return str(value) if value else None
+
+
+def sampling(
+    log_type: Optional[str],
+    configured: Optional[float],
+    settings: Optional[Dict[str, Optional[str]]] = None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """The burst's sample_rate and its source, and the warnings that go with it.
+
+    ``settings`` are the server's logging settings, which only a live read has.
+    A file with no configured rate is read as a complete log. pgAudit does not
+    sample, so a pgAudit burst records no rate.
+    """
+    if log_type == "pgaudit":
+        return {}, []
+    warnings: List[str] = []
+    server: Optional[float] = None
+    if settings is not None:
+        server = log_sample_rate(settings)
+        note = sample_rate_note(settings)
+        if note and note["code"] == "sampled_log_holds_unsampled_statements":
+            warnings.append(note["detail"])
+        if server is None and configured is None:
+            warnings.append(
+                "the logging settings this session sees log no whole "
+                f"transactions (log_min_duration_statement = "
+                f"{settings.get('log_min_duration_statement')}, log_statement = "
+                f"{settings.get('log_statement')}, log_transaction_sample_rate = "
+                f"{settings.get('log_transaction_sample_rate')}), so the log "
+                "is read as holding fragments of them. A setting made with "
+                "ALTER ROLE on another role is not visible here: if the "
+                "application's role samples its transactions, set "
+                "capture_log_sample_rate to its rate. Otherwise run "
+                "'workload init --check'"
+            )
+    if configured is not None:
+        if server is not None and abs(server - float(configured)) > 1e-9:
+            warnings.append(
+                f"capture_log_sample_rate is {float(configured):g}, but this "
+                f"server's settings log {server:g} of its transactions. The "
+                "configured rate is recorded"
+            )
+        return {"sample_rate": float(configured), "sample_rate_source": "config"}, (
+            warnings
+        )
+    if server is not None:
+        return {"sample_rate": server, "sample_rate_source": "server"}, warnings
+    return {"sample_rate": None, "sample_rate_source": None}, warnings
 
 
 def _skip_warnings(result: Dict[str, Any]) -> List[str]:

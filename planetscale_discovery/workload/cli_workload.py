@@ -10,14 +10,18 @@ import json
 import signal
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from planetscale_discovery import __version__
 from planetscale_discovery.config.config_manager import (
     WorkloadConfig,
     workload_log_errors,
 )
-from planetscale_discovery.workload.bundle import bundle_dir_name, write_bundle
+from planetscale_discovery.workload.bundle import (
+    bundle_dir_name,
+    schemas_left_out,
+    write_bundle,
+)
 from planetscale_discovery.workload.codes import label
 from planetscale_discovery.workload.collect import (
     WorkloadCollector,
@@ -457,7 +461,11 @@ def _init(args, config, logger) -> int:
                 _report_log_readiness(connection, workload, logger)
             end_transaction(connection)
 
+        collector = _new_collector(connection, config, logger)
+        fingerprint = _fingerprint_before_read(collector, logger)
         schema = _collect_schema(connection, config, logger)
+        for gap in _scope_gaps(schema, config):
+            logger.warning(f"{label(gap['code'])}: {gap['detail']}")
         status = _check_distributions(connection, schema, config, logger)
         end_transaction(connection)
         if status != EXIT_OK:
@@ -468,13 +476,41 @@ def _init(args, config, logger) -> int:
             store.write_schema(schema)
 
         with logged_step(logger, "taking the baseline snapshot"):
-            snapshot = _new_collector(connection, config, logger).collect()
+            snapshot = collector.collect()
+        _keep_init_schema(store, fingerprint, schema, snapshot)
         _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
         logger.info(f"session initialized at {args.session}")
         _print_cron_hint(args.session, workload)
         return EXIT_OK
     finally:
         connection.close()
+
+
+def _scope_gaps(schema, config) -> List[Dict[str, Any]]:
+    """A warning when the configured schemas leave out tables that hold rows.
+
+    A statement on those tables is left out of workload.sql, and only the bundle
+    README says so, days later. init can say it before the capture starts.
+    """
+    scope = _workload_config(config).schemas or getattr(
+        config.database, "schemas", None
+    )
+    left_out = schemas_left_out(schema, scope)
+    if not left_out:
+        return []
+    listed = ", ".join(f"{name} ({n} table(s))" for name, n in left_out.items())
+    return [
+        {
+            "code": "schemas_exclude_tables",
+            "detail": (
+                "the configured schemas leave out tables that hold rows, or "
+                f"that PostgreSQL has not analyzed yet: {listed}. Statements "
+                "on those tables are left out of "
+                "workload.sql. Add a schema to workload.schemas if your "
+                "application uses it."
+            ),
+        }
+    ]
 
 
 def _report_log_readiness(connection, workload, logger) -> None:
@@ -566,12 +602,94 @@ def _snapshot(store, config, logger, optional: bool) -> None:
         )
         return
     try:
+        collector = _new_collector(connection, config, logger)
         with logged_step(logger, "taking a snapshot"):
-            snapshot = _new_collector(connection, config, logger).collect()
+            snapshot = collector.collect()
+        _keep_schema(store, connection, collector, snapshot, config, logger)
         _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
         _collect_distributions(store, connection, config, logger)
     finally:
         connection.close()
+
+
+COPY_SHARE = 4
+
+
+def _fingerprint_before_read(collector, logger) -> Optional[str]:
+    """The schema fingerprint, or None. The baseline snapshot reports a failure."""
+    try:
+        return collector.schema_fingerprint()
+    except Exception as exc:
+        logger.info(f"could not read the schema fingerprint before the read: {exc}")
+        return None
+
+
+def _keep_init_schema(store, fingerprint, schema, snapshot) -> None:
+    """Keep the schema init read as the copy for its fingerprint.
+
+    The same fingerprint before the read and at the baseline means the schema
+    did not change while init read it. Otherwise the first collect reads it.
+    """
+    if not fingerprint or fingerprint != snapshot.get("schema_fingerprint"):
+        return
+    try:
+        store.write_schema_copy(
+            fingerprint, schema, "init", snapshot.get("captured_at_server")
+        )
+    except Exception as exc:
+        snapshot["warnings"].append(
+            {
+                "code": "schema_copy_failed",
+                "detail": f"keeping a copy of the schema that init read failed: {exc}",
+            }
+        )
+
+
+def _keep_schema(store, connection, collector, snapshot, config, logger) -> None:
+    """Read the full schema when the snapshot's fingerprint is new to the session.
+
+    The session keeps one copy per fingerprint, so a schema that does not
+    change is read once, by init. finalize renders the copy when it cannot
+    connect. A failure adds a warning to the snapshot, and the next collect
+    tries again, because the copy is still missing.
+    """
+    fingerprint = snapshot.get("schema_fingerprint")
+    if not fingerprint or store.has_schema_copy(fingerprint):
+        return
+
+    def failed(detail: str) -> None:
+        snapshot["warnings"].append({"code": "schema_copy_failed", "detail": detail})
+
+    budget = _workload_config(config).max_session_mb * 1024 * 1024 // COPY_SHARE
+    used = store.schema_copy_bytes()
+    if used >= budget:
+        failed(
+            f"the schema changed, and the schema copies hold {used // 2**20} MB, "
+            f"1/{COPY_SHARE} of max_session_mb, so this collect keeps no copy"
+        )
+        return
+
+    logger.info("the schema fingerprint is new to this session; reading the schema")
+    try:
+        schema = _collect_schema(connection, config, logger)
+        after = collector.schema_fingerprint()
+    except Exception as exc:
+        failed(f"the schema changed, and reading it failed: {exc}")
+        return
+    finally:
+        end_transaction(connection)
+    if not schema.get("table_analysis"):
+        failed("the schema changed, and the schema analyzer returned no tables")
+        return
+    if after != fingerprint:
+        failed("the schema changed again while it was read; the next collect reads it")
+        return
+    try:
+        store.write_schema_copy(
+            fingerprint, schema, "collect", snapshot.get("captured_at_server")
+        )
+    except Exception as exc:
+        failed(f"the schema changed, and keeping the copy failed: {exc}")
 
 
 def _report_snapshot(snapshot: Dict[str, Any], path, logger) -> None:
@@ -720,6 +838,7 @@ def _collect_exported_log(store, workload, logger) -> int:
         collect_csv_file,
         collect_pgaudit_file,
         collect_stderr_file,
+        sampling,
         sniff_packaging,
     )
 
@@ -778,6 +897,8 @@ def _collect_exported_log(store, workload, logger) -> int:
         )
         return EXIT_OK
 
+    sample, _ = sampling(workload.capture_log_type, workload.capture_log_sample_rate)
+    burst.update(sample)
     for warning in burst.get("warnings") or []:
         logger.warning(warning)
     # Storing a burst with no file read reports a used window covering nothing.
@@ -798,6 +919,17 @@ def _report_burst(burst: Dict[str, Any], path, logger) -> None:
         f"across {summary.get('sessions', 0)} sessions, "
         f"{summary.get('closed_transactions', 0)} complete transactions"
     )
+    rate = burst.get("sample_rate")
+    if rate is not None and rate < 1:
+        source = (
+            "capture_log_sample_rate"
+            if burst.get("sample_rate_source") == "config"
+            else "the server's log_transaction_sample_rate"
+        )
+        logger.info(
+            f"the log is a sample of {rate:g} of the server's transactions, "
+            f"from {source}"
+        )
     if summary.get("open_transactions"):
         logger.warning(
             f"{summary['open_transactions']} transaction(s) were still open at "
@@ -863,18 +995,92 @@ def _finalize(args, config, logger) -> int:
     if distributions is None and _declares_distributions(workload):
         note = "distributions: declared, but no collect reached the database"
         distributions = {"columns": [], "notes": [note]}
+    schema, schema_read = _finalize_schema(store, merged, config, logger)
     manifest = write_bundle(
         out_dir,
         merged,
-        store.read_schema(),
+        schema,
         collector_version=__version__,
         target_schemas=workload.schemas or getattr(config.database, "schemas", None),
         bursts=store.read_bursts(),
         distributions=distributions,
         distributions_hash_values=workload.distributions_hash_values,
+        schema_read=schema_read,
     )
     _print_summary(manifest, out_dir, capture_log=workload.capture_log)
     return EXIT_OK
+
+
+def _finalize_schema(
+    store, merged, config, logger
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The schema to render, and when it was read.
+
+    A migration during the window leaves statements that the schema init read
+    cannot describe. So finalize reads the schema again when it can connect.
+    When it cannot, it renders the stored copy that matches the last snapshot's
+    fingerprint, else the schema init read, and the bundle says which. The
+    session directory is not changed.
+    """
+    stored, fallback = _stored_schema(store, merged, logger)
+    try:
+        connection = _connect(config, logger)
+    except Exception as exc:
+        logger.warning(
+            "could not connect to read the schema again, so schema.sql is the "
+            f"schema that {fallback['read']} read: {exc}"
+        )
+        return stored, {**fallback, "error": str(exc)}
+    try:
+        schema = _collect_schema(connection, config, logger)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT clock_timestamp() AS now")
+            read_at = str(dict(cursor.fetchone())["now"])
+    except Exception as exc:
+        logger.warning(
+            "could not read the schema again, so schema.sql is the schema that "
+            f"{fallback['read']} read: {exc}"
+        )
+        return stored, {**fallback, "error": str(exc)}
+    finally:
+        connection.close()
+    # The analyzer returns an empty result rather than raise.
+    if stored.get("table_analysis") and not schema.get("table_analysis"):
+        error = "the schema analyzer returned no tables"
+        logger.warning(
+            f"{error}, so schema.sql is the schema that {fallback['read']} "
+            "read. Check the role's privileges."
+        )
+        return stored, {**fallback, "error": error}
+    return schema, {"read": "finalize", "at": read_at}
+
+
+def _stored_schema(store, merged, logger) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The stored schema that best matches the end of the window, and its source.
+
+    The copy for the last snapshot's fingerprint is the schema at the last
+    snapshot. A session from an older version, a last snapshot with no
+    fingerprint, or a copy that cannot be read, has only the schema init read.
+    """
+    window = merged.get("coverage") or {}
+    fingerprint = merged.get("schema_fingerprint")
+    copy = None
+    if fingerprint:
+        try:
+            copy = store.read_schema_copy(fingerprint)
+        except Exception as exc:
+            logger.warning(
+                "the stored copy of the schema at the last snapshot cannot be "
+                f"read, so the schema that init read is the fallback: {exc}"
+            )
+    if isinstance(copy, dict) and copy.get("schema"):
+        return copy["schema"], {
+            "read": copy.get("read_by") or "collect",
+            "at": copy.get("at"),
+            "unchanged_through": window.get("window_end"),
+        }
+    # init reads the schema, then takes the baseline snapshot.
+    return store.read_schema(), {"read": "init", "before": window.get("window_start")}
 
 
 def _print_summary(
@@ -895,11 +1101,17 @@ def _print_summary(
         f"for planning, of {manifest['statements']['collected']} seen"
     )
     print(f"  times run:      {(manifest['totals'] or {}).get('calls', 0):,.0f}")
+    read = manifest["schema"].get("read") or {}
+    changes = manifest["schema"].get("changes")
     print(
         f"  schema:         {manifest['schema']['tables']} tables, "
         f"{manifest['schema']['views']} views"
+        + (f", read at {read['read']}" if read.get("read") else "")
+        + (f", changed {changes} time(s) during the window" if changes else "")
     )
     print(f"  row counts:     {manifest['cardinality']['table_count']} tables")
+    if manifest.get("schemas"):
+        print(f"  schemas:        {', '.join(manifest['schemas'])}")
     if manifest["schema"]["parse_failures"]:
         print(
             f"  ! {manifest['schema']['parse_failures']} schema statement(s) "

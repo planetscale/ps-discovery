@@ -2,6 +2,9 @@
 
 import csv
 import io
+import json
+
+import pytest
 
 from planetscale_discovery.workload.bundle_burst import (
     _bursts_in_window,
@@ -248,6 +251,66 @@ class TestWriteBursts:
         assert result["degraded_bursts"] == 1
         assert (tmp_path / "burst.csv").is_file()
         assert (tmp_path / "coverage.json").is_file()
+
+
+class TestSampledBursts:
+    def merged(self):
+        return {
+            "statements": {
+                "a": {"id": "a", "queryids": [42], "counters": {"calls": 10}},
+            },
+            "covered_seconds": 3600,
+            "totals": {"calls": 3600},
+        }
+
+    def sampled(self, rate, count=4, **extra):
+        rows = [
+            statement(log_time=f"2026-08-25 10:00:{second:02d}.000 UTC")
+            for second in range(count)
+        ]
+        return burst(
+            "2026-08-25 10:00:00+00:00",
+            "2026-08-25 10:01:00+00:00",
+            statements=rows,
+            sample_rate=rate,
+            **extra,
+        )
+
+    def test_coverage_json_records_the_rates_and_scales_by_them(self, tmp_path):
+        result = _write_bursts(tmp_path, [self.sampled(0.5)], self.merged())
+        report = json.loads((tmp_path / "coverage.json").read_text())
+
+        assert result["sample_rates"] == [0.5]
+        assert report["sampling"] == {"rates": [0.5], "bursts_without_a_rate": 0}
+        rep = report["representativeness"]
+        assert rep["burst_statements_per_second"] == 4 / 3
+        assert rep["estimated_statements_per_second"] == 8 / 3
+
+    def test_a_burst_without_a_rate_is_read_as_complete(self, tmp_path):
+        result = _write_bursts(tmp_path, [self.sampled(None)], self.merged())
+        report = json.loads((tmp_path / "coverage.json").read_text())
+
+        assert result["sample_rates"] == []
+        assert report["sampling"]["rates"] == [1.0]
+        assert report["sampling"]["bursts_without_a_rate"] == 1
+        assert "estimated_statements_per_second" not in report["representativeness"]
+
+    @pytest.mark.parametrize("stored", [0, -0.5, 2, "0.1", True])
+    def test_a_corrupt_stored_rate_is_read_as_complete(self, tmp_path, stored):
+        """A stored rate of 0 divided by zero and killed finalize."""
+        _write_bursts(tmp_path, [self.sampled(stored)], self.merged())
+        report = json.loads((tmp_path / "coverage.json").read_text())
+
+        assert report["sampling"] == {"rates": [1.0], "bursts_without_a_rate": 1}
+
+    def test_each_burst_is_scaled_by_its_own_rate(self, tmp_path):
+        bursts = [self.sampled(0.5), self.sampled(1.0)]
+        _write_bursts(tmp_path, bursts, self.merged())
+        report = json.loads((tmp_path / "coverage.json").read_text())
+
+        assert report["sampling"]["rates"] == [0.5, 1.0]
+        rep = report["representativeness"]
+        assert rep["estimated_statements_per_second"] == (4 / 0.5 + 4) / 6
 
 
 class TestWriteBurstsPublic:

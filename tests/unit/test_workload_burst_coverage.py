@@ -1,5 +1,7 @@
 """Tests for coverage() and representativeness()."""
 
+from pytest import approx
+
 from planetscale_discovery.workload.burst.coverage import (
     STATUS_NO_AGGREGATE,
     STATUS_NO_JOIN_KEY,
@@ -96,6 +98,97 @@ class TestRepresentativeness:
         assert "peak" in result["detail"]
 
 
+class TestSampledRepresentativeness:
+    """A log of 0.001 of the transactions ran at 0.001x the window's rate, and
+    was read as a quiet period."""
+
+    def test_the_rate_is_scaled_by_the_sample_rate(self):
+        merged = {"covered_seconds": 100, "totals": {"calls": 100000}}
+        result = representativeness(
+            [{}] * 1000,
+            merged,
+            100,
+            estimated_statements=1000 / 0.001,
+            sample_rates=[0.001],
+        )
+
+        assert result["burst_statements_per_second"] == 10.0
+        assert result["estimated_statements_per_second"] == 10000.0
+        assert result["ratio"] == 10.0
+        assert "quieter" not in result["detail"]
+        assert "sample of the server's transactions" in result["detail"]
+        assert result["sample_rates"] == [0.001]
+
+    def test_an_unsampled_log_is_compared_as_before(self):
+        merged = {"covered_seconds": 100, "totals": {"calls": 100}}
+        result = representativeness(
+            [{}] * 100, merged, 100, estimated_statements=100.0, sample_rates=[1.0]
+        )
+
+        assert result["ratio"] == 1.0
+        assert "sample_rates" not in result
+        assert "sample of" not in result["detail"]
+
+
+class TestChanceAbsent:
+    """A sampled log misses rare statements by chance. The expected count is
+    the statement's calls times the share of the window's calls the log holds."""
+
+    def _merged(self, seen=4980):
+        return {
+            "covered_seconds": 1000,
+            "statements": {
+                "seen": {"id": "seen", "queryids": [1], "counters": {"calls": seen}},
+                "heavy": {"id": "heavy", "queryids": [2], "counters": {"calls": 5000}},
+                "rare": {"id": "rare", "queryids": [3], "counters": {"calls": 20}},
+            },
+        }
+
+    def test_each_missed_statement_carries_its_expected_count(self):
+        """100 logged statements of 10000 calls is a share of 0.01."""
+        result = coverage([{"query_id": 1}] * 100, self._merged())
+
+        missed = {m["id"]: m for m in result["heaviest_not_observed"]}
+        assert missed["heavy"]["expected_in_log"] == 50.0
+        assert missed["heavy"]["chance_absent"] < 1e-20
+        assert missed["rare"]["expected_in_log"] == 0.2
+        assert round(missed["rare"]["chance_absent"], 3) == 0.819
+        assert result["not_observed_likely_by_chance"] == 1
+
+    def test_the_threshold_is_a_chance_of_0_05(self):
+        """exp(-2.9) is 0.055 and counts; exp(-3.0) is 0.0498 and does not."""
+        merged = {
+            "statements": {
+                "seen": {"id": "seen", "queryids": [1], "counters": {"calls": 9971}},
+                "under": {"id": "under", "queryids": [2], "counters": {"calls": 29}},
+            },
+        }
+        result = coverage([{"query_id": 1}] * 1000, merged)
+        assert result["heaviest_not_observed"][0]["expected_in_log"] == approx(2.9)
+        assert result["not_observed_likely_by_chance"] == 1
+
+        merged["statements"]["under"]["counters"]["calls"] = 30
+        merged["statements"]["seen"]["counters"]["calls"] = 9970
+        result = coverage([{"query_id": 1}] * 1000, merged)
+        assert result["heaviest_not_observed"][0]["expected_in_log"] == approx(3.0)
+        assert result["not_observed_likely_by_chance"] == 0
+
+    def test_no_calls_leaves_the_fields_out(self):
+        merged = self._merged()
+        for record in merged["statements"].values():
+            record["counters"]["calls"] = 0
+        result = coverage([{"query_id": 1}], merged)
+
+        assert "expected_in_log" not in result["heaviest_not_observed"][0]
+        assert result["not_observed_likely_by_chance"] is None
+
+    def test_the_share_never_passes_one(self):
+        result = coverage([{"query_id": 1}] * 20000, self._merged())
+
+        missed = {m["id"]: m for m in result["heaviest_not_observed"]}
+        assert missed["rare"]["expected_in_log"] == 20.0
+
+
 def _record(sid, queryid, calls, exec_time, nested_calls=0.0, nested_time=0.0):
     """A merged statement, shaped as merge.py leaves it."""
     return {
@@ -160,14 +253,13 @@ class TestNestedCallsInCoverage:
             }
         }
         missed = coverage([{"query_id": 1}], merged)["heaviest_not_observed"]
-        assert missed == [
-            {
-                "id": "both",
-                "query": "select both",
-                "calls": 10.0,
-                "total_exec_time_ms": 50.0,
-            }
-        ]
+        assert len(missed) == 1
+        assert {k: missed[0][k] for k in ("id", "query", "calls")} == {
+            "id": "both",
+            "query": "select both",
+            "calls": 10.0,
+        }
+        assert missed[0]["total_exec_time_ms"] == 50.0
 
     def test_an_unknown_split_keeps_every_call_and_says_so(self):
         """PostgreSQL 13 and earlier have no toplevel column."""

@@ -13,8 +13,19 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 from planetscale_discovery.workload import bundle_burst
 from planetscale_discovery.workload.distributions import (
@@ -64,6 +75,7 @@ def write_bundle(
     bursts: Optional[Sequence[Dict[str, Any]]] = None,
     distributions: Optional[Dict[str, Any]] = None,
     distributions_hash_values: bool = False,
+    schema_read: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Write the bundle and return a summary of what it holds.
 
@@ -84,7 +96,8 @@ def write_bundle(
     statements = list((merged.get("statements") or {}).values())
     covered = merged.get("covered_seconds")
     known = known_table_names(schema_analysis, target_schemas=target_schemas)
-    plannable, excluded = _split_by_plannability(statements, known)
+    outside = out_of_scope_names(schema_analysis, target_schemas)
+    plannable, excluded = _split_by_plannability(statements, known, outside)
 
     identity = capture_id(merged)
     _write_text(
@@ -148,7 +161,12 @@ def write_bundle(
                 for s in excluded
                 if s.get("excluded_reason") == "statement text was truncated"
             ),
+            "excluded_outside_schemas": sum(
+                1 for s in excluded if s.get("excluded_reason") == OUTSIDE_SCHEMAS
+            ),
         },
+        # None means every non-system schema.
+        "schemas": sorted(target_schemas) if target_schemas else None,
         "schema": {
             "statements": len(schema["statements"]),
             "tables": len(schema["tables"]),
@@ -156,6 +174,9 @@ def write_bundle(
             "parse_ok": parse.get("ok"),
             "parse_available": parse.get("available"),
             "parse_failures": len(parse.get("failures") or []),
+            # When the schema was read, and how often it changed in the window.
+            "read": schema_read,
+            "changes": _schema_change_count(merged),
         },
         "cardinality": cardinality,
         "distributions": distributions_summary,
@@ -170,6 +191,7 @@ def write_bundle(
             unreadable_bursts,
             distributions_summary,
             plannable,
+            schema_read,
         ),
     }
     _write_text(out_dir / "README.md", _render_readme(summary, out_dir))
@@ -470,34 +492,103 @@ def known_table_names(
     """
     wanted = set(target_schemas) if target_schemas else None
     names: Set[str] = set()
+    for schema, name in _relations(schema_analysis):
+        if wanted and schema not in wanted:
+            continue
+        names.add(name.lower())
+        if schema:
+            names.add(f"{schema.lower()}.{name.lower()}")
+    return names
+
+
+def _relations(schema_analysis: Dict[str, Any]) -> Iterator[Tuple[str, str]]:
+    """Each table and application view as (schema, name), as the catalog
+    spells them."""
     sections = (
         (schema_analysis.get("table_analysis") or [], "table_name"),
         (application_views(schema_analysis), "view_name"),
     )
     for relations, name_field in sections:
         for relation in relations:
-            if wanted and relation.get("schema_name") not in wanted:
-                continue
-            schema = (relation.get("schema_name") or "").lower()
-            name = (relation.get(name_field) or "").lower()
+            name = relation.get(name_field) or ""
             if name:
-                names.add(name)
-                if schema:
-                    names.add(f"{schema}.{name}")
+                yield relation.get("schema_name") or "", name
+
+
+def out_of_scope_names(
+    schema_analysis: Dict[str, Any],
+    target_schemas: Optional[Sequence[str]] = None,
+) -> Dict[str, Set[str]]:
+    """The relations outside target_schemas: each name, bare and qualified,
+    mapped to the schemas that hold a relation of that name.
+
+    The stored schema covers every non-system schema, whatever target_schemas
+    says. So a statement on a schema left out of scope can still be named for
+    what it is, and not mistaken for a monitoring tool's query.
+    """
+    if not target_schemas:
+        return {}
+    wanted = set(target_schemas)
+    names: Dict[str, Set[str]] = {}
+    for schema, name in _relations(schema_analysis):
+        # A system schema is never the application's, in or out of scope.
+        if not schema or schema in wanted or schema in CARDINALITY_EXCLUDED_SCHEMAS:
+            continue
+        # Lowercased to match a statement's words, while the schema keeps its
+        # spelling, because workload.schemas is case sensitive.
+        names.setdefault(f"{schema.lower()}.{name.lower()}", set()).add(schema)
+        names.setdefault(name.lower(), set()).add(schema)
     return names
+
+
+def schemas_left_out(
+    schema_analysis: Dict[str, Any],
+    target_schemas: Optional[Sequence[str]] = None,
+) -> Dict[str, int]:
+    """Each non-system schema outside target_schemas that holds a table with
+    rows, and how many such tables it holds.
+
+    A negative estimate counts. PostgreSQL 14 and later report -1 for a table
+    that was never vacuumed or analyzed, so its row count is unknown, not 0. A
+    new schema that the application writes is often in that state at init.
+    """
+    if not target_schemas:
+        return {}
+    wanted = set(target_schemas)
+    left_out: Dict[str, int] = {}
+    for table in schema_analysis.get("table_analysis") or []:
+        schema = table.get("schema_name")
+        if not schema or schema in wanted or schema in CARDINALITY_EXCLUDED_SCHEMAS:
+            continue
+        try:
+            rows = float(table.get("estimated_rows") or 0)
+        except (TypeError, ValueError):
+            rows = 0.0
+        if rows != 0:
+            left_out[schema] = left_out.get(schema, 0) + 1
+    return dict(sorted(left_out.items()))
+
+
+# The exclusion reason for a statement on a schema left out of scope.
+OUTSIDE_SCHEMAS = "references a table outside the configured schemas"
+
+
+def _words(query: str) -> Set[str]:
+    return set(re.findall(r"[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?", query.lower()))
 
 
 def _touches_a_known_table(query: str, known: Set[str]) -> bool:
     """Whether the statement names any table from the captured schema."""
-    words = set(re.findall(r"[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?", query.lower()))
-    return bool(words & known)
+    return bool(_words(query) & known)
 
 
 def _split_by_plannability(
     statements: Sequence[Dict[str, Any]],
     known: Optional[Set[str]] = None,
+    outside: Optional[Dict[str, Set[str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     plannable, excluded = [], []
+    outside = outside or {}
     for statement in statements:
         query = statement.get("query") or ""
         kind = (statement.get("query_kind") or "").upper()
@@ -507,8 +598,16 @@ def _split_by_plannability(
         # A statement naming no captured table is not this application's
         # workload -- it is monitoring, psql, or this tool's own catalog reads.
         # The planner cannot plan a relation absent from schema.sql either.
+        # The exception is a table in a schema the configuration left out:
+        # that statement can be the application's, so it is counted apart.
         if known and not _touches_a_known_table(query, known):
-            statement["excluded_reason"] = "references no captured table"
+            named = _words(query) & outside.keys()
+            schemas = sorted({schema for name in named for schema in outside[name]})
+            if schemas:
+                statement["excluded_reason"] = OUTSIDE_SCHEMAS
+                statement["excluded_schemas"] = schemas
+            else:
+                statement["excluded_reason"] = "references no captured table"
             excluded.append(statement)
             continue
         if statement.get("text_truncated"):
@@ -702,6 +801,7 @@ def _caveats(
     unreadable_bursts=None,
     distributions_summary=None,
     plannable=None,
+    schema_read=None,
 ) -> List[str]:
     """Notes that change how the counts in this bundle should be read."""
     caveats: List[str] = []
@@ -822,6 +922,23 @@ def _caveats(
             f"They ran {calls:,.0f} time(s)."
         )
 
+    outside = [s for s in excluded if s.get("excluded_reason") == OUTSIDE_SCHEMAS]
+    if outside:
+        calls = sum((s["counters"].get("calls") or 0) for s in outside)
+        per_schema = Counter(
+            schema for s in outside for schema in s.get("excluded_schemas") or []
+        )
+        listed = ", ".join(f"{name} ({n})" for name, n in sorted(per_schema.items()))
+        caveats.append(
+            f"{len(outside)} statement(s) are left out because they name no "
+            "table in the configured schemas, and they name a table in another "
+            f"schema. Statements per schema: {listed}. They ran {calls:,.0f} "
+            "time(s), and they can be your application's traffic. To keep "
+            "them, add those schemas to workload.schemas and run 'finalize' "
+            "again. The session holds these statements and the schema of their "
+            "tables, but no table activity for those schemas."
+        )
+
     if foreign:
         calls = sum((s["counters"].get("calls") or 0) for s in foreign)
         caveats.append(
@@ -853,6 +970,11 @@ def _caveats(
             "pg_stat_statements.track set to 'all', those statements look like "
             "statements your application sent."
         )
+
+    read = schema_read_caveat(schema_read)
+    if read:
+        caveats.append(read)
+    caveats.extend(schema_change_caveats(merged))
 
     if parse.get("available") is False:
         caveats.append(
@@ -891,6 +1013,17 @@ def _caveats(
             "Check their warnings before treating the coverage as complete."
         )
 
+    if burst_summary.get("taken") and burst_summary.get("sample_rates"):
+        caveats.append(
+            "burst.csv holds a sample of your transactions, at a "
+            f"log_transaction_sample_rate of {_rates(burst_summary['sample_rates'])}. "
+            "Each sampled transaction is whole, but a transaction that runs "
+            "rarely may be missing from it. coverage.json gives, for each "
+            "statement the log missed, how likely the sample was to miss it. "
+            "That figure is a lower bound: calls that share a transaction are "
+            "missed together."
+        )
+
     if outside_window:
         caveats.append(
             f"{label('burst_outside_window')}: {len(outside_window)} query log "
@@ -917,6 +1050,10 @@ def _caveats(
         )
 
     return caveats
+
+
+def _rates(rates: Sequence[float]) -> str:
+    return " and ".join(f"{rate:g}" for rate in rates)
 
 
 def _empty_column_stats(merged: Dict[str, Any]) -> Optional[str]:
@@ -970,6 +1107,91 @@ def _empty_column_stats(merged: Dict[str, Any]) -> Optional[str]:
     return f"{effect} {seen} {' '.join(causes)}"
 
 
+def schema_read_caveat(schema_read: Optional[Dict[str, Any]]) -> Optional[str]:
+    """A caveat when schema.sql is the schema that init read, or None.
+
+    A schema that finalize read again gets no caveat. It holds the columns and
+    tables added during the window, and the README says when finalize read it.
+    A stored copy that matches the last snapshot's fingerprint gets none
+    either: the README says that the last snapshot saw the same schema.
+    """
+    if not schema_read or schema_read.get("read") != "init":
+        return None
+    if schema_read.get("unchanged_through"):
+        return None
+    before = schema_read.get("before")
+    when = f", before the first snapshot at {before}" if before else ""
+    # The reason stays in the operator's log. A connection error names the
+    # host, and this README leaves the organization.
+    return (
+        f"schema.sql is the schema that init read{when}. finalize could not "
+        "read it again, so a migration during the window is not in schema.sql. "
+        "Run finalize again where it can connect to the database."
+    )
+
+
+# A capture with a schema that changes every hour lists the first changes only.
+SCHEMA_CHANGES_LISTED = 10
+
+
+def _schema_change_count(merged: Dict[str, Any]) -> Optional[int]:
+    """How often the schema changed, or None when no snapshot can say."""
+    if "schema_changes" not in merged:
+        return None
+    usable = (merged.get("coverage") or {}).get("snapshots_usable") or 0
+    if (merged.get("schema_fingerprints_missing") or 0) >= usable:
+        return None
+    return len(merged.get("schema_changes") or [])
+
+
+def schema_change_caveats(merged: Dict[str, Any]) -> List[str]:
+    """Caveats for a schema that changed during the window, and for snapshots
+    with no schema fingerprint."""
+    if "schema_changes" not in merged:
+        return []
+    caveats = []
+    changes = merged.get("schema_changes") or []
+    if changes:
+        spans = "; ".join(
+            f"between {change['start']} and {change['end']}"
+            for change in changes[:SCHEMA_CHANGES_LISTED]
+        )
+        more = len(changes) - SCHEMA_CHANGES_LISTED
+        if more > 0:
+            spans += f"; and {more} more"
+        caveats.append(
+            f"The schema changed {len(changes)} time(s) during the window: "
+            f"{spans}. schema.sql holds one version of the schema. A statement "
+            "that ran under another version can name a column or a table that "
+            "schema.sql does not hold."
+        )
+    usable = (merged.get("coverage") or {}).get("snapshots_usable") or 0
+    missing = merged.get("schema_fingerprints_missing") or 0
+    if not missing:
+        return caveats
+    failed = merged.get("schema_fingerprints_failed") or 0
+    causes = []
+    if missing - failed:
+        causes.append(f"{missing - failed} from an earlier version of this tool")
+    if failed:
+        causes.append(
+            f"{failed} where the read failed ({label('schema_fingerprint_failed')})"
+        )
+    because = " and ".join(causes)
+    if missing >= usable:
+        caveats.append(
+            f"No snapshot holds a schema fingerprint: {because}. So this bundle "
+            "cannot say whether the schema changed during the window."
+        )
+    else:
+        caveats.append(
+            f"{missing} of {usable} snapshot(s) hold no schema fingerprint: "
+            f"{because}. A schema change next to one of them is dated less "
+            "exactly, or not seen."
+        )
+    return caveats
+
+
 def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
     covered = summary.get("covered_seconds")
     window = (
@@ -983,7 +1205,33 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
     not_data = (
         statements["excluded_from_workload_sql"]
         - statements["excluded_not_this_application"]
+        - statements.get("excluded_outside_schemas", 0)
     )
+    scope = summary.get("schemas")
+    scope_rows = "| Schemas captured | every non-system schema |\n"
+    if scope:
+        scope_rows = (
+            f"| Schemas captured | {', '.join(f'`{s}`' for s in scope)} |\n"
+            "| Left out, because they name only tables in other schemas | "
+            f"{statements.get('excluded_outside_schemas', 0)} |\n"
+        )
+
+    read = schema.get("read") or {}
+    same = read.get("unchanged_through")
+    same_note = ""
+    if same and same != read.get("at"):
+        same_note = f". The last snapshot, at {same}, saw the same schema"
+    schema_row = ""
+    if read.get("read") == "finalize":
+        schema_row = f"| Schema read | by finalize, at {read.get('at')} |\n"
+    elif read.get("read") == "collect":
+        schema_row = f"| Schema read | by collect, at {read.get('at')}{same_note} |\n"
+    elif read.get("read") == "init":
+        schema_row = (
+            f"| Schema read | by init, before the first snapshot{same_note} |\n"
+        )
+    if schema.get("changes") is not None:
+        schema_row += f"| Schema changes during the window | {schema['changes']} |\n"
 
     distributions = summary.get("distributions") or {}
     distributions_files = ""
@@ -995,9 +1243,15 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
         )
     burst_files = ""
     if burst_taken:
+        logged = "every statement the server logged while it ran"
+        if burst.get("sample_rates"):
+            logged = (
+                "a sample of the server's transactions, each one whole, at a "
+                f"log_transaction_sample_rate of {_rates(burst['sample_rates'])}"
+            )
         burst_files = (
-            "| `burst.csv` | the query-log burst: every statement the server "
-            "logged while it ran, **with the literal values still in it** |\n"
+            f"| `burst.csv` | the query-log burst: {logged}, **with the literal "
+            "values still in it** |\n"
             "| `coverage.json` | how much of the workload the burst saw, and "
             "whether it landed on ordinary traffic |\n"
         )
@@ -1100,8 +1354,8 @@ be traced back to the capture it came from.
 | Statements seen in total | {statements['collected']} |
 | Left out, because they read and write no data | {not_data} |
 | Left out, because they are not your application's | {statements['excluded_not_this_application']} |
-| Tables described | {schema['tables']} |
-| Views described | {schema['views']} |
+{scope_rows}| Tables described | {schema['tables']} |
+{schema_row}| Views described | {schema['views']} |
 | Tables with a row count | {summary['cardinality']['table_count']} |
 
 Every query that ran during the window and touches one of your tables is here,

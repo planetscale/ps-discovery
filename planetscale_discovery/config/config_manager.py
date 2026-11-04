@@ -54,6 +54,9 @@ class WorkloadConfig:
     # file writes nothing; log_fdw is the only source that creates server objects.
     capture_log_source: str = "file"
     capture_log_file: Optional[str] = None
+    # The share of transactions the log holds, as log_transaction_sample_rate
+    # set it. None reads log_fdw's from the server and a file's as complete.
+    capture_log_sample_rate: Optional[float] = None
     # The distribution tier, off unless declared: pg_stats for these columns,
     # verbatim unless hash_values is true, which hashes them at finalize.
     distributions_by_column: List[str] = field(default_factory=list)
@@ -85,6 +88,23 @@ def workload_log_errors(workload: WorkloadConfig) -> List[str]:
         errors.append(
             "database.workload.capture_log_type is required when "
             "capture_log is true. Set it to statement or pgaudit."
+        )
+    rate = workload.capture_log_sample_rate
+    if rate is not None and (
+        isinstance(rate, bool)
+        or not isinstance(rate, (int, float))
+        or not 0 < rate <= 1
+    ):
+        errors.append(
+            "database.workload.capture_log_sample_rate must be a number above 0 "
+            f"and at most 1, the log_transaction_sample_rate the log was "
+            f"written with, got {rate!r}"
+        )
+    elif rate is not None and log_type == "pgaudit":
+        errors.append(
+            "database.workload.capture_log_sample_rate applies to "
+            "capture_log_type: statement only. pgAudit logs every statement "
+            "it audits, so leave it unset."
         )
     return errors
 
@@ -1044,6 +1064,9 @@ database:
   #   capture_log_source: file  # file or log_fdw. file reads capture_log_file;
   #                             # the file's encoding is read from the file
   #   capture_log_file:         # The exported log, for every source but log_fdw
+  #   capture_log_sample_rate:  # The log_transaction_sample_rate the log was
+  #                             # written with. Unset: log_fdw reads it from
+  #                             # the server, and a file is read as complete
   #   distributions:            # The columns your migration engineer names
   #     by_column:              # Every table carrying this column name
   #       - organization_id

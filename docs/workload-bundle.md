@@ -47,7 +47,7 @@ Two more files appear only when the query log was captured:
 
 | File | Contents |
 | --- | --- |
-| `burst.csv` | the query log: every statement the server logged, **with literal values in the `parameters` column**, which is real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
+| `burst.csv` | the query log: every statement the server logged, or a sample of whole transactions, **with literal values in the `parameters` column**, which is real data, by design. `session_id` and `command_tag` carry the transaction framing: which statements shared a session, and which rows opened or closed a transaction |
 | `coverage.json` | how much of the aggregate workload the log windows observed, and whether they landed on ordinary traffic |
 
 Both checks in `coverage.json` compare the log with the calls that a client
@@ -57,6 +57,30 @@ so the checks leave out the `nested_calls` of each statement.
 the statements that ran only inside a function, procedure or trigger. When the
 server cannot separate the two (PostgreSQL 13 and earlier), `nesting_unknown` is
 `true` and the checks count every call.
+
+A log written with `log_transaction_sample_rate` holds a sample of the
+transactions, each one whole. `sampling.rates` lists the rate each log window
+was written at, and `sampling.bursts_without_a_rate` counts the windows read as
+a complete log because no rate was recorded. `representativeness` divides each
+window's statement count by its rate before comparing it with the aggregate
+window, and reports the result as `estimated_statements_per_second`.
+
+Each entry in `coverage.heaviest_not_observed` carries `expected_in_log`: the
+statement's calls times the share of the window's calls that the log holds.
+That share covers both a sample and a log that covers only part of the window.
+`chance_absent` is the probability of seeing the statement zero times at that
+expectation if each of its calls ran in its own transaction, and
+`not_observed_likely_by_chance` counts the missed statements whose
+`chance_absent` is at least 0.05. A statement with a high `chance_absent` was
+missed by chance.
+
+`chance_absent` is a lower bound. A sample takes whole transactions, so calls
+that share a transaction are kept or missed together. A statement that runs
+5,000 times in 5 transactions, sampled at 0.001, has a `chance_absent` of
+0.007 but is missed 99.5% of the time. `pg_stat_statements` records no
+per-statement transaction count, so the tool cannot tell the two apart. Before
+reading a low `chance_absent` as a gap in the log, check whether the statement
+runs many times inside one transaction, in a loop or a batch.
 
 Every capture declares the columns your migration engineer names, and the
 bundle then holds one more file:
@@ -92,6 +116,10 @@ The tool also excludes statements that name no relation in `schema.sql`. These
 are monitoring queries, `psql` queries and this tool's own catalog reads. They
 are not the application's workload, and no planner can route a statement whose
 relation is absent from the schema file.
+
+When `workload.schemas` is set, a statement can name only tables in a schema
+that the setting leaves out. That statement can be the application's, so the
+tool counts it apart, per schema, and the README lists the schemas captured.
 
 A view is a relation for this purpose. An application that reads through a view
 names only the view, so `schema.sql` carries the view definitions and the filter
@@ -141,6 +169,22 @@ read a report's cost ranking as a ranking of patterns and not of traffic.
 `schema.sql` is rendered from the catalog metadata that the schema analyzer
 already collects, so the default path takes no table locks and needs no
 `pg_dump`.
+
+`init` reads the schema and stores it in the session. `finalize` reads it again
+when it can connect, and renders `schema.sql` from that newer read, because a
+migration during the window adds columns that the statements use. The README's
+"Schema read" row says which read `schema.sql` comes from.
+
+Each `collect` records a fingerprint of the schema. When the fingerprint is new
+to the session, `collect` reads the whole schema and keeps a copy. The README's
+"Schema changes during the window" row counts the changes, and a caveat names
+the two snapshots around each one. A statement that ran before a column or a
+table was dropped or renamed can name something that `schema.sql` does not
+hold. The caveat is how a reader finds that out.
+
+When `finalize` cannot connect, it renders the stored copy that matches the last
+snapshot, so `schema.sql` is the schema at the end of the window. A session with
+no such copy renders the schema from `init`, and a caveat says so.
 
 The tool does not render the hard parts by hand. It stores the output of
 PostgreSQL's own `pg_get_indexdef` and `pg_get_constraintdef` verbatim, so

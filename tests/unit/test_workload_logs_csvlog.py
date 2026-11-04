@@ -100,6 +100,11 @@ class TestParameters:
     def test_a_non_parameters_detail_is_none(self):
         assert _parameters("some other detail") is None
 
+    def test_postgresql_12_lowercase_is_read(self):
+        """The bug: 12 writes "parameters:", so every bind value was dropped."""
+        assert _parameters("parameters: $1 = '92'") == "$1 = '92'"
+        assert _parameters("Parameters: $1 = '92'") == "$1 = '92'"
+
 
 class TestReadRecordsAndStatements:
     def test_read_records_skips_a_bad_width_row(self, caplog):
