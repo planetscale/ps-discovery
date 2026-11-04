@@ -152,6 +152,15 @@ FROM public.emails TABLESAMPLE BERNOULLI (10);
 - **Statistical representation** of data
 - Only applied to tables with > 1,000 rows
 
+### Citus Tables
+
+On a database with the Citus extension, Citus tables are not analyzed. Each one
+is listed under `tables_skipped` with the reason `citus_table`, and a warning is
+recorded. The coordinator holds only a Citus table's empty shell, so the shell's
+size and row estimate would pass both safeguards above, and every column query
+would scan every shard in full. Regular tables on the same database are
+analyzed as usual. See [Citus Extension Support](citus.md).
+
 ### Performance Example
 
 For a table with 500,000 rows:

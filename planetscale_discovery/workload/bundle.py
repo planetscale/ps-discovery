@@ -1373,7 +1373,7 @@ dropped for being small, or sampled.
 | --- | --- |
 | `workload.sql` | the queries, each with how often it ran and how long it took |
 | `schema.sql` | your tables, indexes and views, as `CREATE` statements |
-| `plantest_counts.json` | how many rows each table holds, plus NDV and null fraction for indexed and constrained columns |
+| `plantest_counts.json` | how many rows each table holds, plus NDV and null fraction for the indexed and constrained columns the capture role may `SELECT` |
 | `plantest_counts-card.json` | the same content, under a second name the planning tools look for |
 | `manifest.json` | when this capture ran, and over which intervals |
 | `column_stats.json` | how evenly the values in each column are spread |

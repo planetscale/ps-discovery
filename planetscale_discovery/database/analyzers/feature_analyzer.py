@@ -6,6 +6,11 @@ Analyzes advanced PostgreSQL features, extensions, and custom data types.
 from typing import Dict, Any, List
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+from planetscale_discovery.database.citus import (
+    event_trigger_filter,
+    type_filter,
+    where,
+)
 
 
 class FeatureAnalyzer(DatabaseAnalyzer):
@@ -14,6 +19,7 @@ class FeatureAnalyzer(DatabaseAnalyzer):
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
         self._version_num = None
+        self.citus = self.config.get("citus")
 
     def _get_server_version_num(self) -> int:
         """Get PostgreSQL version number (cached)."""
@@ -178,9 +184,10 @@ class FeatureAnalyzer(DatabaseAnalyzer):
     def _get_custom_data_types(self) -> Dict[str, Any]:
         """Analyze custom data types."""
         try:
+            types = type_filter(self.citus, "t.oid", "n.oid", "t.typrelid")
             with self.connection.cursor() as cursor:
                 # Composite types
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         t.typname as type_name,
@@ -192,12 +199,13 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                     JOIN pg_roles r ON t.typowner = r.oid
                     WHERE t.typtype = 'c'  -- composite types
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {types}
                     ORDER BY n.nspname, t.typname
                 """)
                 composite_types = [dict(row) for row in cursor.fetchall()]
 
                 # Enum types
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         t.typname as type_name,
@@ -210,13 +218,14 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                     LEFT JOIN pg_enum e ON t.oid = e.enumtypid
                     WHERE t.typtype = 'e'  -- enum types
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {types}
                     GROUP BY n.nspname, t.typname, t.oid, r.rolname
                     ORDER BY n.nspname, t.typname
                 """)
                 enum_types = [dict(row) for row in cursor.fetchall()]
 
                 # Domain types
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         t.typname as type_name,
@@ -232,12 +241,13 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                     LEFT JOIN pg_constraint c ON c.contypid = t.oid
                     WHERE t.typtype = 'd'  -- domain types
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {types}
                     ORDER BY n.nspname, t.typname
                 """)
                 domain_types = [dict(row) for row in cursor.fetchall()]
 
                 # Range types
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         t.typname as type_name,
@@ -249,6 +259,7 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                     JOIN pg_roles ro ON t.typowner = ro.oid
                     JOIN pg_range r ON t.oid = r.rngtypid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {types}
                     ORDER BY n.nspname, t.typname
                 """)
                 range_types = [dict(row) for row in cursor.fetchall()]
@@ -798,7 +809,10 @@ class FeatureAnalyzer(DatabaseAnalyzer):
         """Analyze event triggers."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                event_filter = where(
+                    event_trigger_filter(self.citus, "pg_event_trigger.oid")
+                )
+                cursor.execute(f"""
                     SELECT
                         evtname as trigger_name,
                         evtevent as event,
@@ -807,6 +821,7 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         evtenabled as enabled,
                         evttags as tags
                     FROM pg_event_trigger
+                    {event_filter}
                     ORDER BY evtname
                 """)
 

@@ -3,9 +3,32 @@ PostgreSQL Schema Analysis Module
 Analyzes database structure, schemas, tables, and database objects.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+from planetscale_discovery.database.citus import (
+    CitusContext,
+    apply_logical_database_size,
+    citus_errors,
+    function_filter,
+    invalid_index_flag,
+    namespace_filter,
+    namespace_name_filter,
+    relation_filter,
+    size_pretty,
+    where,
+)
+
+# Fields of a table entry that hold logical values for a Citus table. The
+# coordinator's own values are kept under citus.coordinator.
+CITUS_TABLE_FIELDS = (
+    "estimated_rows",
+    "table_size_bytes",
+    "table_size_human",
+    "total_size_bytes",
+    "total_size_human",
+    "statistics",
+)
 
 
 class SchemaAnalyzer(DatabaseAnalyzer):
@@ -14,6 +37,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
         self._version_num = None
+        self.citus: Optional[CitusContext] = self.config.get("citus")
 
     def _get_server_version_num(self) -> int:
         """Get PostgreSQL version number (cached)."""
@@ -44,7 +68,126 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             "inheritance_analysis": self._get_inheritance_analysis(),
         }
 
+        if self.citus is not None:
+            self._apply_citus(results, self.citus)
+
         return results
+
+    def _apply_citus(self, results: Dict[str, Any], ctx: CitusContext) -> None:
+        """Fill the existing fields of Citus tables with logical values.
+
+        Regular tables keep their values and receive only a table type.
+        """
+        with citus_errors(
+            "Citus table values could not be combined.", "schema analysis"
+        ):
+            self._apply_citus_values(results, ctx)
+
+    def _apply_citus_values(self, results: Dict[str, Any], ctx: CitusContext) -> None:
+        stats = ctx.shard_statistics(self.connection)
+        indexes = {
+            (info["schema_name"], info["index_name"]): info
+            for info in stats.indexes.values()
+        }
+        sizes = [
+            value
+            for combined in stats.tables.values()
+            for value in (combined["table_size_bytes"], combined["total_size_bytes"])
+        ] + [info["index_size_bytes"] for info in stats.indexes.values()]
+
+        for table_info in results["table_analysis"]:
+            # By oid: a table renamed between the classification and this
+            # listing would otherwise be labeled regular, with its shell's values.
+            table = ctx.tables.get(table_info.get("table_oid"))
+            if table is None:
+                table_info["citus"] = {"table_type": "regular"}
+                continue
+            combined = stats.tables[table.oid]
+            coordinator = {key: table_info.get(key) for key in CITUS_TABLE_FIELDS}
+            table_info["estimated_rows"] = combined["estimated_rows"]
+            table_info["table_size_bytes"] = combined["table_size_bytes"]
+            table_info["total_size_bytes"] = combined["total_size_bytes"]
+            table_info["statistics"] = combined["statistics"]
+            table_info["citus"] = {
+                **table.describe(),
+                "placements_per_shard": combined["placements_per_shard"],
+                "source": "shards",
+                "coordinator": coordinator,
+                "shard_statistics": {
+                    "shards_read": combined["shards_read"],
+                    "shards_never_analyzed": combined["shards_never_analyzed"],
+                    "inactive_placements": combined["inactive_placements"],
+                    "placement_size_bytes": combined["placement_size_bytes"],
+                    "columns": combined["columns"],
+                },
+            }
+
+        pretty = size_pretty(self.connection, sizes)
+
+        for table_info in results["table_analysis"]:
+            if table_info["citus"].get("source") == "shards":
+                table_info["table_size_human"] = pretty.get(
+                    table_info["table_size_bytes"]
+                )
+                table_info["total_size_human"] = pretty.get(
+                    table_info["total_size_bytes"]
+                )
+
+        apply_logical_database_size(
+            self.connection, ctx, results["database_catalog"], "database_name"
+        )
+
+        for index_info in results["index_analysis"]:
+            info = indexes.get((index_info["schema_name"], index_info["index_name"]))
+            if info is None:
+                continue
+            index_info["citus"] = {
+                "source": "shards",
+                "shards_read": info["shards_read"],
+                **invalid_index_flag(info),
+                "coordinator": {
+                    key: index_info.get(key)
+                    for key in (
+                        "estimated_rows",
+                        "index_size_bytes",
+                        "index_size_human",
+                        "usage_stats",
+                    )
+                },
+            }
+            index_info["estimated_rows"] = info["estimated_rows"]
+            index_info["index_size_bytes"] = info["index_size_bytes"]
+            index_info["index_size_human"] = pretty.get(info["index_size_bytes"])
+            # PostgreSQL keeps no usage counters for a partitioned index, so a
+            # Citus parent's index has no usage_stats, as a regular one has none.
+            if info["idx_scan"] is not None:
+                index_info["usage_stats"] = {
+                    "idx_scan": info["idx_scan"],
+                    "idx_tup_read": info["idx_tup_read"],
+                    "idx_tup_fetch": info["idx_tup_fetch"],
+                }
+
+        for partition in results["partition_analysis"]:
+            table = ctx.table_by_name(
+                partition["partition_schema"], partition["partition_name"]
+            )
+            if table is None:
+                continue
+            combined = stats.tables[table.oid]
+            partition["citus"] = {
+                "source": "shards",
+                "coordinator": {
+                    key: partition.get(key)
+                    for key in (
+                        "partition_size_bytes",
+                        "partition_size_human",
+                        "estimated_rows",
+                    )
+                },
+            }
+            partition["partition_size_bytes"] = combined["table_size_bytes"]
+            partition["partition_size_human"] = pretty.get(combined["table_size_bytes"])
+            partition["estimated_rows"] = combined["estimated_rows"]
 
     def _get_temp_schema_counts(self) -> Dict[str, int]:
         """Count per-backend temp namespaces. Not migration-relevant; surfaced
@@ -142,7 +285,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 # They have no migration value and can number in the tens of
                 # thousands on databases with high max_connections + unpooled
                 # workloads — see _get_temp_schema_counts for a count signal.
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         r.rolname as owner,
@@ -154,6 +297,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_roles r ON n.nspowner = r.oid
                     WHERE n.nspname NOT LIKE 'pg_temp_%'
                       AND n.nspname NOT LIKE 'pg_toast_temp_%'
+                      {namespace_filter(self.citus, "n.oid")}
                     ORDER BY is_system_schema, n.nspname
                 """)
 
@@ -274,9 +418,8 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             identity_col = (
                 "a.attidentity" if has_declarative_partitioning else "''"
             ) + " as identity_kind"
-            generated_col = (
-                "a.attgenerated" if version_num >= 120000 else "''"
-            ) + " as generated_kind"
+            generated_attr = "a.attgenerated" if version_num >= 120000 else "''"
+            generated_col = generated_attr + " as generated_kind"
 
             with self.connection.cursor() as cursor:
                 # Build query based on version
@@ -311,6 +454,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_roles r ON c.relowner = r.oid
                     WHERE c.relkind IN {relkind_filter}
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {relation_filter(self.citus, "c.oid", "n.oid")}
                     ORDER BY n.nspname, c.relname
                 """)
 
@@ -323,8 +467,9 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 # Get column information.
                 # default_sequence is the sequence that the column default
                 # calls when the default is one nextval() call and nothing
-                # else. The default text stays in the database: the query
-                # selects only the sequence name, from pg_depend.
+                # else. A generated column keeps its expression in the
+                # default slot, so the expression goes to generated_expression
+                # and never to default_expression.
                 try:
                     with self.connection.cursor() as detail_cursor:
                         detail_cursor.execute(
@@ -363,7 +508,13 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                                     AND pg_get_expr(d.adbin, d.adrelid)
                                         ~ '^nextval\\(''(?:[^'']|'''')+''::regclass\\)$'
                                     LIMIT 1
-                                ) as default_sequence
+                                ) as default_sequence,
+                                CASE WHEN {generated_attr} = ''
+                                    THEN pg_get_expr(d.adbin, d.adrelid)
+                                END as default_expression,
+                                CASE WHEN {generated_attr} <> ''
+                                    THEN pg_get_expr(d.adbin, d.adrelid)
+                                END as generated_expression
                             FROM pg_attribute a
                             LEFT JOIN pg_attrdef d ON (a.attrelid = d.adrelid AND a.attnum = d.adnum)
                             WHERE a.attrelid = %s
@@ -475,7 +626,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about all indexes."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         i.relname as index_name,
@@ -503,6 +654,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_namespace n ON i.relnamespace = n.oid
                     JOIN pg_am am ON i.relam = am.oid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {relation_filter(self.citus, "t.oid", "n.oid")}
                     ORDER BY n.nspname, t.relname, i.relname
                 """)
 
@@ -548,7 +700,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about all constraints."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         c.relname as table_name,
@@ -572,6 +724,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     LEFT JOIN pg_class f_c ON con.confrelid = f_c.oid
                     LEFT JOIN pg_namespace f_n ON f_c.relnamespace = f_n.oid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {relation_filter(self.citus, "con.conrelid", "n.oid")}
                     ORDER BY n.nspname, c.relname, con.conname
                 """)
 
@@ -585,7 +738,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about all functions and procedures."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         p.proname as function_name,
@@ -607,6 +760,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_language l ON p.prolang = l.oid
                     JOIN pg_roles r ON p.proowner = r.oid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {function_filter(self.citus, "p.oid", "n.oid")}
                     ORDER BY n.nspname, p.proname
                 """)
 
@@ -620,7 +774,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about all triggers."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         c.relname as table_name,
@@ -636,6 +790,8 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_proc p ON t.tgfoid = p.oid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     AND NOT t.tgisinternal
+                    {relation_filter(self.citus, "c.oid", "n.oid")}
+                    {function_filter(self.citus, "p.oid", "p.pronamespace")}
                     ORDER BY n.nspname, c.relname, t.tgname
                 """)
 
@@ -649,7 +805,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about views and materialized views."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         c.relname as view_name,
@@ -670,6 +826,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_roles r ON c.relowner = r.oid
                     WHERE c.relkind IN ('v', 'm')  -- views and materialized views
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {relation_filter(self.citus, "c.oid", "n.oid")}
                     ORDER BY n.nspname, c.relname
                 """)
 
@@ -683,7 +840,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
         """Get detailed information about sequences."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         schemaname as schema_name,
                         sequencename as sequence_name,
@@ -698,6 +855,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                         NULL::boolean as is_called
                     FROM pg_sequences
                     WHERE schemaname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {namespace_name_filter(self.citus, "schemaname")}
                     ORDER BY schemaname, sequencename
                 """)
 
@@ -721,7 +879,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 return []
 
             with self.connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         parent_ns.nspname as parent_schema,
                         parent_class.relname as parent_table,
@@ -732,11 +890,12 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                         pg_size_pretty(pg_relation_size(child_class.oid)) as partition_size_human,
                         child_class.reltuples::bigint as estimated_rows
                     FROM pg_inherits i
-                    JOIN pg_class parent_class ON i.inhparent = parent_class.oid
+                    JOIN pg_class parent_class ON i.inhparent = parent_class.oid AND parent_class.relkind = 'p'
                     JOIN pg_namespace parent_ns ON parent_class.relnamespace = parent_ns.oid
                     JOIN pg_class child_class ON i.inhrelid = child_class.oid
                     JOIN pg_namespace child_ns ON child_class.relnamespace = child_ns.oid
                     WHERE child_class.relispartition = true
+                    {relation_filter(self.citus, "child_class.oid", "child_ns.oid")}
                     ORDER BY parent_ns.nspname, parent_class.relname, child_ns.nspname, child_class.relname
                 """)
 
@@ -757,6 +916,9 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                 if has_declarative_partitioning
                 else "false as is_partition"
             )
+            inheritance_filter = where(
+                relation_filter(self.citus, "child_class.oid", "child_ns.oid")
+            )
 
             with self.connection.cursor() as cursor:
                 cursor.execute(f"""
@@ -772,6 +934,7 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                     JOIN pg_namespace parent_ns ON parent_class.relnamespace = parent_ns.oid
                     JOIN pg_class child_class ON i.inhrelid = child_class.oid
                     JOIN pg_namespace child_ns ON child_class.relnamespace = child_ns.oid
+                    {inheritance_filter}
                     ORDER BY parent_ns.nspname, parent_class.relname, i.inhseqno
                 """)
 

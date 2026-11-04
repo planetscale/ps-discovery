@@ -466,6 +466,22 @@ class TestPerformanceAnalyzer:
         assert len(result["largest_tables"]) == 1
         assert result["temp_file_usage"] == []
 
+    def test_resource_utilization_quotes_table_names(self, analyzer, mock_connection):
+        """A table name that needs quoting, like "User", must not fail the
+        section: an unquoted name folds to user, which does not exist."""
+        _, cursor = mock_connection
+        cursor.fetchall.side_effect = [[], [], []]
+
+        analyzer._get_resource_utilization()
+
+        largest_sql = next(
+            c.args[0]
+            for c in cursor.execute.call_args_list
+            if "FROM pg_tables" in c.args[0]
+        )
+        assert "format('%I.%I', schemaname, tablename)" in largest_sql
+        assert "schemaname||'.'||tablename" not in largest_sql
+
     def test_resource_utilization_error(self, analyzer, mock_connection):
         """Test resource utilization graceful degradation on error."""
         _, cursor = mock_connection

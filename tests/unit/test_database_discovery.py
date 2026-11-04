@@ -354,3 +354,125 @@ class TestStatementTimeoutPlumbing:
 
         _, kwargs = discovery_cls.call_args
         assert kwargs["statement_timeout"] == "20s"
+
+
+class TestCitusWiring:
+    """Citus detection runs only for callers that opt in, and stops the run."""
+
+    def run(self, discovery, modules):
+        with patch("planetscale_discovery.database.discovery.psycopg2.connect") as conn:
+            conn.return_value = MagicMock()
+            discovery.connection = MagicMock()
+            return discovery.run_analysis(modules)
+
+    def test_the_discovery_tool_opts_in(self):
+        """Catches the normal discovery path never detecting Citus."""
+        config = DiscoveryConfig()
+        config.database = DatabaseConfig(database="testdb")
+        with patch(
+            "planetscale_discovery.database.discovery.PostgreSQLDiscovery"
+        ) as discovery_cls:
+            discovery_cls.return_value.connect.return_value = True
+            DatabaseDiscoveryTool(config).discover()
+        _, kwargs = discovery_cls.call_args
+        assert kwargs["citus_detection"] is True
+
+    def test_other_callers_never_detect(self):
+        """Catches a Citus query reaching workload capture's transaction."""
+        with patch("planetscale_discovery.database.discovery.detect_citus") as detect:
+            self.run(PostgreSQLDiscovery({"host": "h", "database": "d"}), [])
+        detect.assert_not_called()
+
+    def test_no_citus_module_without_the_extension(self):
+        """Catches the citus module or the preflight run on a server without the
+        extension.
+        """
+        discovery = PostgreSQLDiscovery(
+            {"host": "h", "database": "d"}, citus_detection=True
+        )
+        with (
+            patch(
+                "planetscale_discovery.database.discovery.detect_citus",
+                return_value=None,
+            ),
+            patch("planetscale_discovery.database.discovery.preflight") as preflight,
+        ):
+            results = self.run(discovery, None)
+        preflight.assert_not_called()
+        assert "citus" not in results["analysis_results"]
+        assert "citus" not in results["connection_info"]
+
+    def test_the_citus_module_and_context_are_added_when_detected(self):
+        """Catches an analyzer run without the Citus context on a Citus database, or the
+        citus module left out.
+        """
+        ctx = MagicMock()
+        ctx.connection_info.return_value = {"node_role": "coordinator"}
+        discovery = PostgreSQLDiscovery(
+            {"host": "h", "database": "d"}, citus_detection=True
+        )
+        with (
+            patch(
+                "planetscale_discovery.database.discovery.detect_citus",
+                return_value=ctx,
+            ),
+            patch("planetscale_discovery.database.discovery.preflight"),
+            patch("planetscale_discovery.database.discovery.SchemaAnalyzer") as schema,
+            patch("planetscale_discovery.database.discovery.CitusAnalyzer") as module,
+        ):
+            schema.return_value.analyze.return_value = {}
+            schema.return_value.errors = []
+            schema.return_value.warnings = []
+            module.return_value.analyze.return_value = {}
+            module.return_value.errors = []
+            module.return_value.warnings = []
+            results = self.run(discovery, ["schema"])
+        assert schema.call_args.kwargs["config"]["citus"] is ctx
+        assert module.call_args.kwargs["config"]["citus"] is ctx
+        assert "citus" in results["analysis_results"]
+        assert results["connection_info"]["citus"] == {"node_role": "coordinator"}
+
+    def test_a_citus_error_in_an_analyzer_stops_the_run(self):
+        """Catches a shard read failure recorded as a module failure."""
+        from planetscale_discovery.database.citus import CitusClusterError
+
+        ctx = MagicMock()
+        ctx.connection_info.return_value = {}
+        discovery = PostgreSQLDiscovery(
+            {"host": "h", "database": "d"}, citus_detection=True
+        )
+        with (
+            patch(
+                "planetscale_discovery.database.discovery.detect_citus",
+                return_value=ctx,
+            ),
+            patch("planetscale_discovery.database.discovery.preflight"),
+            patch("planetscale_discovery.database.discovery.SchemaAnalyzer") as schema,
+        ):
+            schema.return_value.analyze.side_effect = CitusClusterError("node down")
+            with pytest.raises(CitusClusterError):
+                self.run(discovery, ["schema"])
+
+    def test_a_failed_preflight_stops_before_any_analyzer(self):
+        """Catches analyzers that run after the preflight failed, which spends a full
+        run before stopping.
+        """
+        from planetscale_discovery.database.citus import CitusClusterError
+
+        discovery = PostgreSQLDiscovery(
+            {"host": "h", "database": "d"}, citus_detection=True
+        )
+        with (
+            patch(
+                "planetscale_discovery.database.discovery.detect_citus",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "planetscale_discovery.database.discovery.preflight",
+                side_effect=CitusClusterError("worker unreachable"),
+            ),
+            patch("planetscale_discovery.database.discovery.SchemaAnalyzer") as schema,
+        ):
+            with pytest.raises(CitusClusterError):
+                self.run(discovery, ["schema"])
+        schema.assert_not_called()

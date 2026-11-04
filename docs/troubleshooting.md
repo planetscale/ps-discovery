@@ -113,6 +113,39 @@ telnet your-postgres-host 5432
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 ```
 
+### Citus Discovery Stopped
+
+On a database with the Citus extension, database discovery reads every shard
+placement or stops. The message begins with `Citus discovery stopped` and names
+each node or privilege at fault. No database result is written. See
+[Citus Extension Support](citus.md#requirements).
+
+The exit code depends on what the run covers:
+
+- **Database discovery alone** exits with code 1, and writes no report.
+- **A combined run**, with a cloud provider configured, continues with cloud
+  discovery, writes the report with `database_results` set to `null`, and exits
+  with code 0, as for any other database failure. A wrapper that checks the exit
+  code alone does not detect it. Check `database_results` in the report, or the
+  log for `Citus discovery stopped`.
+
+| Message | Remedy |
+| --- | --- |
+| `Discovery is connected to a Citus worker` | Connect to the coordinator. |
+| `<node>: unreachable` or `<node>: returned no result` | Start the node, or restore the network path from the coordinator to it. |
+| `<node>: the node rejected the discovery role` | Allow the discovery role on that node: a `pg_hba.conf` entry, or a `.pgpass` file or `pg_dist_authinfo` entry on the coordinator. |
+| `<node>: Citus metadata is not synced to the node` | The worker cannot recognize its shards. After an upgrade from Citus 10, run `SELECT citus_finalize_upgrade_to_citus11();` on the coordinator. Otherwise run `SELECT start_metadata_sync_to_node('<host>', <port>);` on the coordinator for that node. |
+| `node <id>: not in pg_dist_node when discovery started` | A node was added to the cluster during the run. Run discovery again once the change is finished. |
+| `no active placement on a node that discovery can read` | The shard's placements are on an inactive node or a secondary. Activate the node, or move the placement. |
+| `missing EXECUTE privilege` or `missing SELECT privilege` | Run the `GRANT` printed in the message, on the coordinator. |
+| `citus.use_secondary_nodes` | Set it to `never` for the discovery role. |
+| `index <name>: dropped during discovery` | The index was dropped during the run. Run discovery again. |
+| `index <name>: not found on N of M shards` | On a partition's index, created from its parent's index: the shard indexes can lack their shard id after PostgreSQL named them automatically. Run `SELECT fix_all_partition_shard_index_names();` on the coordinator, which renames them. On any other index, or when that function does not clear the error: the index was not created on those shards, typically because it was created with `citus.enable_ddl_propagation` off. Recreate it with DDL propagation on, or drop it. An invalid index, such as one left by a failed `CREATE INDEX CONCURRENTLY`, never stops the run. |
+| `function not found` or `table not found; this Citus version is not supported` | Run discovery against a supported Citus version. |
+
+Do not work around these errors by connecting as a superuser. Report the node or
+the privilege named in the message instead.
+
 ### Missing Dependencies
 
 ```bash

@@ -1235,3 +1235,145 @@ class TestCombinedSummaryGaps:
         }
         summary = generate_combined_summary(results)
         assert summary["database_summary"]["analysis_gaps"] == 0
+
+
+class TestCitusErrors:
+    """A Citus node, shard or privilege that is unavailable stops the run."""
+
+    def citus_error(self):
+        from planetscale_discovery.database.citus import CitusClusterError
+
+        return CitusClusterError(
+            "A Citus node could not be read.",
+            [
+                {
+                    "subject": "citus-worker-2:5432",
+                    "cause": "unreachable",
+                    "detail": "connection to the remote node failed: Connection refused",
+                }
+            ],
+        )
+
+    def test_the_message_names_the_node_and_not_the_coordinator(self):
+        """Catches a worker failure blamed on the coordinator's host and port."""
+        from planetscale_discovery.cli import _handle_database_error
+
+        logger = Mock()
+        _handle_database_error(self.citus_error(), logger)
+        message = logger.error.call_args.args[0]
+        assert "citus-worker-2:5432" in message
+        assert "Citus discovery stopped" in message
+        assert "Check that the host and port" not in message
+
+    @pytest.mark.parametrize(
+        "command, expect_exit", [("database", True), ("both", False)]
+    )
+    def test_no_database_result_is_written(self, tmp_path, command, expect_exit):
+        """Catches a partial database result written after a Citus failure."""
+        from planetscale_discovery.config.config_manager import (
+            DatabaseConfig,
+            DiscoveryConfig,
+        )
+
+        config = DiscoveryConfig()
+        config.database = DatabaseConfig(database="postgres", username="discovery")
+        manager = Mock()
+        manager.load_config.return_value = config
+        argv = ["cli", command, "--output-dir", str(tmp_path)]
+        with (
+            patch("planetscale_discovery.cli.ConfigManager", return_value=manager),
+            patch("planetscale_discovery.cli.setup_logging", return_value=Mock()),
+            patch(
+                "planetscale_discovery.cli.run_database_discovery",
+                side_effect=self.citus_error(),
+            ),
+            patch(
+                "planetscale_discovery.cli.run_cloud_discovery",
+                return_value={"summary": {}},
+            ),
+            patch("sys.argv", argv),
+            patch("builtins.print"),
+        ):
+            if expect_exit:
+                with pytest.raises(SystemExit) as exit_info:
+                    main()
+                assert exit_info.value.code == 1
+            else:
+                main()
+
+        reports = list(tmp_path.glob("*.json"))
+        if expect_exit:
+            assert reports == []
+        else:
+            import json
+
+            assert json.loads(reports[0].read_text())["database_results"] is None
+
+
+class TestCitusSummary:
+    def citus_results(self):
+        return {
+            "database_results": {
+                "engine": "postgres",
+                "connection_info": {"current_database": "postgres"},
+                "analysis_results": {
+                    "schema": {"table_analysis": [{"total_size_bytes": 1024}]},
+                    "citus": {
+                        "version": {"extension_version": "14.1-1"},
+                        "summary": {
+                            "node_count": 3,
+                            "table_counts": {
+                                "distributed": 4,
+                                "reference": 1,
+                                "regular": 2,
+                            },
+                            "citus_table_logical_size_bytes": 1024,
+                            "cluster_storage_bytes": 4096,
+                        },
+                    },
+                },
+                "analysis_gaps": [],
+            },
+            "cloud_results": None,
+        }
+
+    def test_the_combined_summary_carries_the_citus_counts(self):
+        """Catches the Citus counts left out of the combined summary."""
+        summary = generate_combined_summary(self.citus_results())
+        assert summary["database_summary"]["citus"]["table_counts"]["regular"] == 2
+
+    def test_the_citus_summary_is_copied_unchanged(self):
+        """Catches the combined summary reporting Citus counts or storage that differ
+        from analysis_results.citus.summary, as the output format promises."""
+        results = self.citus_results()
+        summary = generate_combined_summary(results)
+        expected = results["database_results"]["analysis_results"]["citus"]["summary"]
+        assert summary["database_summary"]["citus"] == expected
+
+    def test_a_server_without_citus_has_no_citus_summary(self):
+        """Catches a citus key added to the summary of a server without Citus."""
+        results = self.citus_results()
+        del results["database_results"]["analysis_results"]["citus"]
+        summary = generate_combined_summary(results)
+        assert "citus" not in summary["database_summary"]
+
+    def test_unread_cluster_storage_is_left_out_of_the_markdown(self, tmp_path):
+        """Catches a cluster storage that was not read printed as 0 bytes."""
+        path = tmp_path / "summary.md"
+        results = dict(self.citus_results(), timestamp="t", discovery_version="v")
+        citus_summary = results["database_results"]["analysis_results"]["citus"]
+        citus_summary["summary"]["cluster_storage_bytes"] = None
+        results["summary"] = generate_combined_summary(results)
+        generate_summary_markdown(results, path)
+        assert "Cluster Storage" not in path.read_text()
+
+    def test_the_markdown_lists_citus_tables_and_storage(self, tmp_path):
+        """Catches the Citus lines missing from the local summary."""
+        path = tmp_path / "summary.md"
+        results = dict(self.citus_results(), timestamp="t", discovery_version="v")
+        results["summary"] = generate_combined_summary(results)
+        generate_summary_markdown(results, path)
+        text = path.read_text()
+        assert "**Citus:** 14.1-1, 3 node(s)" in text
+        assert "4 distributed, 1 reference, 2 regular" in text
+        assert "**Cluster Storage:**" in text

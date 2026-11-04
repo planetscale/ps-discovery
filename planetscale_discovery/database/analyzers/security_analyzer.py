@@ -6,6 +6,11 @@ Analyzes security configuration, users, roles, and permissions.
 from typing import Dict, Any, List
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+from planetscale_discovery.database.citus import (
+    function_filter,
+    namespace_filter,
+    relation_filter,
+)
 
 
 class SecurityAnalyzer(DatabaseAnalyzer):
@@ -13,6 +18,7 @@ class SecurityAnalyzer(DatabaseAnalyzer):
 
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
+        self.citus = self.config.get("citus")
         self._version_num = None
 
     def _get_server_version_num(self) -> int:
@@ -147,7 +153,7 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                 database_privileges = [dict(row) for row in cursor.fetchall()]
 
                 # Schema privileges
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         n.nspacl as schema_acl,
@@ -158,11 +164,12 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                     FROM pg_namespace n
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     AND n.nspacl IS NOT NULL
+                    {namespace_filter(self.citus, "n.oid")}
                 """)
                 schema_privileges = [dict(row) for row in cursor.fetchall()]
 
                 # Table privileges
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         c.relname as table_name,
@@ -176,12 +183,13 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                     WHERE c.relkind IN ('r', 'v', 'm', 'S', 'f')
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     AND c.relacl IS NOT NULL
+                    {relation_filter(self.citus, "c.oid", "n.oid")}
                     ORDER BY n.nspname, c.relname
                 """)
                 table_privileges = [dict(row) for row in cursor.fetchall()]
 
                 # Function privileges
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         p.proname as function_name,
@@ -194,6 +202,7 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                     JOIN pg_namespace n ON p.pronamespace = n.oid
                     WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     AND p.proacl IS NOT NULL
+                    {function_filter(self.citus, "p.oid", "n.oid")}
                     ORDER BY n.nspname, p.proname
                 """)
                 function_privileges = [dict(row) for row in cursor.fetchall()]
@@ -303,7 +312,7 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                 risks = []
 
                 # Functions with SECURITY DEFINER
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         p.proname as function_name,
@@ -317,6 +326,7 @@ class SecurityAnalyzer(DatabaseAnalyzer):
                     JOIN pg_language l ON p.prolang = l.oid
                     WHERE p.prosecdef = true
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                    {function_filter(self.citus, "p.oid", "n.oid")}
                     ORDER BY n.nspname, p.proname
                 """)
 
