@@ -99,3 +99,36 @@ class TestBeginOpensATransaction:
         assert shapes[0]["explicit"] is True
         tables = " ".join(row["sql"] for row in shapes[0]["rows"])
         assert "orders" in tables and "order_items" in tables
+
+
+# A server's first lines come from background processes, which write %v, %u
+# and %d empty. Prefix '%m [%p] %c %v %u@%d ', from a PostgreSQL 17 log.
+STARTUP_FIRST = [
+    "2026-11-02 15:48:00.344 UTC [57] 6ae8b0b0.39  @ LOG:  starting PostgreSQL 17.11",
+    "2026-11-02 15:48:00.345 UTC [57] 6ae8b0b0.39  @ LOG:  listening on Unix socket",
+    "2026-11-02 15:48:00.350 UTC [61] 6ae8b0b0.3d  @ LOG:  database system was shut down",
+    "2026-11-02 15:48:00.353 UTC [57] 6ae8b0b0.39  @ LOG:  database system is ready",
+    "2026-11-02 15:48:41.148 UTC [115] 6ae8b0d9.73 12/2 app@shop "
+    "LOG:  duration: 0.011 ms  statement: BEGIN;",
+    "2026-11-02 15:48:41.149 UTC [115] 6ae8b0d9.73 12/2 app@shop "
+    "LOG:  duration: 0.023 ms  statement: SELECT 1;",
+]
+
+
+class TestAnEmptyVirtualTransactionIdKeepsTheClientLines:
+    """The bug: %v required a value, so the sniff chose the background lines'
+    prefix and every client line of a PostgreSQL 17 log went unparsed."""
+
+    def test_the_prefix_keeps_the_virtual_transaction_id(self):
+        assert sniff_prefix(STARTUP_FIRST) == "%m [%p] %c %v %u@%d "
+
+    def test_every_line_parses(self):
+        summary = {}
+        records = list(
+            read_records(STARTUP_FIRST, sniff_prefix(STARTUP_FIRST), summary)
+        )
+        assert len(records) == len(STARTUP_FIRST)
+        assert summary.get("unparsed", 0) == 0
+        assert records[0]["virtual_transaction_id"] == ""
+        assert records[4]["virtual_transaction_id"] == "12/2"
+        assert records[4]["user_name"] == "app"

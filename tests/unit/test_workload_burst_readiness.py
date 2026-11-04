@@ -6,11 +6,11 @@ from planetscale_discovery.workload.burst.readiness import (
     RDS_RICH_LOG_LINE_PREFIX,
     LogCaptureProbe,
     _destinations,
-    _logs_every_statement,
+    _logs_durations,
     _num,
-    _positive,
     _prefix_escapes,
     _tiers,
+    log_sample_rate,
 )
 
 
@@ -117,6 +117,27 @@ class TestRequirements:
         assert req["readable_over_sql"]["available"] is True
         assert req["aggregate_join"]["available"] is True
 
+    def test_a_duration_threshold_is_no_statement_log(self):
+        """A production threshold such as 1s logs only the slow statements."""
+        settings = {
+            "log_destination": "csvlog",
+            "log_min_duration_statement": "1s",
+            "log_statement": "none",
+            "log_transaction_sample_rate": "0",
+        }
+        req = self._requirements(settings, 170000, "self_managed", "absent")
+        assert req["statement_log"]["available"] is False
+
+    def test_a_sample_rate_is_a_statement_log(self):
+        settings = {
+            "log_destination": "csvlog",
+            "log_min_duration_statement": "-1",
+            "log_statement": "none",
+            "log_transaction_sample_rate": "0.001",
+        }
+        req = self._requirements(settings, 170000, "self_managed", "absent")
+        assert req["statement_log"]["available"] is True
+
     def test_a_bare_minimum_self_managed_host(self):
         settings = {
             "log_destination": "stderr",
@@ -166,6 +187,29 @@ class TestNotes:
         codes = self._codes(settings)
         assert "log_statement_splits_text_from_query_id" in codes
         assert "log_statement_loses_query_id_on_simple_protocol" not in codes
+
+    def test_sampled_log_holds_unsampled_statements(self):
+        base = {
+            "log_statement": "none",
+            "log_min_duration_statement": "-1",
+            "log_transaction_sample_rate": "0.001",
+            "log_destination": "csvlog",
+        }
+        code = "sampled_log_holds_unsampled_statements"
+        assert code not in self._codes(base)
+        assert code in self._codes(dict(base, log_min_duration_statement="1s"))
+        assert code in self._codes(dict(base, log_statement="mod"))
+
+    def test_transaction_sample_rate_has_no_effect(self):
+        settings = {
+            "log_statement": "none",
+            "log_min_duration_statement": "0",
+            "log_transaction_sample_rate": "0.001",
+            "log_destination": "csvlog",
+        }
+        codes = self._codes(settings)
+        assert "transaction_sample_rate_has_no_effect" in codes
+        assert "sampled_log_holds_unsampled_statements" not in codes
 
     def test_no_session_identity_in_log(self):
         settings = {
@@ -274,29 +318,55 @@ class TestPrefixEscapes:
         }
 
 
-class TestLogsEveryStatement:
+class TestLogsDurations:
     def test_zero_is_on(self):
-        assert _logs_every_statement("0") is True
+        assert _logs_durations("0") is True
 
     def test_negative_one_is_off(self):
-        assert _logs_every_statement("-1") is False
+        assert _logs_durations("-1") is False
 
-    def test_a_positive_value_is_on(self):
-        assert _logs_every_statement("500") is True
+    def test_a_threshold_is_on(self):
+        assert _logs_durations("500") is True
 
     def test_a_missing_value_is_off(self):
-        assert _logs_every_statement(None) is False
+        assert _logs_durations(None) is False
 
 
-class TestPositive:
-    def test_a_positive_number(self):
-        assert _positive("0.5") is True
+class TestLogSampleRate:
+    OFF = {
+        "log_min_duration_statement": "-1",
+        "log_statement": "none",
+        "log_transaction_sample_rate": "0",
+    }
 
-    def test_zero_is_not_positive(self):
-        assert _positive("0") is False
+    def test_a_zero_threshold_logs_everything(self):
+        assert log_sample_rate(dict(self.OFF, log_min_duration_statement="0")) == 1.0
 
-    def test_a_missing_value_is_not_positive(self):
-        assert _positive(None) is False
+    def test_log_statement_all_logs_everything(self):
+        assert log_sample_rate(dict(self.OFF, log_statement="all")) == 1.0
+
+    def test_a_full_log_overrides_the_sample_rate(self):
+        settings = dict(
+            self.OFF,
+            log_min_duration_statement="0",
+            log_transaction_sample_rate="0.001",
+        )
+        assert log_sample_rate(settings) == 1.0
+
+    def test_a_sample_rate_alone(self):
+        settings = dict(self.OFF, log_transaction_sample_rate="0.001")
+        assert log_sample_rate(settings) == 0.001
+
+    def test_a_duration_threshold_is_not_a_statement_log(self):
+        """A threshold keeps only the slow statements of each transaction."""
+        assert log_sample_rate(dict(self.OFF, log_min_duration_statement="1s")) is None
+
+    def test_log_statement_mod_is_not_a_statement_log(self):
+        assert log_sample_rate(dict(self.OFF, log_statement="mod")) is None
+
+    def test_nothing_logged(self):
+        assert log_sample_rate(self.OFF) is None
+        assert log_sample_rate({}) is None
 
 
 class TestNum:

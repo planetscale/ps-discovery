@@ -4,6 +4,7 @@ from planetscale_discovery.workload.burst.collector import (
     STATUS_FAILED,
     STATUS_OK,
     BurstCollector,
+    sampling,
 )
 from planetscale_discovery.workload.burst.coverage import coverage, representativeness
 from planetscale_discovery.workload.burst.importer import (
@@ -20,6 +21,7 @@ __all__ = [
     "STATUS_FAILED",
     "STATUS_OK",
     "BurstCollector",
+    "sampling",
     "drop_leftovers",
     "find_leftovers",
     "coverage",

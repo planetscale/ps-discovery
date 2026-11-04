@@ -10,6 +10,7 @@ from planetscale_discovery.workload.burst.collector import (
     _event_window,
     _session_summary,
     _table_name,
+    sampling,
 )
 from planetscale_discovery.workload.logs.pgaudit import ObjectLoggingError
 from planetscale_discovery.workload.logs.timestamps import instant_utc
@@ -247,19 +248,22 @@ def _audit_row(message):
     }
 
 
-def _collect_live_rows(rows, log_type="pgaudit"):
+def _collect_live_rows(rows, log_type="pgaudit", settings=None, **config):
     """Run collect() through the mocked log_fdw read, with no database."""
     connection = MagicMock()
     cursor = MagicMock()
     cursor.__iter__.return_value = iter(rows)
     connection.cursor.return_value.__enter__.return_value = cursor
-    collector = BurstCollector(connection, config={"capture_log_type": log_type})
+    collector = BurstCollector(
+        connection, config={"capture_log_type": log_type, **config}
+    )
     collector._sql = FakeSql(
         execute_ok=True,
         one_map={
             "pg_foreign_server": None,
             "pg_extension": {"schema": "public"},
             "information_schema.columns": {"columns": 24},
+            "log_transaction_sample_rate": settings,
         },
         all_map={
             "list_postgres_log_files": [
@@ -291,6 +295,98 @@ class TestStatementRowsStayOnTheStatementParser:
         )
         assert [row["sql"] for row in result["statements"]] == ["select from_statement"]
         assert "loss_summary" not in result
+
+
+STATEMENT_ROW = {
+    "log_time": "2024-01-01 00:00:00.000 UTC",
+    "session_id": "5f1.3",
+    "error_severity": "LOG",
+    "message": "duration: 0.1 ms  statement: select 1",
+}
+
+SAMPLED = {
+    "log_min_duration_statement": "-1",
+    "log_statement": "none",
+    "log_transaction_sample_rate": "0.001",
+}
+
+
+class TestTheLiveReadRecordsTheSampleRate:
+    def test_the_server_rate_is_recorded(self):
+        result = _collect_live_rows(
+            [STATEMENT_ROW], log_type="statement", settings=SAMPLED
+        )
+        assert result["sample_rate"] == 0.001
+        assert result["sample_rate_source"] == "server"
+        assert result["warnings"] == []
+
+    def test_a_threshold_beside_the_sample_is_a_warning(self):
+        settings = dict(SAMPLED, log_min_duration_statement="1s")
+        result = _collect_live_rows(
+            [STATEMENT_ROW], log_type="statement", settings=settings
+        )
+        assert result["sample_rate"] == 0.001
+        assert any("outside the sample" in w for w in result["warnings"])
+
+    def test_the_configured_rate_wins_and_a_mismatch_is_a_warning(self):
+        result = _collect_live_rows(
+            [STATEMENT_ROW],
+            log_type="statement",
+            settings=SAMPLED,
+            capture_log_sample_rate=0.01,
+        )
+        assert result["sample_rate"] == 0.01
+        assert result["sample_rate_source"] == "config"
+        assert any("capture_log_sample_rate is 0.01" in w for w in result["warnings"])
+
+    def test_unreadable_settings_record_no_rate(self):
+        result = _collect_live_rows([STATEMENT_ROW], log_type="statement")
+        assert result["sample_rate"] is None
+        assert result["sample_rate_source"] is None
+
+
+class TestSampling:
+    def test_pgaudit_records_no_rate(self):
+        assert sampling("pgaudit", None, SAMPLED) == ({}, [])
+
+    def test_a_file_with_no_configured_rate_is_complete(self):
+        assert sampling("statement", None) == (
+            {"sample_rate": None, "sample_rate_source": None},
+            [],
+        )
+
+    def test_a_file_with_a_configured_rate(self):
+        assert sampling("statement", 0.001) == (
+            {"sample_rate": 0.001, "sample_rate_source": "config"},
+            [],
+        )
+
+    def test_a_configured_rate_equal_to_the_server_is_no_warning(self):
+        assert sampling("statement", 0.001, SAMPLED) == (
+            {"sample_rate": 0.001, "sample_rate_source": "config"},
+            [],
+        )
+
+    def test_a_full_log_is_rate_one(self):
+        settings = dict(SAMPLED, log_min_duration_statement="0")
+        fields, warnings = sampling("statement", None, settings)
+        assert fields == {"sample_rate": 1.0, "sample_rate_source": "server"}
+        assert warnings == []
+
+    def test_settings_that_log_no_whole_transactions_are_a_warning(self):
+        settings = dict(SAMPLED, log_transaction_sample_rate="0")
+        fields, warnings = sampling("statement", None, settings)
+        assert fields["sample_rate"] is None
+        assert "log no whole" in warnings[0]
+        assert "set capture_log_sample_rate" in warnings[0]
+
+    def test_a_rate_on_the_application_role_is_configured_not_seen(self):
+        """current_setting() sees this session's settings, not another role's."""
+        settings = dict(SAMPLED, log_transaction_sample_rate="0")
+        assert sampling("statement", 0.001, settings) == (
+            {"sample_rate": 0.001, "sample_rate_source": "config"},
+            [],
+        )
 
 
 class TestPgauditRowsAreParsedOnTheLiveRead:

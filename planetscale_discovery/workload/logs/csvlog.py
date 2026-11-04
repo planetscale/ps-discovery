@@ -17,7 +17,8 @@ BIND_RE = re.compile(r"^(?:duration:\s*[\d.]+\s*ms\s+)?bind\s+(?:<unnamed>|[^:]+
 
 DURATION_RE = re.compile(r"^duration:\s*([\d.]+)\s*ms")
 
-PARAMETERS_RE = re.compile(r"^Parameters:\s*(.*)$", re.S)
+# PostgreSQL 12 and earlier write "parameters:"; 13 and later "Parameters:".
+PARAMETERS_RE = re.compile(r"^parameters:\s*(.*)$", re.S | re.I)
 
 ERROR_SEVERITIES = ("ERROR", "FATAL", "PANIC")
 

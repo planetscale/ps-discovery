@@ -892,3 +892,38 @@ class TestSchemaRead:
         assert "refused" not in caveat
         readme = (tmp_path / "README.md").read_text()
         assert "| Schema read | by init, before the first snapshot |" in readme
+
+
+class TestASampledBurstIsNamedInTheReadme:
+    """A sampled log was described as every statement the server logged."""
+
+    def _readme(self, tmp_path, rate):
+        rows = [
+            {
+                "log_time": f"2026-08-25 10:00:0{second}.000 UTC",
+                "session_id": "s1",
+                "sql": "SELECT * FROM orders WHERE id = 1",
+                "query_id": 1,
+            }
+            for second in range(3)
+        ]
+        burst = {
+            "status": "ok",
+            "window_start": "2026-08-25 10:00:00+00:00",
+            "window_end": "2026-08-25 10:01:00+00:00",
+            "statements": rows,
+            "sample_rate": rate,
+        }
+        write_bundle(tmp_path, merged([stmt("a")]), SCHEMA, "t", bursts=[burst])
+        return (tmp_path / "README.md").read_text()
+
+    def test_the_readme_gives_the_sample_rate(self, tmp_path):
+        readme = self._readme(tmp_path, 0.001)
+        assert "a sample of the server's transactions, each one whole" in readme
+        assert "burst.csv holds a sample of your transactions" in readme
+        assert "log_transaction_sample_rate of 0.001" in readme
+
+    def test_a_complete_log_is_described_as_before(self, tmp_path):
+        readme = self._readme(tmp_path, None)
+        assert "every statement the server logged while it ran" in readme
+        assert "holds a sample" not in readme

@@ -838,6 +838,7 @@ def _collect_exported_log(store, workload, logger) -> int:
         collect_csv_file,
         collect_pgaudit_file,
         collect_stderr_file,
+        sampling,
         sniff_packaging,
     )
 
@@ -896,6 +897,8 @@ def _collect_exported_log(store, workload, logger) -> int:
         )
         return EXIT_OK
 
+    sample, _ = sampling(workload.capture_log_type, workload.capture_log_sample_rate)
+    burst.update(sample)
     for warning in burst.get("warnings") or []:
         logger.warning(warning)
     # Storing a burst with no file read reports a used window covering nothing.
@@ -916,6 +919,17 @@ def _report_burst(burst: Dict[str, Any], path, logger) -> None:
         f"across {summary.get('sessions', 0)} sessions, "
         f"{summary.get('closed_transactions', 0)} complete transactions"
     )
+    rate = burst.get("sample_rate")
+    if rate is not None and rate < 1:
+        source = (
+            "capture_log_sample_rate"
+            if burst.get("sample_rate_source") == "config"
+            else "the server's log_transaction_sample_rate"
+        )
+        logger.info(
+            f"the log is a sample of {rate:g} of the server's transactions, "
+            f"from {source}"
+        )
     if summary.get("open_transactions"):
         logger.warning(
             f"{summary['open_transactions']} transaction(s) were still open at "

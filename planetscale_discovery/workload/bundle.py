@@ -1013,6 +1013,17 @@ def _caveats(
             "Check their warnings before treating the coverage as complete."
         )
 
+    if burst_summary.get("taken") and burst_summary.get("sample_rates"):
+        caveats.append(
+            "burst.csv holds a sample of your transactions, at a "
+            f"log_transaction_sample_rate of {_rates(burst_summary['sample_rates'])}. "
+            "Each sampled transaction is whole, but a transaction that runs "
+            "rarely may be missing from it. coverage.json gives, for each "
+            "statement the log missed, how likely the sample was to miss it. "
+            "That figure is a lower bound: calls that share a transaction are "
+            "missed together."
+        )
+
     if outside_window:
         caveats.append(
             f"{label('burst_outside_window')}: {len(outside_window)} query log "
@@ -1039,6 +1050,10 @@ def _caveats(
         )
 
     return caveats
+
+
+def _rates(rates: Sequence[float]) -> str:
+    return " and ".join(f"{rate:g}" for rate in rates)
 
 
 def _empty_column_stats(merged: Dict[str, Any]) -> Optional[str]:
@@ -1228,9 +1243,15 @@ def _render_readme(summary: Dict[str, Any], out_dir: Path) -> str:
         )
     burst_files = ""
     if burst_taken:
+        logged = "every statement the server logged while it ran"
+        if burst.get("sample_rates"):
+            logged = (
+                "a sample of the server's transactions, each one whole, at a "
+                f"log_transaction_sample_rate of {_rates(burst['sample_rates'])}"
+            )
         burst_files = (
-            "| `burst.csv` | the query-log burst: every statement the server "
-            "logged while it ran, **with the literal values still in it** |\n"
+            f"| `burst.csv` | the query-log burst: {logged}, **with the literal "
+            "values still in it** |\n"
             "| `coverage.json` | how much of the workload the burst saw, and "
             "whether it landed on ordinary traffic |\n"
         )

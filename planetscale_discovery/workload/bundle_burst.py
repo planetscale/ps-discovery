@@ -135,9 +135,20 @@ def _write_bursts(
     _write_text(out_dir / "burst.csv", "".join(parts))
 
     seconds = _burst_seconds(bursts)
+    sampling = _sampling(bursts)
     report = {
+        "sampling": {
+            "rates": sampling["rates"],
+            "bursts_without_a_rate": sampling["bursts_without_a_rate"],
+        },
         "coverage": coverage(statements, merged),
-        "representativeness": representativeness(statements, merged, seconds),
+        "representativeness": representativeness(
+            statements,
+            merged,
+            seconds,
+            estimated_statements=sampling["estimated_statements"],
+            sample_rates=sampling["rates"],
+        ),
     }
     losses = [b["loss_summary"] for b in bursts if b.get("loss_summary")]
     if losses:
@@ -156,6 +167,7 @@ def _write_bursts(
         "closed_transactions": sum(1 for t in explicit if t["closed"]),
         "open_transactions": sum(1 for t in explicit if not t["closed"]),
         "with_values": sum(1 for s in statements if s.get("parameters")),
+        "sample_rates": [rate for rate in sampling["rates"] if rate < 1],
         "coverage": report["coverage"],
     }
 
@@ -174,22 +186,55 @@ def _sum_losses(losses: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _burst_seconds(bursts: Sequence[Dict[str, Any]]) -> Optional[float]:
-    total = 0.0
-    for burst in bursts:
-        stamps = [
-            str(statement.get("log_time") or "").strip()
-            for statement in (burst.get("statements") or [])
-        ]
-        stamps = [stamp for stamp in stamps if stamp]
-        if len(stamps) < 2:
-            continue
-        start, end = parse_log_stamp(min(stamps)), parse_log_stamp(max(stamps))
-        if start is None or end is None:
-            continue
-        span = (end - start).total_seconds()
-        if span > 0:
-            total += span
+    total = sum(_span(burst) or 0.0 for burst in bursts)
     return total if total > 0 else None
+
+
+def _span(burst: Dict[str, Any]) -> Optional[float]:
+    stamps = [
+        str(statement.get("log_time") or "").strip()
+        for statement in (burst.get("statements") or [])
+    ]
+    stamps = [stamp for stamp in stamps if stamp]
+    if len(stamps) < 2:
+        return None
+    start, end = parse_log_stamp(min(stamps)), parse_log_stamp(max(stamps))
+    if start is None or end is None:
+        return None
+    span = (end - start).total_seconds()
+    return span if span > 0 else None
+
+
+def _sampling(bursts: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Each burst's sample rate, and the counts scaled by it.
+
+    A burst with no recorded rate is read as a complete log, as it was before
+    the rate was recorded. So is one whose stored rate is not in (0, 1].
+    """
+    rates: List[float] = []
+    unrecorded = 0
+    estimated = 0.0
+    for burst in bursts:
+        rows = burst.get("statements") or []
+        if not rows:
+            continue
+        rate = _valid_rate(burst.get("sample_rate"))
+        if rate is None:
+            unrecorded += 1
+            rate = 1.0
+        rates.append(rate)
+        estimated += len(rows) / rate
+    return {
+        "rates": sorted(set(rates)),
+        "bursts_without_a_rate": unrecorded,
+        "estimated_statements": estimated,
+    }
+
+
+def _valid_rate(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if 0 < value <= 1 else None
 
 
 def write_bursts(

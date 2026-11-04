@@ -282,7 +282,9 @@ def _csvlog_line(**overrides):
     return buffer.getvalue()
 
 
-def _collect_export(session, mocker, tmp_path, name, content, log_type, logger=None):
+def _collect_export(
+    session, mocker, tmp_path, name, content, log_type, logger=None, **workload_extra
+):
     _no_snapshot_connection(mocker)
     export = tmp_path / name
     export.write_text(content, encoding="utf-8")
@@ -290,12 +292,51 @@ def _collect_export(session, mocker, tmp_path, name, content, log_type, logger=N
         capture_log=True,
         capture_log_type=log_type,
         capture_log_file=str(export),
+        **workload_extra,
     )
     return _collect(
         _Args(session.directory),
         _Config(workload),
         logger if logger is not None else mocker.Mock(),
     )
+
+
+class TestAFileSourceRecordsItsSampleRate:
+    """A file read opens no connection, so the configured rate is the only
+    record that an exported log is a sample."""
+
+    def _collect(self, session, mocker, tmp_path, **workload_extra):
+        logger = mocker.Mock()
+        code = _collect_export(
+            session,
+            mocker,
+            tmp_path,
+            "postgresql.csv",
+            _csvlog_line(message="duration: 0.1 ms  statement: select 1"),
+            "statement",
+            logger=logger,
+            **workload_extra,
+        )
+        assert code == EXIT_OK
+        infos = [c.args[0] for c in logger.info.call_args_list]
+        return session.read_bursts()[0], infos
+
+    def test_the_configured_rate_is_stored_with_the_burst(
+        self, session, mocker, tmp_path
+    ):
+        burst, infos = self._collect(
+            session, mocker, tmp_path, capture_log_sample_rate=0.001
+        )
+        assert burst["sample_rate"] == 0.001
+        assert burst["sample_rate_source"] == "config"
+        assert any("a sample of 0.001" in line for line in infos)
+        assert any("from capture_log_sample_rate" in line for line in infos)
+
+    def test_no_configured_rate_stores_none(self, session, mocker, tmp_path):
+        burst, infos = self._collect(session, mocker, tmp_path)
+        assert burst["sample_rate"] is None
+        assert burst["sample_rate_source"] is None
+        assert not any("a sample of" in line for line in infos)
 
 
 class TestTheReaderFollowsTheSniffedPackaging:
@@ -581,6 +622,13 @@ class TestTheNewSettingsAreValidated:
             ("capture_log_source: auto", "must be one of"),
             ("capture_log_type: csv", "must be one of"),
             ("capture_log: true", "capture_log_type is required"),
+            ("capture_log_sample_rate: 0", "above 0 and at most 1"),
+            ("capture_log_sample_rate: 1.5", "above 0 and at most 1"),
+            ("capture_log_sample_rate: often", "above 0 and at most 1"),
+            (
+                "capture_log_type: pgaudit\n    capture_log_sample_rate: 0.01",
+                "capture_log_type: statement only",
+            ),
         ),
     )
     def test_a_bad_value_is_rejected_at_load(self, tmp_path, yaml_body, expected):
