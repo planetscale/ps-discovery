@@ -7,7 +7,7 @@ sharp edges; each is handled at its call site.
 
 import hashlib
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from planetscale_discovery.workload.collect import (
     INDEX_GAUGES,
@@ -99,6 +99,38 @@ def _pg_stats_reads(usable: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "pg_stats_read": bool(read),
         "pg_stats_failed_reads": len(usable) - len(read),
         "pg_stats_read_at": read[-1].get("captured_at_server") if read else None,
+    }
+
+
+def _schema_changes(usable: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """When the schema fingerprint changed, between which two snapshots.
+
+    A snapshot with no fingerprint is skipped, so a change next to it is dated
+    from the last snapshot that has one. The fingerprint of the last snapshot
+    names the stored copy that matches the end of the window.
+    """
+    changes: List[Dict[str, Any]] = []
+    last: Optional[Tuple[str, Any]] = None
+    missing = 0
+    failed = 0
+    for snapshot in usable:
+        fingerprint = snapshot.get("schema_fingerprint")
+        at = snapshot.get("captured_at_server")
+        if not fingerprint:
+            missing += 1
+            # An earlier version of this tool wrote no key at all.
+            failed += "schema_fingerprint" in snapshot
+            continue
+        if last and fingerprint != last[0]:
+            changes.append({"start": last[1], "end": at})
+        last = (fingerprint, at)
+    return {
+        "schema_changes": changes,
+        "schema_fingerprints_missing": missing,
+        "schema_fingerprints_failed": failed,
+        "schema_fingerprint": (
+            usable[-1].get("schema_fingerprint") if usable else None
+        ),
     }
 
 
@@ -224,6 +256,7 @@ def merge_snapshots(
         "columns": _column_stats(usable),
         # Separates "pg_stats returned no rows" from "pg_stats was never read".
         **_pg_stats_reads(usable),
+        **_schema_changes(usable),
     }
 
 
@@ -325,6 +358,7 @@ def _cumulative(usable, snapshots, allow_partial) -> Dict[str, Any]:
         "server": dict(snapshot.get("server") or {}),
         "columns": _column_stats(usable),
         **_pg_stats_reads(usable),
+        **_schema_changes(usable),
         "totals": _totals(statements, None),
     }
 

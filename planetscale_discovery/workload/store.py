@@ -9,12 +9,14 @@ from typing import Any, Dict, List, Optional
 
 SNAPSHOT_GLOB = "snapshot-*.json.gz"
 BURST_GLOB = "burst-*.json.gz"
+SCHEMA_COPY_GLOB = "schema-*.json.gz"
 SCHEMA_FILE = "schema.json"
 DISTRIBUTIONS_FILE = "distributions.json"
 
 
 class WorkloadStore:
-    """A directory of snapshots, plus the schema captured once at init."""
+    """A directory of snapshots, the schema init read, and a copy of each schema
+    the capture saw."""
 
     def __init__(self, directory: str):
         self.directory = Path(directory)
@@ -30,6 +32,10 @@ class WorkloadStore:
     @property
     def bursts_dir(self) -> Path:
         return self.directory / "bursts"
+
+    @property
+    def schema_copies_dir(self) -> Path:
+        return self.directory / "schemas"
 
     @property
     def output_dir(self) -> Path:
@@ -54,6 +60,51 @@ class WorkloadStore:
     def read_schema(self) -> Dict[str, Any]:
         with open(self.schema_path, encoding="utf-8") as handle:
             return json.load(handle)
+
+    def schema_copy_path(self, fingerprint: str) -> Path:
+        """Where the schema with this fingerprint is kept."""
+        # The name goes into a path, so only a real digest is accepted.
+        if not re.fullmatch(r"[0-9a-f]{64}", str(fingerprint)):
+            raise ValueError(f"not a schema fingerprint: {fingerprint!r}")
+        return self.schema_copies_dir / f"schema-{fingerprint}.json.gz"
+
+    def has_schema_copy(self, fingerprint: str) -> bool:
+        return self.schema_copy_path(fingerprint).is_file()
+
+    def write_schema_copy(
+        self, fingerprint: str, schema: Dict[str, Any], read_by: str, at: Any
+    ) -> Path:
+        """Keep one copy of each schema the capture sees, named by fingerprint.
+
+        Never modifies an existing file. Two overlapping collects that read
+        the same schema write the same name, and the rename makes one of them
+        the copy.
+        """
+        self.schema_copies_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.schema_copies_dir, 0o700)
+        path = self.schema_copy_path(fingerprint)
+        doc = {"fingerprint": fingerprint, "read_by": read_by, "at": at}
+        _atomic_write(
+            path,
+            gzip.compress(json.dumps({**doc, "schema": schema}, default=str).encode()),
+        )
+        return path
+
+    def read_schema_copy(self, fingerprint: str) -> Optional[Dict[str, Any]]:
+        """The stored copy, or None when this fingerprint has none."""
+        path = self.schema_copy_path(fingerprint)
+        if not path.is_file():
+            return None
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def schema_copy_paths(self) -> List[Path]:
+        if not self.schema_copies_dir.is_dir():
+            return []
+        return sorted(self.schema_copies_dir.glob(SCHEMA_COPY_GLOB))
+
+    def schema_copy_bytes(self) -> int:
+        return sum(path.stat().st_size for path in self.schema_copy_paths())
 
     @property
     def distributions_path(self) -> Path:
@@ -149,7 +200,11 @@ class WorkloadStore:
     def total_bytes(self) -> int:
         return sum(
             path.stat().st_size
-            for path in (*self.snapshot_paths(), *self.burst_paths())
+            for path in (
+                *self.snapshot_paths(),
+                *self.burst_paths(),
+                *self.schema_copy_paths(),
+            )
         )
 
     def status(self) -> Dict[str, Any]:

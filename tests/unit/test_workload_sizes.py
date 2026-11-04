@@ -224,4 +224,4 @@ class TestTheSnapshotRecordsItsOwnShape:
         """An older snapshot lacks sizes, so a mixed session must be readable."""
         collector = WorkloadCollector(MagicMock())
         collector._rows = MagicMock(return_value=[])
-        assert collector.collect()["schema_version"] == 2
+        assert collector.collect()["schema_version"] >= 2

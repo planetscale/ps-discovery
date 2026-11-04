@@ -93,6 +93,10 @@ are monitoring queries, `psql` queries and this tool's own catalog reads. They
 are not the application's workload, and no planner can route a statement whose
 relation is absent from the schema file.
 
+When `workload.schemas` is set, a statement can name only tables in a schema
+that the setting leaves out. That statement can be the application's, so the
+tool counts it apart, per schema, and the README lists the schemas captured.
+
 A view is a relation for this purpose. An application that reads through a view
 names only the view, so `schema.sql` carries the view definitions and the filter
 counts the view names. An extension's views do not count, however, even when the
@@ -141,6 +145,22 @@ read a report's cost ranking as a ranking of patterns and not of traffic.
 `schema.sql` is rendered from the catalog metadata that the schema analyzer
 already collects, so the default path takes no table locks and needs no
 `pg_dump`.
+
+`init` reads the schema and stores it in the session. `finalize` reads it again
+when it can connect, and renders `schema.sql` from that newer read, because a
+migration during the window adds columns that the statements use. The README's
+"Schema read" row says which read `schema.sql` comes from.
+
+Each `collect` records a fingerprint of the schema. When the fingerprint is new
+to the session, `collect` reads the whole schema and keeps a copy. The README's
+"Schema changes during the window" row counts the changes, and a caveat names
+the two snapshots around each one. A statement that ran before a column or a
+table was dropped or renamed can name something that `schema.sql` does not
+hold. The caveat is how a reader finds that out.
+
+When `finalize` cannot connect, it renders the stored copy that matches the last
+snapshot, so `schema.sql` is the schema at the end of the window. A session with
+no such copy renders the schema from `init`, and a caveat says so.
 
 The tool does not render the hard parts by hand. It stores the output of
 PostgreSQL's own `pg_get_indexdef` and `pg_get_constraintdef` verbatim, so

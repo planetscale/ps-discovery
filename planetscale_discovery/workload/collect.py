@@ -184,6 +184,62 @@ ORDER BY s.schemaname, s.tablename, s.attname
 """
 
 
+# One digest of the schema: the relations, columns, defaults, views,
+# sequences, indexes and constraints. A collect can then tell that the schema
+# changed without reading all of it. It covers every non-system schema,
+# as the schema that init stores does. Data, ANALYZE and temporary tables do
+# not change it. sha256, not md5, because md5() fails on a FIPS build.
+# COLLATE "C" keeps the order the same whatever the collation. The query takes
+# parameters, so each literal %s in format() is written %%s.
+SCHEMA_FINGERPRINT_SQL = """
+WITH rel AS (
+  SELECT c.oid, c.relkind, n.nspname, c.relname
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i', 'I')
+    AND c.relpersistence <> 't'
+    AND NOT (n.nspname = ANY(%(excluded)s)) AND n.nspname !~ '^pg_(toast|temp)'
+)
+SELECT encode(sha256(convert_to(
+         coalesce(string_agg(x, E'\\n' ORDER BY x COLLATE "C"), ''), 'UTF8')),
+       'hex') AS fingerprint
+FROM (
+  SELECT format('rel %%s.%%s %%s', r.nspname, r.relname, r.relkind) AS x
+  FROM rel r WHERE r.relkind NOT IN ('i', 'I')
+  UNION ALL
+  SELECT format('col %%s.%%s %%s %%s %%s %%s %%s %%s', r.nspname, r.relname,
+                a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                a.attidentity, a.attgenerated, a.attcollation)
+  FROM rel r
+  JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
+  WHERE r.relkind IN ('r', 'p', 'v', 'm', 'f')
+  UNION ALL
+  SELECT format('def %%s.%%s %%s %%s', r.nspname, r.relname, a.attname,
+                pg_get_expr(d.adbin, d.adrelid))
+  FROM rel r
+  JOIN pg_attrdef d ON d.adrelid = r.oid
+  JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+  UNION ALL
+  SELECT format('view %%s.%%s %%s', r.nspname, r.relname, pg_get_viewdef(r.oid))
+  FROM rel r WHERE r.relkind IN ('v', 'm')
+  UNION ALL
+  SELECT format('seq %%s.%%s %%s %%s %%s %%s %%s %%s', r.nspname, r.relname,
+                format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement,
+                s.seqmin, s.seqmax, s.seqcycle)
+  FROM rel r JOIN pg_sequence s ON s.seqrelid = r.oid
+  UNION ALL
+  SELECT format('idx %%s', pg_get_indexdef(r.oid))
+  FROM rel r WHERE r.relkind IN ('i', 'I')
+  UNION ALL
+  SELECT format('con %%s.%%s %%s', n.nspname, con.conname,
+                pg_get_constraintdef(con.oid))
+  FROM pg_constraint con
+  JOIN pg_namespace n ON n.oid = con.connamespace
+  WHERE NOT (n.nspname = ANY(%(excluded)s)) AND n.nspname !~ '^pg_(toast|temp)'
+) parts
+"""
+
+
 def _decode_ndv(
     n_distinct: Optional[float], row_count: Optional[float]
 ) -> Optional[float]:
@@ -224,8 +280,8 @@ class WorkloadCollector(DatabaseAnalyzer):
     def collect(self) -> Dict[str, Any]:
         started = time.monotonic()
         snapshot: Dict[str, Any] = {
-            # 2 added relation and index size gauges.
-            "schema_version": 2,
+            # 2 added relation and index size gauges, 3 the schema fingerprint.
+            "schema_version": 3,
             "status": STATUS_FAILED,
             "captured_at_client": generate_timestamp(),
             "captured_at_server": None,
@@ -238,6 +294,7 @@ class WorkloadCollector(DatabaseAnalyzer):
             "notes": [],
             "pgss": {},
             "columns": [],
+            "schema_fingerprint": None,
         }
 
         self._lost_during = None
@@ -263,6 +320,28 @@ class WorkloadCollector(DatabaseAnalyzer):
         else:
             snapshot["status"] = STATUS_OK
         return snapshot
+
+    def schema_fingerprint(self) -> str:
+        """The digest of the schema now. Raises when the server cannot say.
+
+        Rolls back before and after the query. A failure that an earlier read
+        caught leaves the transaction aborted, for example the
+        pg_stat_statements_info read on PostgreSQL 13 and earlier. The query
+        takes ACCESS SHARE locks on the tables it describes, and so do the
+        size reads before it. An ALTER TABLE waits for those locks, and every
+        query on that table then waits behind the ALTER TABLE, so the
+        transaction ends here. Every query on this connection only reads.
+        """
+        self.connection.rollback()
+        try:
+            rows = self._rows(
+                SCHEMA_FINGERPRINT_SQL, {"excluded": list(EXCLUDED_SCHEMAS)}
+            )
+        finally:
+            self.connection.rollback()
+        if not rows:
+            raise ValueError("the fingerprint query returned no row")
+        return str(dict(rows[0])["fingerprint"])
 
     def _read(
         self,
@@ -324,7 +403,21 @@ class WorkloadCollector(DatabaseAnalyzer):
             )
 
         reads["pgss"] = self._read_pgss_info(reads["server"])
+        reads["schema_fingerprint"] = self._read_fingerprint(snapshot)
         return reads
+
+    def _read_fingerprint(self, snapshot: Dict[str, Any]) -> Optional[str]:
+        if self._lost_during:
+            return None
+        try:
+            return self.schema_fingerprint()
+        except Exception as e:
+            if self.connection.closed:
+                self._lost_during = "schema fingerprint"
+            snapshot["warnings"].append(
+                {"code": "schema_fingerprint_failed", "detail": str(e)}
+            )
+            return None
 
     def _process_all(self, snapshot: Dict[str, Any], reads: Dict[str, Any]) -> None:
         snapshot["server"] = self._server_row(reads["server"])
@@ -332,6 +425,7 @@ class WorkloadCollector(DatabaseAnalyzer):
         self._process_statements(snapshot, reads["statements"])
         self._process_columns(snapshot, reads["columns"])
         snapshot["pgss"] = reads["pgss"]
+        snapshot["schema_fingerprint"] = reads["schema_fingerprint"]
 
     def _server_row(self, row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Enough to refuse to merge snapshots from two different servers."""

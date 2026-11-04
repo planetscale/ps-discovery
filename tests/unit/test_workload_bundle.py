@@ -703,3 +703,192 @@ class TestNestedCalls:
             tmp_path, merged([stmt("a")], toplevel_known=False), SCHEMA, "t"
         )
         assert any("no toplevel column" in c for c in summary["caveats"])
+
+
+class TestSchemasOutsideTheScope:
+    """A statement on a schema that workload.schemas leaves out can be the
+    application's. It was reported as monitoring traffic."""
+
+    SCHEMA = {
+        "table_analysis": SCHEMA["table_analysis"]
+        + [
+            {
+                "schema_name": "jack",
+                "table_name": "jobs",
+                "table_type": "r",
+                "estimated_rows": 500,
+                "columns": [{"column_name": "id", "data_type": "bigint"}],
+            }
+        ],
+        "index_analysis": [],
+        "constraint_analysis": [],
+    }
+
+    def _summary(self, tmp_path, target_schemas=("public",)):
+        statements = [
+            stmt("app", query="SELECT $1 FROM orders"),
+            stmt("job", "INSERT", "INSERT INTO jack.jobs (id) VALUES ($1)", 7),
+            stmt("mon", "SELECT", "SELECT $1 FROM pg_stat_activity", 3),
+        ]
+        return write_bundle(
+            tmp_path,
+            merged(statements),
+            self.SCHEMA,
+            "t",
+            target_schemas=list(target_schemas) if target_schemas else None,
+        )
+
+    def test_a_statement_on_a_left_out_schema_has_its_own_reason(self, tmp_path):
+        statements = self._summary(tmp_path)["statements"]
+        assert statements["excluded_outside_schemas"] == 1
+        assert statements["excluded_not_this_application"] == 1
+
+    def test_the_caveat_counts_the_statements_per_schema(self, tmp_path):
+        caveats = self._summary(tmp_path)["caveats"]
+        caveat = next(c for c in caveats if "Statements per schema" in c)
+        assert "jack (1)" in caveat
+        assert "ran 7 time(s)" in caveat
+
+    def test_monitoring_traffic_keeps_its_own_caveat(self, tmp_path):
+        caveats = self._summary(tmp_path)["caveats"]
+        caveat = next(c for c in caveats if "monitoring tools" in c)
+        assert caveat.startswith("1 statement(s)")
+
+    def test_the_readme_names_the_schemas_captured(self, tmp_path):
+        self._summary(tmp_path)
+        readme = (tmp_path / "README.md").read_text()
+        assert "| Schemas captured | `public` |" in readme
+        assert "| Left out, because they name only tables in other schemas | 1 |" in (
+            readme
+        )
+        assert "| Left out, because they read and write no data | 0 |" in readme
+
+    def test_finalize_with_no_scope_brings_the_statements_back(self, tmp_path):
+        """The repair for a finished capture: the stored schema has every
+        schema, and pg_stat_statements was never filtered by schema."""
+        summary = self._summary(tmp_path, target_schemas=None)
+        assert summary["statements"]["in_workload_sql"] == 2
+        assert summary["statements"]["excluded_outside_schemas"] == 0
+        readme = (tmp_path / "README.md").read_text()
+        assert "| Schemas captured | every non-system schema |" in readme
+
+    def test_a_schema_keeps_its_spelling_in_the_caveat(self, tmp_path):
+        """workload.schemas is case sensitive, so a lowercased name would not
+        bring the statements back."""
+        schema = {
+            "table_analysis": SCHEMA["table_analysis"]
+            + [{"schema_name": "Billing", "table_name": "Invoices"}],
+        }
+        query = 'SELECT $1 FROM "Billing"."Invoices"'
+        summary = write_bundle(
+            tmp_path,
+            merged([stmt("a"), stmt("b", "SELECT", query)]),
+            schema,
+            "t",
+            target_schemas=["public"],
+        )
+        caveat = next(c for c in summary["caveats"] if "per schema" in c)
+        assert "Billing (1)" in caveat
+
+
+class TestSchemasLeftOut:
+    def test_a_left_out_schema_with_rows_is_named(self):
+        from planetscale_discovery.workload.bundle import schemas_left_out
+
+        schema = TestSchemasOutsideTheScope.SCHEMA
+        assert schemas_left_out(schema, ["public"]) == {"jack": 1}
+        assert schemas_left_out(schema, None) == {}
+        assert schemas_left_out(schema, ["public", "jack"]) == {}
+
+    @pytest.mark.parametrize("rows, counted", [(0, False), (-1, True)])
+    def test_an_empty_table_does_not_count_and_an_unknown_one_does(self, rows, counted):
+        """0 is an analyzed empty table. -1 is a table never analyzed, whose
+        row count is unknown: a new schema is often in that state at init."""
+        from planetscale_discovery.workload.bundle import schemas_left_out
+
+        schema = {
+            "table_analysis": [
+                {"schema_name": "jack", "table_name": "jobs", "estimated_rows": rows}
+            ]
+        }
+        assert schemas_left_out(schema, ["public"]) == ({"jack": 1} if counted else {})
+
+    def test_a_system_schema_is_never_named_as_out_of_scope(self, tmp_path):
+        """Every other exclusion list in the tool skips __neki."""
+        schema = {
+            "table_analysis": SCHEMA["table_analysis"]
+            + [{"schema_name": "__neki", "table_name": "shard_map"}],
+        }
+        summary = write_bundle(
+            tmp_path,
+            merged([stmt("a"), stmt("b", "SELECT", "SELECT $1 FROM __neki.shard_map")]),
+            schema,
+            "t",
+            target_schemas=["public"],
+        )
+        assert summary["statements"]["excluded_outside_schemas"] == 0
+        assert summary["statements"]["excluded_not_this_application"] == 1
+
+
+class TestScopeGaps:
+    """W219 must report the scope that the collector filters by."""
+
+    def _config(self, workload_schemas, database_schemas):
+        from types import SimpleNamespace
+
+        from planetscale_discovery.config.config_manager import WorkloadConfig
+
+        return SimpleNamespace(
+            database=SimpleNamespace(
+                workload=WorkloadConfig(schemas=workload_schemas),
+                schemas=database_schemas,
+            )
+        )
+
+    def test_database_schemas_is_the_fallback(self):
+        from planetscale_discovery.workload.cli_workload import _scope_gaps
+
+        gaps = _scope_gaps(
+            TestSchemasOutsideTheScope.SCHEMA, self._config(None, ["public"])
+        )
+        assert [g["code"] for g in gaps] == ["schemas_exclude_tables"]
+        assert "jack (1 table(s))" in gaps[0]["detail"]
+
+    def test_workload_schemas_wins(self):
+        from planetscale_discovery.workload.cli_workload import _scope_gaps
+
+        config = self._config(["public", "jack"], ["public"])
+        assert _scope_gaps(TestSchemasOutsideTheScope.SCHEMA, config) == []
+
+    def test_no_scope_is_no_gap(self):
+        from planetscale_discovery.workload.cli_workload import _scope_gaps
+
+        assert (
+            _scope_gaps(TestSchemasOutsideTheScope.SCHEMA, self._config(None, None))
+            == []
+        )
+
+
+class TestSchemaRead:
+    """The bundle says when the schema was read."""
+
+    def test_a_schema_read_at_finalize_is_dated_and_no_caveat(self, tmp_path):
+        read = {"read": "finalize", "at": "2026-10-05 14:20:00+00"}
+        summary = write_bundle(
+            tmp_path, merged([stmt("a")]), SCHEMA, "t", schema_read=read
+        )
+        assert not any("init read" in c for c in summary["caveats"])
+        readme = (tmp_path / "README.md").read_text()
+        assert "| Schema read | by finalize, at 2026-10-05 14:20:00+00 |" in readme
+
+    def test_the_schema_from_init_is_a_caveat(self, tmp_path):
+        read = {"read": "init", "before": "2026-09-30", "error": "refused"}
+        summary = write_bundle(
+            tmp_path, merged([stmt("a")]), SCHEMA, "t", schema_read=read
+        )
+        caveat = next(c for c in summary["caveats"] if "init read" in c)
+        assert "before the first snapshot at 2026-09-30" in caveat
+        # The error names the host, and the README leaves the organization.
+        assert "refused" not in caveat
+        readme = (tmp_path / "README.md").read_text()
+        assert "| Schema read | by init, before the first snapshot |" in readme
