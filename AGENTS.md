@@ -107,6 +107,7 @@ send it.
 | Database engine (`postgres` or `mysql`) | `engine:` in `config.yaml` | [MySQL Setup](docs/mysql.md) for MySQL/Vitess |
 | Cloud or hosting provider | `providers:` in `config.yaml` | [Provider guides](docs/providers/) |
 | Large column and LOB analysis | optional module | [Data Size Analysis](docs/data_size_analysis.md) |
+| Citus extension | detected automatically, nothing to set. With Citus tables, every active primary node must be reachable during the run | [Citus Extension Support](docs/citus.md) |
 
 Supported providers: AWS, GCP, Azure, Supabase, Heroku, Neon,
 PlanetScale, and Snowflake.
@@ -184,6 +185,12 @@ statistics, infrastructure topology, and user and role names.
 password is used for the connection and is never written to the output. Literal
 values from queries are not collected either, unless you turn on `capture_log`.
 
+Schema metadata includes the text of definitions written into the schema: view
+and function bodies, CHECK constraints, index, policy and partition
+expressions, and each column's default and generated expression. A definition
+can hold a literal its author wrote, such as `DEFAULT 'pending'`, but never a
+value read from a row.
+
 Where the tool reports a statement, it replaces every literal value with a
 placeholder and removes comments. It records the shape of a query, not the data
 in it.
@@ -207,6 +214,16 @@ All analysis runs locally. The tool sends nothing to an external service.
 
 Permission errors are expected on a managed service, and the tool continues with
 what it can read. A warning in the report is normal and is not a failed run.
+
+A database with the Citus extension is the exception. A missing Citus
+privilege, a connection to a worker instead of the coordinator, and, on a
+database with Citus tables, a node or shard that is unavailable each stop
+database discovery with the message `Citus discovery stopped`. That is a failed
+run, not a warning. Database discovery alone exits with code 1. A combined run
+with a cloud provider configured exits with code 0 and writes the report with
+`database_results` set to `null`, so check `database_results` rather than the
+exit code. The remedy for each cause is in
+[Troubleshooting](docs/troubleshooting.md#citus-discovery-stopped).
 
 Read [Troubleshooting](docs/troubleshooting.md) first. It covers Python
 installation, common errors, and managed database environments.
@@ -235,6 +252,7 @@ superuser. Report the missing privilege instead.
 
 ## More documentation
 
+- [Citus Extension Support](docs/citus.md) - discovery on databases with the Citus extension
 - [Advanced Usage](docs/advanced-usage.md) - CLI reference, focused analysis, automation
 - [Output Format](docs/output-format.md) - report structure
 - [Performance Considerations](docs/performance_considerations.md) - impact and timing

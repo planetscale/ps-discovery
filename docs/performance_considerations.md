@@ -13,6 +13,7 @@ This document outlines the performance characteristics of each analyzer and prov
 | PerformanceAnalyzer | ✅ Low | Yes | Only reads `pg_stat_*` views |
 | SecurityAnalyzer | ✅ Low | Yes | Only queries system catalogs and roles |
 | FeatureAnalyzer | ✅ Low | Yes | Only queries system catalogs + one COUNT on static table |
+| CitusAnalyzer | ✅ Low | Yes | Runs only with the Citus extension. Reads catalogs and statistics views on every node |
 | **DataSizeAnalyzer** | ⚠️ **HIGH** | **Use Caution** | **Requires table scans - OPT-IN ONLY** |
 
 ## Detailed Analysis
@@ -132,6 +133,30 @@ LIMIT 20;
 
 ---
 
+### ✅ CitusAnalyzer and the shard read - SAFE
+
+These run only when the database has the Citus extension. See
+[Citus Extension Support](citus.md).
+
+**What they do:**
+- Read the `pg_dist_*` metadata tables on the coordinator
+- Read `pg_class`, `pg_stats`, `pg_stat_user_tables` and `pg_stat_user_indexes`
+  for the shard placements on every node, through `run_command_on_all_nodes()`
+- Read the database size on every node
+
+**Performance characteristics:**
+- No user table access and no table scans
+- Each read runs one command on every active primary node, and the shards are
+  read in batches of at most 1,000 shards per call. Each command looks up its
+  batch's shards by name, so its work on a node follows the batch size, not the
+  number of relations on the node
+- On a cluster with three nodes and 237 shards, the check before the run and
+  the shard read each took under one second
+
+**Production safety:** ✅ Always safe
+
+---
+
 ### ⚠️ DataSizeAnalyzer - USE CAUTION
 
 **What it does:**
@@ -144,6 +169,10 @@ LIMIT 20;
 - Uses `pg_column_size()` which must read actual data
 - Default sampling (10%) reduces cost but still significant
 - Large tables can take minutes even with sampling
+- On a database with the Citus extension, Citus tables are skipped with the
+  reason `citus_table`. The size limit and the sampling decision both read the
+  table's empty shell on the coordinator, so neither would stop a full scan of
+  every shard. See [Data Size Analysis](data_size_analysis.md#citus-tables).
 
 **Example query:**
 ```sql

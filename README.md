@@ -88,6 +88,13 @@ The discovery tool supports two database engines. Set the engine in your config 
 | **PostgreSQL** (default) | `engine: postgres` / `--engine postgres` | config, schema, performance, security, features, data_size | See [PostgreSQL Privileges](#required-postgresql-privileges) below |
 | **MySQL/Vitess** | `engine: mysql` / `--engine mysql` | config, schema, performance, replication, security, features | [MySQL Setup Guide](docs/mysql.md) |
 
+PostgreSQL databases that use the Citus extension have initial, limited
+support. No setting is needed: when the `citus` extension is installed, it is
+detected, and regular tables are discovered next to the tables that Citus
+manages. When the database holds Citus tables, every active primary node of the
+cluster must be reachable during the run. See
+[Citus Extension Support](docs/citus.md).
+
 ### Quick Examples
 
 ```bash
@@ -150,6 +157,17 @@ GRANT pg_read_all_settings TO planetscale_discovery;
 -- Required for workload capture (see below)
 GRANT pg_monitor TO planetscale_discovery;
 ```
+
+On a database with the Citus extension, run the SQL above on the coordinator.
+No additional SQL is needed by default. With
+`citus.enable_create_role_propagation` on, which is the default, the role is
+created on every node. The discovery role also reads the `pg_dist_*` metadata
+tables, and on a database with Citus tables it calls
+`run_command_on_all_nodes()`. Both are granted to `PUBLIC` by default. A missing
+`SELECT` on a `pg_dist_*` table stops the run. On a database with Citus tables,
+so does a missing `EXECUTE` on `run_command_on_all_nodes()`, or a node that does
+not accept the discovery role. See
+[Citus Extension Support](docs/citus.md#requirements).
 
 Alternatively, you can use an existing superuser account for complete analysis.
 
@@ -387,6 +405,8 @@ workload capture also collects the values described below.
 
 **What is NOT collected:** Table contents, customer records, application code, or credentials. Passwords are used only for connection and are never stored in output. Literal values from queries are not collected either, unless you turn on `capture_log`.
 
+**Schema definitions.** Schema metadata includes the text of definitions written into your schema: view and function bodies, CHECK constraints, index, policy and partition expressions, and each column's default and generated expression. A definition can hold a literal that its author wrote, such as `DEFAULT 'pending'`. None of it is a value read from a row. The migration team needs this text to hand your schema back to you with a sharding design applied.
+
 **Query text.** Where the tool reports a statement — a long-running transaction, or the two sides of a lock — it records the statement with literal values replaced by `$N` placeholders, so `SELECT * FROM orders WHERE email = $1` rather than the address itself. Comments are removed. This captures the shape of a query rather than the data in it. Review the report before sharing it outside your organization.
 
 **A workload capture records values from your data in two files.** The bundle README names each one:
@@ -401,6 +421,7 @@ All analysis runs locally — no data is sent to external services.
 ## Additional Documentation
 
 - [MySQL Setup Guide](docs/mysql.md) - MySQL/Vitess-specific setup, privileges, and PlanetScale configuration
+- [Citus Extension Support](docs/citus.md) - Discovery on PostgreSQL databases that use the Citus extension
 - [Output Format](docs/output-format.md) - JSON report structure and markdown summary details
 - [Troubleshooting](docs/troubleshooting.md) - Python installation, common errors, managed database environments
 - [Advanced Usage](docs/advanced-usage.md) - CLI reference, focused analysis, automation, pipx installation

@@ -529,6 +529,11 @@ the counts and frequencies. For the columns you declare in
 [step 6](#6-declare-the-columns-your-migration-engineer-names), it also reads
 `most_common_vals`, the most common values themselves.
 
+PostgreSQL shows a column in `pg_stats` only to a role that may `SELECT` it.
+The capture role holds `pg_monitor` and nothing else, so the counts cover only
+the columns you grant it, which in practice are the declared ones. See
+[Grant the capture role each column](#grant-the-capture-role-each-column).
+
 Each `collect` also reads a fingerprint of the schema from `pg_class`,
 `pg_attribute`, `pg_attrdef`, `pg_index`, `pg_constraint`, `pg_sequence` and
 `pg_namespace`. It is one SHA-256 digest of the definitions, and it holds no name

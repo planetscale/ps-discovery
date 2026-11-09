@@ -840,7 +840,7 @@ class TestSchemaAnalyzer:
     def test_get_table_analysis_column_default_sequence(
         self, analyzer, mock_connection
     ):
-        """Column query names the sequence a nextval() default calls, never the default text"""
+        """Column query names the sequence a nextval() default calls"""
         _, cursor = mock_connection
         cursor.fetchall.return_value = [
             {"table_oid": 16385, "table_name": "users", "table_type": "r"}
@@ -860,11 +860,44 @@ class TestSchemaAnalyzer:
         assert "dep.objid = d.oid" in column_sql
         # Only a default that is one nextval() call names a sequence.
         assert r"~ '^nextval\(''(?:[^'']|'''')+''::regclass\)$'" in column_sql
-        # The default text appears only in that filter. It is never a
-        # selected column, so it cannot reach the report.
-        assert column_sql.count("pg_get_expr") == 1
         assert "AND pg_get_expr(d.adbin, d.adrelid)" in column_sql
         assert "adsrc" not in column_sql
+
+    @pytest.mark.parametrize(
+        "version_num, generated_attr",
+        [(180000, "a.attgenerated"), (120000, "a.attgenerated"), (110000, "''")],
+    )
+    def test_get_table_analysis_column_default_and_generated_expressions(
+        self, analyzer, mock_connection, version_num, generated_attr
+    ):
+        """A generated column's expression never reads as a plain DEFAULT, and
+        a server before PostgreSQL 12 is never asked for attgenerated"""
+        _, cursor = mock_connection
+        cursor.fetchall.return_value = [
+            {"table_oid": 16385, "table_name": "users", "table_type": "r"}
+        ]
+
+        with patch.object(
+            analyzer, "_get_server_version_num", return_value=version_num
+        ):
+            analyzer._get_table_analysis()
+
+        column_sql = " ".join(
+            next(
+                c.args[0]
+                for c in cursor.execute.call_args_list
+                if "FROM pg_attribute a" in c.args[0]
+            ).split()
+        )
+        assert (
+            f"CASE WHEN {generated_attr} = '' "
+            "THEN pg_get_expr(d.adbin, d.adrelid) END as default_expression"
+        ) in column_sql
+        # Any generated kind: 's' (stored) and, from PostgreSQL 18, 'v' (virtual).
+        assert (
+            f"CASE WHEN {generated_attr} <> '' "
+            "THEN pg_get_expr(d.adbin, d.adrelid) END as generated_expression"
+        ) in column_sql
 
     # ---------------------------------------------------------------
     # _get_index_analysis()
@@ -1344,6 +1377,27 @@ class TestSchemaAnalyzer:
         assert result[0]["parent_table"] == "events"
         assert result[0]["partition_name"] == "events_2024_01"
 
+    def test_get_partition_analysis_excludes_index_partitions(
+        self, analyzer, mock_connection
+    ):
+        """An index on a partitioned table has partitions of its own, with
+        relispartition true. Only children of a partitioned table count."""
+        _, cursor = mock_connection
+        cursor.fetchall.return_value = []
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=170000):
+            analyzer._get_partition_analysis()
+
+        partition_sql = next(
+            c.args[0]
+            for c in cursor.execute.call_args_list
+            if "child_class.relispartition = true" in c.args[0]
+        )
+        assert (
+            "JOIN pg_class parent_class ON i.inhparent = parent_class.oid "
+            "AND parent_class.relkind = 'p'"
+        ) in partition_sql
+
     def test_get_partition_analysis_pre_pg10(self, mock_connection):
         """Test partition analysis returns empty on pre-PG10"""
         connection, _ = mock_connection
@@ -1483,3 +1537,66 @@ class TestSchemaAnalyzer:
         analyzer = SchemaAnalyzer(connection, config=config)
 
         assert analyzer.config == config
+
+
+class TestCitusExclusions:
+    """Shards and the extension's own objects never appear as customer objects."""
+
+    def statements(self, with_citus):
+        from planetscale_discovery.database import citus
+        from tests.fixtures.database_responses import FakeConnection, citus_handlers
+
+        version = [("SHOW server_version_num", [{"server_version_num": "180006"}])]
+        connection = FakeConnection(version + (citus_handlers() if with_citus else []))
+        ctx = None
+        if with_citus:
+            ctx = citus.detect_citus(connection)
+            citus.preflight(connection, ctx)
+            connection.executed.clear()
+        analyzer = SchemaAnalyzer(connection, config={"citus": ctx} if ctx else {})
+        analyzer.analyze()
+        return connection.statements()
+
+    def query(self, statements, marker):
+        return next(s for s in statements if marker in s)
+
+    @pytest.mark.parametrize(
+        "marker, oid",
+        [
+            ("c.relhassubclass as has_inheritance", "c.oid"),
+            ("pg_get_indexdef(i.oid) as index_definition", "t.oid"),
+            ("FROM pg_constraint con", "con.conrelid"),
+            ("WHERE c.relkind IN ('v', 'm')", "c.oid"),
+            ("child_class.relispartition = true", "child_class.oid"),
+        ],
+    )
+    def test_shard_relations_are_excluded(self, marker, oid):
+        """Catches a shard placement on the coordinator reported as a table.
+
+        pg_constraint returns the coordinator's shard constraints when shards
+        are visible to the connection.
+        """
+        sql = self.query(self.statements(True), marker)
+        assert f"NOT pg_catalog.relation_is_a_known_shard({oid})" in sql
+
+    @pytest.mark.parametrize(
+        "marker, catalog",
+        [
+            ("WHERE c.relkind IN ('v', 'm')", "pg_catalog.pg_class"),
+            ("as is_system_schema", "pg_catalog.pg_namespace"),
+            ("p.prosrc as source_code", "pg_catalog.pg_proc"),
+        ],
+    )
+    def test_extension_objects_are_excluded(self, marker, catalog):
+        """Catches public.citus_tables reported as a customer view, and the
+        citus_internal schema and its functions as customer objects."""
+        sql = self.query(self.statements(True), marker)
+        assert f"citus_dep.classid = '{catalog}'::pg_catalog.regclass" in sql
+
+    def test_no_citus_predicate_without_citus(self):
+        """Catches a Citus predicate in the schema read's SQL on a server without Citus,
+        which workload capture also runs.
+        """
+        for sql in self.statements(False):
+            assert "relation_is_a_known_shard" not in sql
+            assert "citus" not in sql

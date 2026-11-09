@@ -883,3 +883,37 @@ class TestFeatureAnalyzer:
 
         assert result["summary"]["enum_count"] == 1
         assert result["type_usage"] == {}
+
+
+class TestCitusExclusions:
+    def statements(self, with_citus):
+        from planetscale_discovery.database import citus
+        from tests.fixtures.database_responses import FakeConnection, citus_handlers
+
+        connection = FakeConnection(citus_handlers() if with_citus else [])
+        ctx = None
+        if with_citus:
+            ctx = citus.detect_citus(connection)
+            citus.preflight(connection, ctx)
+            connection.executed.clear()
+        FeatureAnalyzer(connection, config={"citus": ctx} if ctx else {}).analyze()
+        return connection.statements()
+
+    def test_types_of_shards_and_of_the_extension_are_excluded(self):
+        """Catches the row type of a shard placement and Citus's enums reported
+        as customer types. pg_type is not hidden the way pg_class is."""
+        types = [s for s in self.statements(True) if "FROM pg_type t" in s]
+        assert len(types) == 4
+        for sql in types:
+            assert "relation_is_a_known_shard(t.typrelid)" in sql
+            assert "'pg_catalog.pg_type'::pg_catalog.regclass" in sql
+
+    def test_the_extension_event_triggers_are_excluded(self):
+        """Catches citus_cascade_to_partition reported as a customer trigger."""
+        sql = next(s for s in self.statements(True) if "FROM pg_event_trigger" in s)
+        assert "citus_dep.objid = pg_event_trigger.oid" in sql
+
+    def test_no_citus_predicate_without_citus(self):
+        """Catches a Citus predicate in this analyzer's SQL on a server without Citus."""
+        for sql in self.statements(False):
+            assert "citus" not in sql
