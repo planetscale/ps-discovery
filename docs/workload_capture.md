@@ -1318,11 +1318,13 @@ sensitive.
 
 ### W207 statistics_not_readable
 
-Table counters came back but every `idx_scan` was null, which means the role can
-list the relations and not read their statistics.
+A table that has an index came back with a null `idx_scan`, so its index scans
+were not read. They are reported as missing, never as zero.
 
-Grant `pg_monitor`. This is the misleading case the code exists to name: the
-table list looks correct while the counters behind it are blank.
+PostgreSQL reports a null `idx_scan` for every table without an index, and that
+raises no warning. For a table with an index there is no known cause: the table
+statistics views need no privilege. Send the warning to your PlanetScale
+contact.
 
 ### W208 pg_stat_statements_unavailable
 

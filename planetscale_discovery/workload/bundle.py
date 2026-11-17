@@ -386,12 +386,14 @@ def render_table_activity(merged: Dict[str, Any], identity: str) -> Dict[str, An
     """
     coverage = merged.get("coverage") or {}
 
+    # A counter no snapshot read, such as idx_scan on a table with no index, is
+    # absent, and an absent counter is not a counter at zero.
     def counter(entry, name):
-        return int((entry.get("counters") or {}).get(name) or 0)
+        value = (entry.get("counters") or {}).get(name)
+        return None if value is None else int(value)
 
-    # A gauge absent is not a gauge at zero, so this returns None where a
-    # counter returns 0. The cumulative path carries raw snapshot entries,
-    # which hold gauges under the same key, so one reader serves both.
+    # The cumulative path carries raw snapshot entries, which hold gauges under
+    # the same key, so one reader serves both.
     def gauge(entry, name):
         value = (entry.get("gauges") or {}).get(name)
         return None if value is None else int(value)
@@ -469,7 +471,7 @@ def render_table_activity(merged: Dict[str, Any], identity: str) -> Dict[str, An
         # Named for the window, not for the index. An index unused across a
         # short capture is not an unused index, and a reader should not be
         # invited to delete it.
-        "indexes_not_scanned_in_window": sum(1 for i in indexes if not i["scans"]),
+        "indexes_not_scanned_in_window": sum(1 for i in indexes if i["scans"] == 0),
         "tables": tables,
         "indexes": indexes,
     }
