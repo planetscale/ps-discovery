@@ -13,6 +13,7 @@ from planetscale_discovery.cli import (
     create_main_parser,
     generate_combined_summary,
     generate_summary_markdown,
+    _db_summary_lines_cockroach,
     _format_bytes,
     main,
     run_cloud_discovery,
@@ -1220,6 +1221,31 @@ class TestCombinedSummaryGaps:
         summary = generate_combined_summary(results)
         assert summary["database_summary"]["analysis_gaps"] == 3
 
+    def test_cockroach_logical_size_scopes_to_current_database(self):
+        results = {
+            "database_results": {
+                "engine": "cockroachdb",
+                "connection_info": {"current_database": "tpcc"},
+                "flavor": {"version": "25.2.4"},
+                "analysis_results": {
+                    "schema": {
+                        "table_analysis": [{"table_name": "warehouse"}],
+                        "database_catalog": [
+                            {"database_name": "mr_app", "size_bytes": 1_468_006},
+                            {"database_name": "tpcc", "size_bytes": 856_686_592},
+                        ],
+                    }
+                },
+                "analysis_gaps": [],
+            },
+            "cloud_results": None,
+        }
+        summary = generate_combined_summary(results)
+        assert summary["database_summary"]["logical_size_bytes"] == 856_686_592
+        assert (
+            summary["database_summary"]["logical_size_bytes"] != 856_686_592 + 1_468_006
+        )
+
     def test_zero_gaps(self):
         """Test summary with no analysis gaps."""
         results = {
@@ -1377,3 +1403,67 @@ class TestCitusSummary:
         assert "**Citus:** 14.1-1, 3 node(s)" in text
         assert "4 distributed, 1 reference, 2 regular" in text
         assert "**Cluster Storage:**" in text
+
+
+class TestCockroachSummary:
+    def unread_results(self):
+        return {
+            "timestamp": "t",
+            "discovery_version": "v",
+            "database_results": {
+                "engine": "cockroachdb",
+                "flavor": {"version": "25.2.4"},
+                "connection_info": {"current_database": "app_db"},
+                "analysis_results": {
+                    "schema": {
+                        "database_catalog": [
+                            {
+                                "database_name": "app_db",
+                                "size_bytes": 0,
+                                "read_status": "couldn't read",
+                            }
+                        ],
+                        "table_analysis": [],
+                    },
+                    "config": {
+                        "version_info": {"product_version": "25.2.4"},
+                        "cockroach_cluster": {"node_count": 3},
+                    },
+                },
+                "analysis_gaps": [
+                    {
+                        "module": "schema",
+                        "type": "cockroach_unassessed",
+                        "description": "sizes and tables could not be read",
+                        "severity": "high",
+                    }
+                ],
+            },
+            "cloud_results": None,
+        }
+
+    def test_unread_size_is_not_quoted_as_zero_in_markdown(self, tmp_path):
+        """Catches Tables: 0 / 0 B when the CockroachDB size catalog failed."""
+        results = self.unread_results()
+        analysis = results["database_results"]["analysis_results"]
+        conn = results["database_results"]["connection_info"]
+        db = results["database_results"]
+        lines = _db_summary_lines_cockroach(analysis, conn, db)
+        text = "\n".join(lines)
+        assert "**Tables:** unavailable (see analysis gaps)" in text
+        assert (
+            "**Logical size (1 copy, live_bytes):** unavailable (see analysis gaps)"
+            in text
+        )
+        assert "**Tables:** 0" not in text
+        assert "0 B" not in text
+
+        path = tmp_path / "summary.md"
+        results["summary"] = generate_combined_summary(results)
+        generate_summary_markdown(results, path)
+        rendered = path.read_text()
+        assert "**Tables:** unavailable (see analysis gaps)" in rendered
+        assert "0 B" not in rendered
+        summary = results["summary"]["database_summary"]
+        assert summary["tables_analyzed"] is None
+        assert summary["logical_size_bytes"] is None

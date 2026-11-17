@@ -81,7 +81,7 @@ If you're working with the PlanetScale team, send the JSON report file to your p
 
 ## Database Engine Support
 
-The discovery tool supports two database engines. Set the engine in your config file with the top-level `engine:` key (`postgres` or `mysql`). The `--engine` flag remains available as an explicit command-line override.
+The discovery tool has two engine settings, `postgres` and `mysql`. Set the engine in your config file with the top-level `engine:` key. The `--engine` flag remains available as an explicit command-line override. CockroachDB runs under `engine: postgres`.
 
 | Engine | Config / Flag | Analyzers | Documentation |
 |--------|------|-----------|---------------|
@@ -94,6 +94,12 @@ detected, and regular tables are discovered next to the tables that Citus
 manages. When the database holds Citus tables, every active primary node of the
 cluster must be reachable during the run. See
 [Citus Extension Support](docs/citus.md).
+
+CockroachDB clusters have initial support under `engine: postgres`. No setting
+is needed: discovery detects CockroachDB from `version()` and reads its own
+catalogs. It needs a read-only role with CockroachDB system privileges, and
+secure clusters need the TLS mode and the cluster CA. See
+[CockroachDB Support](docs/cockroachdb.md).
 
 ### Quick Examples
 
@@ -212,6 +218,34 @@ database:
 output:
   output_dir: ./reports
 ```
+
+### CockroachDB Configuration
+
+Use the PostgreSQL `database:` block. CockroachDB advertises `server_version_num=130000`; discovery reads `version()` and switches to native catalogs. Secure clusters need `ssl_mode: verify-full` plus the cluster certificate authority (CA) file, and usually a client certificate. Setting only the CA, for example only `PGSSLROOTCERT`, is not enough.
+
+```yaml
+engine: postgres
+
+database:
+  host: crdb.example.com
+  port: 26257
+  database: app_db
+  username: discovery_ro
+  ssl_mode: verify-full
+  ssl_root_cert: /path/to/ca.crt      # libpq sslrootcert
+  ssl_cert: /path/to/client.crt       # libpq sslcert
+  ssl_key: /path/to/client.key        # libpq sslkey
+```
+
+CLI flags: `--ssl-mode verify-full --ssl-root-cert --ssl-cert --ssl-key`. Env aliases: `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`.
+
+Minimum grants for `discovery_ro`: CONNECT/USAGE/SELECT per database and schema, plus `VIEWACTIVITYREDACTED`, `VIEWCLUSTERSETTING`, `VIEWJOB`. Set `default_transaction_read_only=on`. A missing privilege is an analysis gap, never a silent zero (without `VIEWJOB`, `SHOW JOBS` returns 0 rows).
+
+Schema comes from `SHOW CREATE ALL TYPES`, `SHOW CREATE ALL TABLES`, `SHOW TRIGGERS`, and `information_schema.routines`. The supported migration path is a planned downtime cutover that copies each table once with text or CSV `COPY (SELECT ...)`. Do not use pgcopydb or pg_dump. A custom changefeed applier is not provided.
+
+`defaultdb` and `postgres` are analyzed only when they are the connected database; `system` is always skipped. Run discovery once per application database, and include `defaultdb` if the application uses it.
+
+See [CockroachDB Support](docs/cockroachdb.md).
 
 ### MySQL Configuration
 
@@ -422,6 +456,7 @@ All analysis runs locally — no data is sent to external services.
 
 - [MySQL Setup Guide](docs/mysql.md) - MySQL/Vitess-specific setup, privileges, and PlanetScale configuration
 - [Citus Extension Support](docs/citus.md) - Discovery on PostgreSQL databases that use the Citus extension
+- [CockroachDB Support](docs/cockroachdb.md) - Discovery on CockroachDB clusters: privileges, TLS, and the planned downtime migration path
 - [Output Format](docs/output-format.md) - JSON report structure and markdown summary details
 - [Troubleshooting](docs/troubleshooting.md) - Python installation, common errors, managed database environments
 - [Advanced Usage](docs/advanced-usage.md) - CLI reference, focused analysis, automation, pipx installation

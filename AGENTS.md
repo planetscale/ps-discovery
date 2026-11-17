@@ -108,6 +108,7 @@ send it.
 | Cloud or hosting provider | `providers:` in `config.yaml` | [Provider guides](docs/providers/) |
 | Large column and LOB analysis | optional module | [Data Size Analysis](docs/data_size_analysis.md) |
 | Citus extension | detected automatically, nothing to set. With Citus tables, every active primary node must be reachable during the run | [Citus Extension Support](docs/citus.md) |
+| CockroachDB | `engine: postgres`; detected automatically. Needs the CockroachDB system privileges and, on secure clusters, TLS settings | [CockroachDB Support](docs/cockroachdb.md) |
 
 Supported providers: AWS, GCP, Azure, Supabase, Heroku, Neon,
 PlanetScale, and Snowflake.

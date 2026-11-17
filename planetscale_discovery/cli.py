@@ -198,7 +198,11 @@ def add_database_args(parser: argparse.ArgumentParser) -> None:
 
     db_group.add_argument(
         "--ssl-mode",
-        help="SSL mode (MySQL only: disabled, preferred, required, verify-ca, verify-identity)",
+        help=(
+            "SSL mode. PostgreSQL/CockroachDB: disable, allow, prefer, require, "
+            "verify-ca, verify-full. MySQL: disabled, preferred, required, "
+            "verify-ca, verify-identity."
+        ),
         default=None,
     )
 
@@ -217,6 +221,22 @@ def add_database_args(parser: argparse.ArgumentParser) -> None:
     db_group.add_argument(
         "--mysql-ssl-key",
         help="Path to client private key (optional, for mutual TLS)",
+        default=None,
+    )
+
+    db_group.add_argument(
+        "--ssl-root-cert",
+        help="Path to CA certificate for PostgreSQL/CockroachDB (sslrootcert)",
+        default=None,
+    )
+    db_group.add_argument(
+        "--ssl-cert",
+        help="Path to client certificate for PostgreSQL/CockroachDB (sslcert)",
+        default=None,
+    )
+    db_group.add_argument(
+        "--ssl-key",
+        help="Path to client key for PostgreSQL/CockroachDB (sslkey)",
         default=None,
     )
 
@@ -489,6 +509,92 @@ def run_cloud_discovery(config: Any, args: argparse.Namespace) -> Dict[str, Any]
     return cloud_tool.discover()
 
 
+def _cockroach_inventory(analysis: Dict, db_results: Dict) -> Dict[str, Any]:
+    """Shared CockroachDB table/size figures for markdown and the summary.
+
+    A failed or unassessed size read is not quoted as 0 tables / 0 bytes.
+    """
+    catalog = list(analysis.get("schema", {}).get("database_catalog") or [])
+    tables = analysis.get("schema", {}).get("table_analysis") or []
+    current = (db_results.get("connection_info") or {}).get("current_database")
+    if current:
+        catalog = [db for db in catalog if db.get("database_name") == current]
+    gaps = db_results.get("analysis_gaps") or []
+    unread = any((row.get("read_status") or "ok") != "ok" for row in catalog) or any(
+        gap.get("type") == "cockroach_unassessed" for gap in gaps
+    )
+    if unread:
+        return {"available": False, "tables": None, "logical_size_bytes": None}
+    logical = sum(int(db.get("size_bytes") or 0) for db in catalog)
+    if not logical:
+        logical = sum(int(t.get("total_size_bytes") or 0) for t in tables)
+    return {
+        "available": True,
+        "tables": len(tables),
+        "logical_size_bytes": logical,
+    }
+
+
+def _db_summary_lines_cockroach(
+    analysis: Dict, conn_info: Dict, db_results: Dict
+) -> List[str]:
+    """Generate markdown lines for a CockroachDB discovery report."""
+    lines = ["## Database", ""]
+    flavor = db_results.get("flavor") or {}
+    version_info = analysis.get("config", {}).get("version_info", {})
+    product = flavor.get("version") or version_info.get("product_version") or "unknown"
+    lines.append(f"- **Engine:** CockroachDB {product}")
+    if conn_info.get("current_database"):
+        lines.append(f"- **Database:** {conn_info['current_database']}")
+    cluster = analysis.get("config", {}).get("cockroach_cluster", {})
+    if cluster.get("node_count") is not None:
+        lines.append(f"- **Nodes:** {cluster['node_count']}")
+    rf = cluster.get("replication_factor_configured")
+    if rf is not None:
+        lines.append(f"- **Replication factor (configured):** {rf}")
+    inventory = _cockroach_inventory(analysis, db_results)
+    if not inventory["available"]:
+        lines.append("- **Tables:** unavailable (see analysis gaps)")
+        lines.append(
+            "- **Logical size (1 copy, live_bytes):** unavailable (see analysis gaps)"
+        )
+    else:
+        lines.append(f"- **Tables:** {inventory['tables']}")
+        lines.append(
+            "- **Logical size (1 copy, live_bytes):** "
+            f"{_format_bytes(inventory['logical_size_bytes'])}"
+        )
+    features = analysis.get("features", {}).get("cockroach_features", {})
+    if features:
+        lines.append(
+            "- **CockroachDB-only features:** "
+            f"unique_rowid={len(features.get('unique_rowid') or [])}, "
+            f"hash-sharded={len(features.get('hash_sharded_indexes') or [])}, "
+            f"REGIONAL BY ROW={len(features.get('regional_by_row') or [])}, "
+            f"column families={len(features.get('column_families') or [])}"
+        )
+    lines.append(
+        "- **Migration note:** downtime COPY cutover only "
+        "(text or CSV COPY (SELECT ...)). Do not use pgcopydb or pg_dump. "
+        "Custom changefeed applier is not provided."
+    )
+    priv = analysis.get("config", {}).get("discovery_privileges") or {}
+    missing = [g.get("privilege") for g in priv.get("gaps") or [] if g.get("privilege")]
+    if missing:
+        lines.append(f"- **Privilege gaps:** {', '.join(missing)}")
+    over = cluster.get("over_replicated_zones") or []
+    if over:
+        lines.append(
+            "- **Over-replicated zones:** "
+            + ", ".join(
+                f"{z.get('target')} ({z.get('num_replicas')} replicas / {z.get('node_count')} nodes)"
+                for z in over
+            )
+        )
+    lines.append("")
+    return lines
+
+
 def _db_summary_lines_postgres(analysis: Dict, conn_info: Dict) -> List[str]:
     """Generate markdown lines for PostgreSQL database summary."""
     lines = ["## Database", ""]
@@ -698,6 +804,8 @@ def generate_summary_markdown(
 
         if engine == "mysql":
             lines.extend(_db_summary_lines_mysql(analysis, conn_info))
+        elif engine == "cockroachdb":
+            lines.extend(_db_summary_lines_cockroach(analysis, conn_info, db_results))
         else:
             lines.extend(_db_summary_lines_postgres(analysis, conn_info))
 
@@ -1135,6 +1243,14 @@ def main() -> None:
                 db_cfg.password = getpass.getpass(f"{config.engine.title()} Password: ")
             if hasattr(args, "ssl_mode") and args.ssl_mode:
                 db_cfg.ssl_mode = args.ssl_mode
+            if getattr(args, "ssl_root_cert", None) and hasattr(
+                db_cfg, "ssl_root_cert"
+            ):
+                db_cfg.ssl_root_cert = args.ssl_root_cert
+            if getattr(args, "ssl_cert", None) and hasattr(db_cfg, "ssl_cert"):
+                db_cfg.ssl_cert = args.ssl_cert
+            if getattr(args, "ssl_key", None) and hasattr(db_cfg, "ssl_key"):
+                db_cfg.ssl_key = args.ssl_key
             if config.engine == "mysql":
                 if getattr(args, "mysql_ssl_ca", None):
                     config.mysql.ssl_ca = args.mysql_ssl_ca
@@ -1208,7 +1324,22 @@ def main() -> None:
                 else:
                     db_results = run_database_discovery(config, args)
                 combined_results["database_results"] = db_results
-                logger.info(f"{engine_label} discovery completed successfully")
+                detected = (db_results or {}).get("engine") or config.engine
+                if detected == "cockroachdb":
+                    flavor = (db_results or {}).get("flavor") or {}
+                    version = flavor.get("version") or "unknown"
+                    engine_label = f"CockroachDB {version}"
+                    gaps = (db_results or {}).get("analysis_gaps") or []
+                    high = [g for g in gaps if g.get("severity") == "high"]
+                    if high:
+                        logger.info(
+                            f"{engine_label} discovery finished with {len(high)} high-severity "
+                            f"information gap(s); failed checks are listed as gaps"
+                        )
+                    else:
+                        logger.info(f"{engine_label} discovery finished")
+                else:
+                    logger.info(f"{engine_label} discovery completed successfully")
             except Exception as e:
                 _handle_database_error(e, logger, config.engine)
                 # Fatal only when database is the sole module; when cloud also
@@ -1295,6 +1426,15 @@ def generate_combined_summary(results: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                     "analysis_gaps": len(analysis_gaps),
                 }
+            elif engine == "cockroachdb":
+                inventory = _cockroach_inventory(analysis, db_results)
+                summary["database_summary"] = {
+                    "engine": "cockroachdb",
+                    "flavor": db_results.get("flavor", {}).get("version"),
+                    "tables_analyzed": inventory["tables"],
+                    "logical_size_bytes": inventory["logical_size_bytes"],
+                    "analysis_gaps": len(analysis_gaps),
+                }
             else:
                 summary["database_summary"] = {
                     "engine": "postgres",
@@ -1352,6 +1492,26 @@ def print_discovery_summary(summary: Dict[str, Any]) -> None:
             print(f"   Databases Found: {db_summary.get('databases_found', 0)}")
             print(
                 f"   Technologies Detected: {db_summary.get('technologies_detected', 0)}"
+            )
+        elif engine == "cockroachdb":
+            print("\nCOCKROACHDB ANALYSIS:")
+            print(f"   Product: CockroachDB {db_summary.get('flavor') or 'unknown'}")
+            tables = db_summary.get("tables_analyzed")
+            logical = db_summary.get("logical_size_bytes")
+            if tables is None or logical is None:
+                print("   Tables Analyzed: unavailable (see analysis gaps)")
+                print("   Logical live_bytes (1 copy): unavailable (see analysis gaps)")
+            else:
+                print(f"   Tables Analyzed: {tables}")
+                print(f"   Logical live_bytes (1 copy): {logical}")
+            print("   pg_dump: not working")
+            print("   pgcopydb 0.18: not working at any step")
+            print(
+                "   Schema: SHOW CREATE ALL TYPES + SHOW CREATE ALL TABLES + SHOW TRIGGERS + information_schema.routines"
+            )
+            print(
+                "   Path: downtime text/CSV COPY (SELECT ...) cutover. "
+                "Custom changefeed applier is not provided."
             )
         else:
             print("\nDATABASE ANALYSIS:")
