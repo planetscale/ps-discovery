@@ -259,6 +259,114 @@ class TestMySQLSchemaAnalyzer:
         assert len(analyzer.errors) == 1
 
     # ---------------------------------------------------------------
+    # _get_routine_analysis - bodies and parameters
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def _routine(name, kind):
+        return {"schema_name": "app", "routine_name": name, "type": kind}
+
+    @staticmethod
+    def _parameter(name, kind, position, mode, param):
+        return {
+            "schema_name": "app",
+            "routine_name": name,
+            "type": kind,
+            "ordinal_position": position,
+            "mode": mode,
+            "name": param,
+            "data_type": "int",
+        }
+
+    def test_routine_parameters_attach_to_their_own_routine(self, analyzer):
+        """A function and a procedure may share a name; each keeps its own list."""
+        routines = [
+            self._routine("move", "FUNCTION"),
+            self._routine("move", "PROCEDURE"),
+            self._routine("noargs", "PROCEDURE"),
+        ]
+        parameters = [
+            self._parameter("move", "PROCEDURE", 1, "IN", "src"),
+            self._parameter("move", "PROCEDURE", 2, "OUT", "moved"),
+        ]
+        queries = []
+
+        def fake_execute_query(query, params=None, raise_on_error=False):
+            queries.append(" ".join(query.split()))
+            return routines if "information_schema.routines" in query else parameters
+
+        with patch.object(analyzer, "execute_query", side_effect=fake_execute_query):
+            result = analyzer._get_routine_analysis()
+
+        assert [r["parameters"] for r in result] == [
+            [],
+            [
+                {
+                    "ordinal_position": 1,
+                    "mode": "IN",
+                    "name": "src",
+                    "data_type": "int",
+                },
+                {
+                    "ordinal_position": 2,
+                    "mode": "OUT",
+                    "name": "moved",
+                    "data_type": "int",
+                },
+            ],
+            [],
+        ]
+        # Ordinal 0 is a function's return value, reported as returns.
+        assert "WHERE ordinal_position > 0" in queries[1]
+
+    def test_unreadable_routine_parameters_are_none_not_empty(self, analyzer):
+        """An empty list says the routine takes no arguments."""
+
+        def fake_execute_query(query, params=None, raise_on_error=False):
+            if "information_schema.parameters" in query:
+                raise Exception("access denied")
+            return [self._routine("tax", "FUNCTION")]
+
+        with patch.object(analyzer, "execute_query", side_effect=fake_execute_query):
+            result = analyzer._get_routine_analysis()
+
+        assert result[0]["parameters"] is None
+        assert [e["message"] for e in analyzer.errors] == [
+            "Failed to get routine parameters: access denied"
+        ]
+
+    # ---------------------------------------------------------------
+    # _check_trigger_visibility
+    # ---------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "grants,warned",
+        [([{"1": 1}], False), ([], True), (Exception("denied"), True)],
+    )
+    def test_trigger_warning_unless_the_user_holds_trigger(
+        self, analyzer, grants, warned
+    ):
+        """Without TRIGGER, MySQL hides every trigger, so none means unknown."""
+        side_effect = grants if isinstance(grants, Exception) else None
+        with patch.object(
+            analyzer, "execute_query", return_value=grants, side_effect=side_effect
+        ):
+            analyzer._check_trigger_visibility()
+
+        assert bool(analyzer.warnings) is warned
+
+    def test_trigger_grant_on_the_configured_database_counts(self):
+        """A grant on the one database discovery reads shows all its triggers."""
+        configured = MySQLSchemaAnalyzer(MagicMock(), {"database": "app"})
+        with patch.object(configured, "execute_query", return_value=[]) as query:
+            configured._check_trigger_visibility()
+
+        sql, params = query.call_args.args
+        assert "information_schema.schema_privileges" in sql
+        assert "AND table_schema = %s" in sql
+        assert params == ("app",)
+
+    # ---------------------------------------------------------------
     # _get_index_analysis - cardinality and prefix_lengths
     # ---------------------------------------------------------------
 
@@ -426,6 +534,7 @@ class TestPerDatabaseSchemaRestore:
 # Every collector _analyze_per_database and analyze() call apart from
 # _get_table_analysis, which each test drives directly.
 OTHER_COLLECTORS = [
+    "_check_trigger_visibility",
     "_get_column_analysis",
     "_get_index_analysis",
     "_get_view_analysis",
