@@ -1,0 +1,31 @@
+{
+  "connected_database": "defaultdb",
+  "tables": [
+    {
+      "database_name": "defaultdb",
+      "schema_name": "public",
+      "table_name": "orders",
+      "table_id": 104,
+      "locality": null,
+      "estimated_row_count": 5000,
+      "logical_live_bytes": 642745,
+      "live_bytes_all_replicas": 642745,
+      "disk_bytes_all_replicas": 300000,
+      "range_count": 1,
+      "replica_count": 1
+    },
+    {
+      "database_name": "defaultdb",
+      "schema_name": "public",
+      "table_name": "customers",
+      "table_id": 105,
+      "locality": null,
+      "estimated_row_count": 800,
+      "logical_live_bytes": 91000,
+      "live_bytes_all_replicas": 91000,
+      "disk_bytes_all_replicas": 40000,
+      "range_count": 1,
+      "replica_count": 1
+    }
+  ]
+}

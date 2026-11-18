@@ -355,6 +355,27 @@ class TestStatementTimeoutPlumbing:
         _, kwargs = discovery_cls.call_args
         assert kwargs["statement_timeout"] == "20s"
 
+    def test_ssl_root_cert_flows_from_discovery_tool(self):
+        """DatabaseConfig.ssl_root_cert must reach psycopg2 as sslrootcert."""
+        config = DiscoveryConfig()
+        config.database = DatabaseConfig(
+            database="testdb",
+            ssl_root_cert="/certs/ca.crt",
+        )
+        tool = DatabaseDiscoveryTool(config)
+
+        with patch(
+            "planetscale_discovery.database.discovery.PostgreSQLDiscovery"
+        ) as discovery_cls:
+            discovery_cls.return_value.connect.return_value = False
+            try:
+                tool.discover()
+            except ConnectionError:
+                pass
+
+        args, _kwargs = discovery_cls.call_args
+        assert args[0]["sslrootcert"] == "/certs/ca.crt"
+
 
 class TestCitusWiring:
     """Citus detection runs only for callers that opt in, and stops the run."""

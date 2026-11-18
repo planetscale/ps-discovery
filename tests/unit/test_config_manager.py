@@ -33,7 +33,52 @@ class TestDatabaseConfig:
         assert config.port == 5432
         assert config.database == ""
         assert config.ssl_mode == "prefer"
+        assert config.ssl_root_cert is None
+        assert config.ssl_cert is None
+        assert config.ssl_key is None
         assert isinstance(config.data_size, DataSizeConfig)
+
+    def test_yaml_and_env_load_cockroach_tls_paths(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".yaml") as f:
+            yaml.dump(
+                {
+                    "database": {
+                        "host": "crdb.example",
+                        "port": 26257,
+                        "database": "tpcc",
+                        "ssl_mode": "verify-full",
+                        "sslrootcert": "/certs/ca.crt",
+                        "sslcert": "/certs/client.crt",
+                        "sslkey": "/certs/client.key",
+                    }
+                },
+                f,
+            )
+            path = f.name
+        try:
+            config = ConfigManager(path).load_config(validate=False)
+            assert config.database.ssl_mode == "verify-full"
+            assert config.database.ssl_root_cert == "/certs/ca.crt"
+            assert config.database.ssl_cert == "/certs/client.crt"
+            assert config.database.ssl_key == "/certs/client.key"
+        finally:
+            os.unlink(path)
+
+        os.environ["PGSSLROOTCERT"] = "/env/ca.crt"
+        os.environ["PGSSLCERT"] = "/env/client.crt"
+        os.environ["PGSSLKEY"] = "/env/client.key"
+        os.environ["PGSSLMODE"] = "verify-full"
+        try:
+            env = ConfigManager().load_config(validate=False)
+            assert env.database.ssl_mode == "verify-full"
+            assert env.database.ssl_root_cert == "/env/ca.crt"
+            assert env.database.ssl_cert == "/env/client.crt"
+            assert env.database.ssl_key == "/env/client.key"
+        finally:
+            del os.environ["PGSSLROOTCERT"]
+            del os.environ["PGSSLCERT"]
+            del os.environ["PGSSLKEY"]
+            del os.environ["PGSSLMODE"]
 
 
 class TestDataSizeConfig:
@@ -945,6 +990,9 @@ class TestSelfDescribingTemplate:
             assert "engine: postgres" in text
             # modules: is an optional override, not part of the default config.
             assert "modules:" not in text
+            assert "ssl_root_cert:" in text
+            assert "sslrootcert" in text
+            assert "verify-full" in text
 
     def test_yaml_template_mysql_only_engine(self):
         with tempfile.TemporaryDirectory() as d:

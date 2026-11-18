@@ -22,6 +22,11 @@ from .analyzers.feature_analyzer import FeatureAnalyzer
 from .analyzers.data_size_analyzer import DataSizeAnalyzer
 from .analyzers.citus_analyzer import CitusAnalyzer
 from .citus import CitusClusterError, detect_citus, preflight
+from .cockroach import (
+    allow_unsafe_internals,
+    detect_cockroach_flavor,
+    restricts_internals_by_default,
+)
 
 
 class DatabaseDiscoveryTool:
@@ -43,6 +48,12 @@ class DatabaseDiscoveryTool:
             "sslmode": self.config.database.ssl_mode,
             "connect_timeout": self.config.database.connection_timeout,
         }
+        if getattr(self.config.database, "ssl_root_cert", None):
+            config_dict["sslrootcert"] = self.config.database.ssl_root_cert
+        if getattr(self.config.database, "ssl_cert", None):
+            config_dict["sslcert"] = self.config.database.ssl_cert
+        if getattr(self.config.database, "ssl_key", None):
+            config_dict["sslkey"] = self.config.database.ssl_key
 
         discovery = PostgreSQLDiscovery(
             config_dict,
@@ -135,7 +146,17 @@ class PostgreSQLDiscovery:
                     "current_user": result["current_user"],
                 }
 
-            self.logger.info(f"Connected to PostgreSQL: {result['version']}")
+            flavor = detect_cockroach_flavor(result["version"])
+            if flavor:
+                self.results["engine"] = "cockroachdb"
+                self.results["flavor"] = flavor
+                self.logger.info(
+                    f"Detected CockroachDB {flavor['version']} from version(); "
+                    "using CockroachDB-native analyzers"
+                )
+                self.logger.info(f"Connected to CockroachDB: {result['version']}")
+            else:
+                self.logger.info(f"Connected to PostgreSQL: {result['version']}")
             return True
 
         except Exception as e:
@@ -149,15 +170,7 @@ class PostgreSQLDiscovery:
         if not self.connection:
             raise RuntimeError("No database connection established")
 
-        available_modules = {
-            "config": ConfigAnalyzer,
-            "schema": SchemaAnalyzer,
-            "performance": PerformanceAnalyzer,
-            "security": SecurityAnalyzer,
-            "features": FeatureAnalyzer,
-            "data_size": DataSizeAnalyzer,
-            "citus": CitusAnalyzer,
-        }
+        available_modules = self._analyzer_classes()
 
         # Run all modules if none specified. The citus module is added only
         # when the extension is detected.
@@ -180,6 +193,8 @@ class PostgreSQLDiscovery:
                         "SET statement_timeout = %s", (self.statement_timeout,)
                     )
                     cursor.execute("SET search_path = pg_catalog")
+            if self.results.get("engine") == "cockroachdb":
+                self._allow_cockroach_internals(analyzer_connection)
 
         except Exception as e:
             self.logger.error(f"Failed to create analyzer connection: {e}")
@@ -284,6 +299,9 @@ class PostgreSQLDiscovery:
             if analyzer_connection and not reuse_connection:
                 analyzer_connection.close()
 
+        if self.results.get("engine") == "cockroachdb":
+            self._add_cockroach_gaps()
+
         return self.results
 
     def _prepare_citus(self, connection):
@@ -305,6 +323,124 @@ class PostgreSQLDiscovery:
         self.citus = ctx
         self.results["connection_info"]["citus"] = ctx.connection_info()
         return ctx
+
+    def _allow_cockroach_internals(self, connection):
+        """Let the analyzer session read crdb_internal on CockroachDB 26.1+."""
+        error = allow_unsafe_internals(connection)
+        if error is None:
+            self.results["connection_info"]["allow_unsafe_internals"] = "on"
+            self.logger.info(
+                "Set allow_unsafe_internals = on for this session so crdb_internal "
+                "can be read. CockroachDB logs each read as unsafe_internals_accessed."
+            )
+            return
+        flavor = self.results.get("flavor") or {}
+        if not restricts_internals_by_default(flavor):
+            self.logger.debug(f"allow_unsafe_internals not set: {error}")
+            return
+        self.logger.warning(f"Could not set allow_unsafe_internals = on: {error}")
+        self._add_analysis_gap(
+            "config",
+            "cockroach_internals_blocked",
+            (
+                f"CockroachDB {flavor.get('version')} blocks crdb_internal by default "
+                "and this session could not set allow_unsafe_internals = on"
+            ),
+            error,
+            "high",
+        )
+
+    def _analyzer_classes(self):
+        """PostgreSQL analyzers stay on the Postgres path.
+
+        CockroachDB is detected from version() at connect time and swapped
+        in here so the Postgres analyzer modules are not modified.
+        """
+        if self.results.get("engine") == "cockroachdb":
+            from .cockroach_analyzers import (
+                CockroachConfigAnalyzer,
+                CockroachFeatureAnalyzer,
+                CockroachPerformanceAnalyzer,
+                CockroachSchemaAnalyzer,
+            )
+
+            return {
+                "config": CockroachConfigAnalyzer,
+                "schema": CockroachSchemaAnalyzer,
+                "performance": CockroachPerformanceAnalyzer,
+                "security": SecurityAnalyzer,
+                "features": CockroachFeatureAnalyzer,
+                # pg_relation_size / pg_database_size do not exist. Sizing is
+                # in CockroachSchemaAnalyzer via tenant_span_stats.live_bytes.
+            }
+        return {
+            "config": ConfigAnalyzer,
+            "schema": SchemaAnalyzer,
+            "performance": PerformanceAnalyzer,
+            "security": SecurityAnalyzer,
+            "features": FeatureAnalyzer,
+            "data_size": DataSizeAnalyzer,
+            "citus": CitusAnalyzer,
+        }
+
+    def _add_cockroach_gaps(self):
+        """Record honest CockroachDB migration limits, not a silent success.
+
+        A default full run (no ``--analyzers`` filter; ``run_analysis()``
+        with modules unset) always requests schema and features, so both
+        ``cockroach_unassessed`` and ``no_logical_replication`` are recorded
+        when those catalogs come back empty or unread. Gaps are omitted only
+        when a module was deliberately excluded (``--analyzers config``).
+        Omit the gap rather than reword it as "not assessed".
+        """
+        analysis = self.results.get("analysis_results") or {}
+        if "schema" in analysis:
+            tables = (analysis.get("schema") or {}).get("table_analysis") or []
+            if not tables:
+                self._add_analysis_gap(
+                    "schema",
+                    "cockroach_unassessed",
+                    "Not assessed: this looks like CockroachDB, sizes and tables could not be read",
+                    "Table inventory is empty after CockroachDB-native sizing",
+                    "high",
+                )
+        if "features" in analysis:
+            self._add_analysis_gap(
+                "features",
+                "no_logical_replication",
+                (
+                    "CockroachDB has no PostgreSQL logical replication. "
+                    "The only path is a downtime cutover with text or CSV COPY "
+                    "(SELECT ...). Do not use pgcopydb or pg_dump for schema or data. "
+                    "A custom changefeed-to-Postgres applier is not provided. "
+                    "Schema comes from SHOW CREATE ALL TYPES, SHOW CREATE ALL TABLES, "
+                    "SHOW TRIGGERS, and information_schema.routines."
+                ),
+                "pgcopydb 0.18 and pg_dump are not working; custom changefeed applier is not provided",
+                "high",
+            )
+        config = self.results.get("analysis_results", {}).get("config") or {}
+        for gap in (config.get("discovery_privileges") or {}).get("gaps") or []:
+            self._add_analysis_gap(
+                "config",
+                "missing_privilege",
+                gap.get("description") or f"Missing privilege {gap.get('privilege')}",
+                gap.get("privilege") or "privilege",
+                gap.get("severity") or "high",
+            )
+        for zone in (config.get("cockroach_cluster") or {}).get(
+            "over_replicated_zones"
+        ) or []:
+            self._add_analysis_gap(
+                "config",
+                "over_replicated_zone",
+                (
+                    f"Zone {zone.get('target')} asks for {zone.get('num_replicas')} "
+                    f"replicas on {zone.get('node_count')} nodes"
+                ),
+                "num_replicas exceeds node count",
+                "medium",
+            )
 
     def _add_analysis_gap(
         self,
@@ -397,6 +533,9 @@ class PostgreSQLDiscovery:
         """Categorize error message to determine gap type and severity."""
         error_msg_lower = error_msg.lower()
 
+        if "access to crdb_internal and system is restricted" in error_msg_lower:
+            return "cockroach_internals_blocked", "high"
+
         # Permission-related errors
         if "permission denied" in error_msg_lower:
             return "permission_denied", "medium"
@@ -409,7 +548,18 @@ class PostgreSQLDiscovery:
             return "missing_extension", "low"
 
         # PostgreSQL version compatibility issues
-        if "does not exist" in error_msg_lower:
+        if "does not exist" in error_msg_lower or "unknown function" in error_msg_lower:
+            if any(
+                name in error_msg_lower
+                for name in (
+                    "pg_database_size",
+                    "pg_relation_size",
+                    "pg_total_relation_size",
+                    "table inventory",
+                    "tenant_span_stats",
+                )
+            ):
+                return "sizing_unavailable", "high"
             if "relation" in error_msg_lower or "column" in error_msg_lower:
                 return "version_compatibility", "medium"
             elif "function" in error_msg_lower:
@@ -496,6 +646,29 @@ class PostgreSQLDiscovery:
         # Medium/Low impact
         if gap_type == "connection_issue":
             return "Analysis was interrupted - consider re-running with better network connectivity"
+
+        if gap_type in ("sizing_unavailable", "cockroach_unassessed"):
+            return (
+                "Database size and table inventory are missing. "
+                "Do not quote 0 bytes or 0 tables."
+            )
+        if gap_type == "cockroach_internals_blocked":
+            return (
+                "Sizes, tables and compatibility checks read crdb_internal and are missing. "
+                "Check that the session can run SET allow_unsafe_internals = on, then re-run."
+            )
+        if gap_type == "over_replicated_zone":
+            return (
+                "The zone asks for more replicas than the cluster has nodes, so its "
+                "ranges stay under-replicated. Replica counts and replicated sizes "
+                "will not match the zone config. Logical sizes are not affected."
+            )
+        if gap_type == "no_logical_replication":
+            return (
+                "Cannot use pgcopydb or pg_dump. "
+                "Plan a downtime COPY (SELECT ...) cutover. "
+                "A custom changefeed applier is not provided."
+            )
 
         return "Minor analysis limitation - should not significantly impact results"
 

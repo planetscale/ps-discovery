@@ -119,6 +119,9 @@ class DatabaseConfig:
     username: str = ""
     password: str = ""
     ssl_mode: str = "prefer"
+    ssl_root_cert: Optional[str] = None
+    ssl_cert: Optional[str] = None
+    ssl_key: Optional[str] = None
     connection_timeout: int = 30
     # Server-side cap on any single analyzer query. Applied to the shared
     # analyzer connection, so a slow catalog read cannot hang a discovery run.
@@ -454,6 +457,16 @@ class ConfigManager:
             db_config.username = db_data.get("username", db_config.username)
             db_config.password = db_data.get("password", db_config.password)
             db_config.ssl_mode = db_data.get("ssl_mode", db_config.ssl_mode)
+            db_config.ssl_root_cert = db_data.get(
+                "ssl_root_cert",
+                db_data.get("sslrootcert", db_config.ssl_root_cert),
+            )
+            db_config.ssl_cert = db_data.get(
+                "ssl_cert", db_data.get("sslcert", db_config.ssl_cert)
+            )
+            db_config.ssl_key = db_data.get(
+                "ssl_key", db_data.get("sslkey", db_config.ssl_key)
+            )
             db_config.connection_timeout = db_data.get(
                 "connection_timeout", db_config.connection_timeout
             )
@@ -721,6 +734,9 @@ class ConfigManager:
             username=os.getenv("PGUSER", ""),
             password=os.getenv("PGPASSWORD", ""),
             ssl_mode=os.getenv("PGSSLMODE", "prefer"),
+            ssl_root_cert=os.getenv("PGSSLROOTCERT"),
+            ssl_cert=os.getenv("PGSSLCERT"),
+            ssl_key=os.getenv("PGSSLKEY"),
         )
 
         # MySQL configuration
@@ -1035,6 +1051,11 @@ database:
   username: your_username
   password: your_password
   ssl_mode: prefer  # Options: disable, allow, prefer, require, verify-ca, verify-full
+  # CockroachDB secure clusters need verify-full plus the CA (and usually a client cert).
+  # Do not rely on PGSSLROOTCERT alone — set these here or pass --ssl-root-cert / --ssl-cert / --ssl-key.
+  # ssl_root_cert: /path/to/ca.crt      # libpq sslrootcert
+  # ssl_cert: /path/to/client.crt       # libpq sslcert
+  # ssl_key: /path/to/client.key        # libpq sslkey
   # excluded_databases:  # Additional databases to skip (rdsadmin is always excluded)
   #   - some_internal_db
   # schemas:  # Leave unset to analyze every non-system schema
