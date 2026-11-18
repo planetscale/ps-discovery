@@ -358,7 +358,14 @@ class TestDatabaseScope:
         executed = self._run({**base_params, "database": ""})
 
         assert any(q.startswith("SHOW DATABASES") for q, _ in executed)
-        info_schema = [(q, a) for q, a in executed if "information_schema." in q]
+        # The TRIGGER privilege check reads the user's grants, not a database.
+        assert any("information_schema.user_privileges" in q for q, _ in executed)
+        info_schema = [
+            (q, a)
+            for q, a in executed
+            if "information_schema." in q
+            and "information_schema.user_privileges" not in q
+        ]
         assert info_schema
         for query, args in info_schema:
             assert args is None, query

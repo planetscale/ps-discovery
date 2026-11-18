@@ -244,8 +244,10 @@ class TestFeatureAnalyzer:
             domain_rows,
             range_rows,
         ]
-        # One usage query per custom type (4 types total)
-        cursor_mock.fetchone.side_effect = [usage_row] * 4
+        # The server version, then one usage query per custom type (4 in total)
+        cursor_mock.fetchone.side_effect = [{"server_version_num": "170000"}] + [
+            usage_row
+        ] * 4
 
         result = analyzer._get_custom_data_types()
 
@@ -282,6 +284,38 @@ class TestFeatureAnalyzer:
         result = analyzer._get_custom_data_types()
 
         assert "error" in result
+
+    @staticmethod
+    def _custom_type_sql(analyzer, cursor_mock, version):
+        cursor_mock.fetchall.return_value = []
+        with patch.object(analyzer, "_get_server_version_num", return_value=version):
+            analyzer._get_custom_data_types()
+        return [" ".join(c[0][0].split()) for c in cursor_mock.execute.call_args_list]
+
+    def test_composite_types_leave_out_table_and_view_row_types(
+        self, analyzer, mock_connection
+    ):
+        """Every table and view has a row type of category 'c' too."""
+        _, cursor_mock = mock_connection
+
+        composite_sql = self._custom_type_sql(analyzer, cursor_mock, 170000)[0]
+
+        assert "LEFT JOIN pg_class c ON t.typrelid = c.oid" in composite_sql
+        assert "AND (c.relkind = 'c' OR c.oid IS NULL)" in composite_sql
+
+    @pytest.mark.parametrize(
+        "version,multirange",
+        [(140000, "format_type(r.rngmultitypid, NULL)"), (130000, "NULL")],
+    )
+    def test_range_multirange_follows_server_version(
+        self, analyzer, mock_connection, version, multirange
+    ):
+        """rngmultitypid does not exist before PostgreSQL 14."""
+        _, cursor_mock = mock_connection
+
+        range_sql = self._custom_type_sql(analyzer, cursor_mock, version)[3]
+
+        assert f"{multirange} as multirange_type," in range_sql
 
     # -------------------------------------------------------------------------
     # _get_advanced_column_types

@@ -2,9 +2,22 @@
 Unit tests for PostgreSQL Schema Analyzer
 """
 
+from contextlib import ExitStack
+
 import pytest
 from unittest.mock import MagicMock, patch
-from planetscale_discovery.database.analyzers.schema_analyzer import SchemaAnalyzer
+from planetscale_discovery.database.analyzers.schema_analyzer import (
+    SchemaAnalyzer,
+    qualified_name,
+)
+
+
+def test_qualified_name_qualifies_outside_pg_catalog():
+    """Catches a user object's name written without its schema."""
+    assert qualified_name("f.opfname", "fn.nspname") == (
+        "CASE WHEN fn.nspname = 'pg_catalog' THEN quote_ident(f.opfname)"
+        " ELSE quote_ident(fn.nspname) || '.' || quote_ident(f.opfname) END"
+    )
 
 
 class TestSchemaAnalyzer:
@@ -39,6 +52,14 @@ class TestSchemaAnalyzer:
             patch.object(analyzer, "_get_index_analysis", return_value=[]),
             patch.object(analyzer, "_get_constraint_analysis", return_value=[]),
             patch.object(analyzer, "_get_function_analysis", return_value=[]),
+            patch.object(analyzer, "_get_operator_analysis", return_value=[]),
+            patch.object(analyzer, "_get_aggregate_analysis", return_value=[]),
+            patch.object(analyzer, "_get_cast_analysis", return_value=[]),
+            patch.object(analyzer, "_get_collation_analysis", return_value=[]),
+            patch.object(analyzer, "_get_operator_class_analysis", return_value=[]),
+            patch.object(analyzer, "_get_operator_family_analysis", return_value=[]),
+            patch.object(analyzer, "_get_role_search_path_analysis", return_value=[]),
+            patch.object(analyzer, "_get_rule_analysis", return_value=[]),
             patch.object(analyzer, "_get_trigger_analysis", return_value=[]),
             patch.object(analyzer, "_get_view_analysis", return_value=[]),
             patch.object(analyzer, "_get_sequence_analysis", return_value=[]),
@@ -55,6 +76,14 @@ class TestSchemaAnalyzer:
             "index_analysis",
             "constraint_analysis",
             "function_analysis",
+            "operator_analysis",
+            "aggregate_analysis",
+            "cast_analysis",
+            "collation_analysis",
+            "operator_class_analysis",
+            "operator_family_analysis",
+            "role_search_path_analysis",
+            "rule_analysis",
             "trigger_analysis",
             "view_analysis",
             "sequence_analysis",
@@ -73,33 +102,28 @@ class TestSchemaAnalyzer:
             "_get_index_analysis",
             "_get_constraint_analysis",
             "_get_function_analysis",
+            "_get_operator_analysis",
+            "_get_aggregate_analysis",
+            "_get_cast_analysis",
+            "_get_collation_analysis",
+            "_get_operator_class_analysis",
+            "_get_operator_family_analysis",
+            "_get_role_search_path_analysis",
+            "_get_rule_analysis",
             "_get_trigger_analysis",
             "_get_view_analysis",
             "_get_sequence_analysis",
             "_get_partition_analysis",
             "_get_inheritance_analysis",
         ]
-        patches = {}
-        for m in methods:
-            patches[m] = patch.object(analyzer, m, return_value=[])
-
-        with (
-            patches[methods[0]] as p0,
-            patches[methods[1]] as p1,
-            patches[methods[2]] as p2,
-            patches[methods[3]] as p3,
-            patches[methods[4]] as p4,
-            patches[methods[5]] as p5,
-            patches[methods[6]] as p6,
-            patches[methods[7]] as p7,
-            patches[methods[8]] as p8,
-            patches[methods[9]] as p9,
-            patches[methods[10]] as p10,
-            patches[methods[11]] as p11,
-        ):
+        with ExitStack() as stack:
+            mocks = [
+                stack.enter_context(patch.object(analyzer, m, return_value=[]))
+                for m in methods
+            ]
             analyzer.analyze()
-            for p in [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11]:
-                p.assert_called_once()
+        for m in mocks:
+            m.assert_called_once()
 
     # ---------------------------------------------------------------
     # _get_server_version_num()
@@ -1211,6 +1235,276 @@ class TestSchemaAnalyzer:
 
         result = analyzer._get_function_analysis()
         assert result == []
+
+    # ---------------------------------------------------------------
+    # _get_operator_analysis()
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def _operator_sql(analyzer, cursor_mock):
+        cursor_mock.fetchall.return_value = []
+        analyzer._get_operator_analysis()
+        return " ".join(cursor_mock.execute.call_args[0][0].split())
+
+    def test_get_operator_analysis_leaves_out_builtin_and_extension_operators(
+        self, analyzer, mock_connection
+    ):
+        """Only a live server can apply the filter, so its text is asserted."""
+        _, cursor_mock = mock_connection
+
+        sql = self._operator_sql(analyzer, cursor_mock)
+
+        assert "WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')" in sql
+        assert (
+            "AND NOT EXISTS ( SELECT 1 FROM pg_depend d"
+            " WHERE d.classid = 'pg_operator'::regclass"
+            " AND d.objid = o.oid AND d.deptype = 'e' )"
+        ) in sql
+
+    def test_get_operator_analysis_missing_operand_type_is_null(
+        self, analyzer, mock_connection
+    ):
+        """format_type(0, NULL) is '-', which would read as a type name."""
+        _, cursor_mock = mock_connection
+
+        sql = self._operator_sql(analyzer, cursor_mock)
+
+        assert (
+            "CASE WHEN o.oprleft <> 0 THEN format_type(o.oprleft, NULL) END as left_type"
+            in sql
+        )
+        assert (
+            "CASE WHEN o.oprright <> 0 THEN format_type(o.oprright, NULL) END"
+            " as right_type"
+        ) in sql
+
+    def test_get_operator_analysis_failure_is_recorded(self, analyzer, mock_connection):
+        """An empty list must mean no operators, so a failed read is an error."""
+        _, cursor_mock = mock_connection
+        cursor_mock.execute.side_effect = Exception("permission denied for pg_depend")
+
+        assert analyzer._get_operator_analysis() == []
+        assert [e["message"] for e in analyzer.errors] == [
+            "Failed to get operator analysis"
+        ]
+        assert analyzer.errors[0]["exception"] == "permission denied for pg_depend"
+
+    # ---------------------------------------------------------------
+    # Custom objects: aggregates, casts, collations, operator classes
+    # and families, role search paths, rules. Only a live server can
+    # apply their filters, so the tests assert the SQL text.
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def _sql(analyzer, cursor_mock, method, version=170000):
+        cursor_mock.fetchall.return_value = []
+        with patch.object(analyzer, "_get_server_version_num", return_value=version):
+            getattr(analyzer, method)()
+        return " ".join(cursor_mock.execute.call_args[0][0].split())
+
+    @pytest.mark.parametrize(
+        "method,section",
+        [
+            ("_get_aggregate_analysis", "aggregate analysis"),
+            ("_get_cast_analysis", "cast analysis"),
+            ("_get_collation_analysis", "collation analysis"),
+            ("_get_operator_class_analysis", "operator class analysis"),
+            ("_get_operator_family_analysis", "operator family analysis"),
+            ("_get_role_search_path_analysis", "role search_path analysis"),
+            ("_get_rule_analysis", "rule analysis"),
+        ],
+    )
+    def test_custom_object_failure_is_recorded(
+        self, analyzer, mock_connection, method, section
+    ):
+        """An empty list must mean none exist, so a failed read is an error."""
+        _, cursor_mock = mock_connection
+        cursor_mock.execute.side_effect = Exception("permission denied")
+
+        with patch.object(analyzer, "_get_server_version_num", return_value=170000):
+            assert getattr(analyzer, method)() == []
+        assert [e["message"] for e in analyzer.errors] == [f"Failed to get {section}"]
+
+    @pytest.mark.parametrize(
+        "method,catalog,oid",
+        [
+            ("_get_aggregate_analysis", "pg_proc", "p.oid"),
+            ("_get_collation_analysis", "pg_collation", "c.oid"),
+            ("_get_operator_class_analysis", "pg_opclass", "oc.oid"),
+            ("_get_operator_family_analysis", "pg_opfamily", "f.oid"),
+        ],
+    )
+    def test_custom_objects_leave_out_builtin_and_extension_members(
+        self, analyzer, mock_connection, method, catalog, oid
+    ):
+        """Catches pg_catalog's or an extension's objects reported as the user's."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, method)
+
+        assert "WHERE n.nspname NOT IN ('information_schema', 'pg_catalog')" in sql
+        assert (
+            f"AND NOT EXISTS ( SELECT 1 FROM pg_depend d"
+            f" WHERE d.classid = '{catalog}'::regclass"
+            f" AND d.objid = {oid} AND d.deptype = 'e' )"
+        ) in sql
+
+    def test_casts_leave_out_builtin_extension_and_type_made_casts(
+        self, analyzer, mock_connection
+    ):
+        """A range type's own multirange cast would be created twice."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_cast_analysis")
+
+        assert "WHERE c.oid >= 16384" in sql
+        assert (
+            "AND NOT EXISTS ( SELECT 1 FROM pg_depend d"
+            " WHERE d.classid = 'pg_cast'::regclass"
+            " AND d.objid = c.oid AND d.deptype IN ('e', 'i') )"
+        ) in sql
+
+    def test_operator_class_and_family_members_are_split_by_owner(
+        self, analyzer, mock_connection
+    ):
+        """A FOR ORDER BY member also depends on its sort family, which it is
+        not a member of."""
+        _, cursor_mock = mock_connection
+
+        class_sql = self._sql(analyzer, cursor_mock, "_get_operator_class_analysis")
+        family_sql = self._sql(analyzer, cursor_mock, "_get_operator_family_analysis")
+
+        for sql, catalog, oid, family in (
+            (class_sql, "pg_opclass", "oc.oid", "oc.opcfamily"),
+            (family_sql, "pg_opfamily", "f.oid", "f.oid"),
+        ):
+            assert sql.count(f"WHERE dep.refclassid = '{catalog}'::regclass") == 2
+            assert sql.count(f"AND dep.refobjid = {oid}") == 2
+            assert f"AND ao.amopfamily = {family}" in sql
+            assert f"AND ap.amprocfamily = {family}" in sql
+
+    @pytest.mark.parametrize(
+        "version,provider,deterministic,locale,icu_rules",
+        [
+            (
+                170000,
+                "c.collprovider",
+                "c.collisdeterministic",
+                "c.colllocale",
+                "c.collicurules",
+            ),
+            (
+                160000,
+                "c.collprovider",
+                "c.collisdeterministic",
+                "c.colliculocale",
+                "c.collicurules",
+            ),
+            (
+                150000,
+                "c.collprovider",
+                "c.collisdeterministic",
+                "c.colliculocale",
+                "NULL",
+            ),
+            (140000, "c.collprovider", "c.collisdeterministic", "NULL", "NULL"),
+            (110000, "c.collprovider", "true", "NULL", "NULL"),
+            (90600, "'c'", "true", "NULL", "NULL"),
+        ],
+    )
+    def test_collation_columns_follow_server_version(
+        self,
+        analyzer,
+        mock_connection,
+        version,
+        provider,
+        deterministic,
+        locale,
+        icu_rules,
+    ):
+        """Catches a column read on a server that does not have it."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_collation_analysis", version)
+
+        assert f"{provider} as provider," in sql
+        assert f"{deterministic} as deterministic," in sql
+        assert f"{locale}::text as locale," in sql
+        assert f"{icu_rules}::text as icu_rules" in sql
+
+    def test_role_search_path_reads_only_search_path_for_this_database(
+        self, analyzer, mock_connection
+    ):
+        """Another setting can hold a secret; another database's does not apply."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_role_search_path_analysis")
+
+        assert "substr(s.setting, 13) as search_path" in sql
+        assert "WHERE s.setting LIKE 'search_path=%'" in sql
+        assert "AND (rs.setdatabase = 0 OR db.datname = current_database())" in sql
+        assert sql.count("setconfig") == 1
+
+    def test_rules_leave_out_view_definitions(self, analyzer, mock_connection):
+        """A view's _RETURN rule is its body, already in view_analysis."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_rule_analysis")
+
+        assert "WHERE r.rulename <> '_RETURN'" in sql
+
+    @pytest.mark.parametrize(
+        "version,final_modify,moving_final_modify",
+        [
+            (110000, "a.aggfinalmodify", "a.aggmfinalmodify"),
+            (100000, "NULL", "NULL"),
+        ],
+    )
+    def test_aggregate_final_modify_follows_server_version(
+        self, analyzer, mock_connection, version, final_modify, moving_final_modify
+    ):
+        """The final-modify columns do not exist before PostgreSQL 11."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_aggregate_analysis", version)
+
+        assert f"{final_modify}::text as final_modify," in sql
+        assert f"{moving_final_modify}::text as moving_final_modify," in sql
+
+    @pytest.mark.parametrize(
+        "version,kind",
+        [
+            (110000, "p.prokind as kind,"),
+            (
+                100000,
+                "CASE WHEN p.proisagg THEN 'a' WHEN p.proiswindow THEN 'w'"
+                " ELSE 'f' END as kind,",
+            ),
+        ],
+    )
+    def test_function_kind_follows_server_version(
+        self, analyzer, mock_connection, version, kind
+    ):
+        """prokind does not exist before PostgreSQL 11."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_function_analysis", version)
+
+        assert kind in sql
+
+    def test_function_search_path_reads_only_search_path(
+        self, analyzer, mock_connection
+    ):
+        """A function's other settings can hold any value."""
+        _, cursor_mock = mock_connection
+
+        sql = self._sql(analyzer, cursor_mock, "_get_function_analysis")
+
+        assert (
+            "( SELECT substr(setting, 13) FROM unnest(p.proconfig) as setting"
+            " WHERE setting LIKE 'search_path=%' ) as search_path,"
+        ) in sql
+        assert sql.count("proconfig") == 1
 
     # ---------------------------------------------------------------
     # _get_trigger_analysis()

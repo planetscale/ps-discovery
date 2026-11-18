@@ -187,8 +187,8 @@ For PlanetScale and most cloud-hosted MySQL instances, use `required` or higher.
 - Column details: data types, nullability, defaults, auto-increment, generated columns
 - Indexes: type (BTREE, HASH, FULLTEXT, SPATIAL), uniqueness, cardinality, prefix lengths
 - Views: definitions, updatability, definer, security type
-- Stored procedures and functions: return types, definer, deterministic flag
-- Triggers: events, timing, action statements
+- Stored procedures and functions: bodies, parameters, return types, definer, deterministic flag. A body reads `null` when the discovery user can see the routine but not its body; the global `SELECT` granted in the setup above shows every body
+- Triggers: events, timing, firing order, action statements. MySQL lists a trigger only to a user with the `TRIGGER` privilege on its table, which the setup above leaves out because it also allows creating and dropping triggers. Without it, the report has no triggers and records a gap saying they may be missing
 - Foreign key constraints with referential actions (CASCADE, SET NULL, etc.)
 - CHECK constraints (MySQL 8.0.16+)
 - Partitioning details: method, expression, partition sizes

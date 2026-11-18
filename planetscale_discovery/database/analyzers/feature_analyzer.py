@@ -6,6 +6,7 @@ Analyzes advanced PostgreSQL features, extensions, and custom data types.
 from typing import Dict, Any, List
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
+from planetscale_discovery.database.analyzers.schema_analyzer import qualified_name
 from planetscale_discovery.database.citus import (
     event_trigger_filter,
     type_filter,
@@ -185,19 +186,46 @@ class FeatureAnalyzer(DatabaseAnalyzer):
         """Analyze custom data types."""
         try:
             types = type_filter(self.citus, "t.oid", "n.oid", "t.typrelid")
+            # rngmultitypid arrived with multiranges in PostgreSQL 14
+            multirange = (
+                "format_type(r.rngmultitypid, NULL)"
+                if self._get_server_version_num() >= 140000
+                else "NULL"
+            )
             with self.connection.cursor() as cursor:
-                # Composite types
+                # Composite types. Every table and view has a row type of
+                # category 'c' too; only relkind 'c' is a CREATE TYPE ... AS.
                 cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
                         t.typname as type_name,
                         t.typtype as type_category,
+                        (
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'name', a.attname,
+                                'type', format_type(a.atttypid, a.atttypmod),
+                                'collation', (
+                                    SELECT {qualified_name("co.collname", "con.nspname")}
+                                    FROM pg_collation co
+                                    JOIN pg_namespace con ON co.collnamespace = con.oid
+                                    JOIN pg_type att ON att.oid = a.atttypid
+                                    WHERE co.oid = a.attcollation
+                                    AND a.attcollation <> att.typcollation
+                                )
+                            ) ORDER BY a.attnum)
+                            FROM pg_attribute a
+                            WHERE a.attrelid = t.typrelid
+                            AND a.attnum > 0
+                            AND NOT a.attisdropped
+                        ) as attributes,
                         obj_description(t.oid, 'pg_type') as description,
                         r.rolname as owner
                     FROM pg_type t
                     JOIN pg_namespace n ON t.typnamespace = n.oid
                     JOIN pg_roles r ON t.typowner = r.oid
+                    LEFT JOIN pg_class c ON t.typrelid = c.oid
                     WHERE t.typtype = 'c'  -- composite types
+                    AND (c.relkind = 'c' OR c.oid IS NULL)
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     {types}
                     ORDER BY n.nspname, t.typname
@@ -232,6 +260,7 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         format_type(t.typbasetype, t.typtypmod) as base_type,
                         t.typnotnull as not_null,
                         CASE WHEN t.typdefault IS NOT NULL THEN true ELSE false END as has_default_value,
+                        t.typdefault as default_value,
                         pg_get_constraintdef(c.oid) as check_constraint,
                         obj_description(t.oid, 'pg_type') as description,
                         r.rolname as owner
@@ -252,6 +281,21 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         n.nspname as schema_name,
                         t.typname as type_name,
                         format_type(r.rngsubtype, 0) as subtype,
+                        (
+                            SELECT {qualified_name("oc.opcname", "ocn.nspname")}
+                            FROM pg_opclass oc
+                            JOIN pg_namespace ocn ON oc.opcnamespace = ocn.oid
+                            WHERE oc.oid = r.rngsubopc
+                        ) as subtype_opclass,
+                        (
+                            SELECT {qualified_name("co.collname", "con.nspname")}
+                            FROM pg_collation co
+                            JOIN pg_namespace con ON co.collnamespace = con.oid
+                            WHERE co.oid = r.rngcollation
+                        ) as collation,
+                        NULLIF(r.rngcanonical::oid, 0)::regproc::text as canonical,
+                        NULLIF(r.rngsubdiff::oid, 0)::regproc::text as subtype_diff,
+                        {multirange} as multirange_type,
                         obj_description(t.oid, 'pg_type') as description,
                         ro.rolname as owner
                     FROM pg_type t

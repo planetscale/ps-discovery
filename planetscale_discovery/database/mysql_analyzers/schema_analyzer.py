@@ -63,6 +63,7 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
 
     def analyze(self) -> Dict[str, Any]:
         database_list = self._get_database_list()
+        self._check_trigger_visibility()
 
         # Try a single cross-database query first
         tables = self._get_table_analysis()
@@ -360,6 +361,12 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
             return []
 
     def _get_routine_analysis(self) -> List[Dict[str, Any]]:
+        """Each routine with its body and parameters.
+
+        routine_definition is NULL when the role can see the routine but not
+        its body, and parameters is None when the parameter list could not be
+        read: neither means empty.
+        """
         try:
             query = f"""
                 SELECT
@@ -367,6 +374,8 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                     routine_name AS routine_name,
                     routine_type AS type,
                     data_type AS return_type,
+                    dtd_identifier AS returns,
+                    routine_definition AS routine_definition,
                     definer AS definer,
                     security_type AS security_type,
                     is_deterministic AS is_deterministic,
@@ -377,10 +386,87 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                 WHERE {self._user_databases_filter('routine_schema')}
                 ORDER BY routine_schema, routine_type, routine_name
             """
-            return self.execute_query(query, self._filter_params)
+            routines = self.execute_query(query, self._filter_params)
         except Exception as e:
             self.add_error(f"Failed to get routine analysis: {e}", e)
             return []
+
+        # Ordinal 0 is a function's return value, already in returns.
+        try:
+            rows = self.execute_query(
+                f"""
+                SELECT
+                    specific_schema AS schema_name,
+                    specific_name AS routine_name,
+                    routine_type AS type,
+                    ordinal_position AS ordinal_position,
+                    parameter_mode AS mode,
+                    parameter_name AS name,
+                    dtd_identifier AS data_type
+                FROM information_schema.parameters
+                WHERE ordinal_position > 0
+                AND {self._user_databases_filter('specific_schema')}
+                ORDER BY specific_schema, specific_name, ordinal_position
+                """,
+                self._filter_params,
+                raise_on_error=True,
+            )
+        except Exception as e:
+            self.add_error(f"Failed to get routine parameters: {e}", e)
+            for routine in routines:
+                routine["parameters"] = None
+            return routines
+
+        parameters: Dict[tuple, List[Dict[str, Any]]] = {}
+        for row in rows:
+            key = (row.pop("schema_name"), row.pop("routine_name"), row.pop("type"))
+            parameters.setdefault(key, []).append(row)
+        for routine in routines:
+            key = (routine["schema_name"], routine["routine_name"], routine["type"])
+            routine["parameters"] = parameters.get(key, [])
+        return routines
+
+    def _check_trigger_visibility(self) -> None:
+        """Warn when information_schema can hide triggers from this user.
+
+        MySQL lists a trigger only to a user with the TRIGGER privilege on its
+        table, and discovery does not ask for it, because it also allows
+        creating and dropping triggers. Without it an empty trigger list means
+        unknown, not none. A grant held through a role is not seen here, so
+        that user gets the warning too.
+        """
+        me = (
+            "CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''',"
+            " SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')"
+        )
+        schema_grant = (
+            f"""
+            UNION ALL
+            SELECT 1 FROM information_schema.schema_privileges
+            WHERE privilege_type = 'TRIGGER' AND grantee = {me}
+            AND table_schema = %s"""
+            if self.database
+            else ""
+        )
+        try:
+            rows = self.execute_query(
+                f"""
+                SELECT 1 FROM information_schema.user_privileges
+                WHERE privilege_type = 'TRIGGER' AND grantee = {me}{schema_grant}
+                """,
+                self._filter_params,
+                raise_on_error=True,
+            )
+        except Exception as e:
+            self.logger.debug(f"Could not read the TRIGGER privilege: {e}")
+            rows = []
+        if not rows:
+            self.add_warning(
+                "Triggers may be missing: MySQL lists a trigger only to a user "
+                "with the TRIGGER privilege on its table, and this user does not "
+                "hold it on every table, so trigger_analysis and the trigger "
+                "counts may be incomplete."
+            )
 
     def _get_trigger_analysis(self) -> List[Dict[str, Any]]:
         try:
@@ -391,12 +477,13 @@ class MySQLSchemaAnalyzer(DatabaseAnalyzer):
                     event_manipulation AS event,
                     event_object_table AS table_name,
                     action_timing AS timing,
+                    action_order AS action_order,
                     action_statement AS statement,
                     definer AS definer,
                     created AS created
                 FROM information_schema.triggers
                 WHERE {self._user_databases_filter('trigger_schema')}
-                ORDER BY trigger_schema, event_object_table, action_timing, event_manipulation
+                ORDER BY trigger_schema, event_object_table, action_timing, event_manipulation, action_order
             """
             return self.execute_query(query, self._filter_params)
         except Exception as e:
