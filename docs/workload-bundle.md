@@ -462,7 +462,9 @@ steadier estimate.
 `peak_interval_start` says which.
 
 Every counter is for the measured window, differenced from the snapshots. Every
-size is a reading, carried rather than differenced. The `window` block repeats
+size is a reading, carried rather than differenced. A counter is `null` when no
+snapshot read it, as a table's `index_scans` is when the table has no index. A
+`null` is never a zero. The `window` block repeats
 the same start, end, duration and interval count that
 `manifest.json` carries, so the two files can be read together and a write rate
 derived from them.
@@ -471,6 +473,7 @@ A table with `sequential_scans` above zero is read without an index, which fans
 out to every shard once the table is split.
 
 `indexes_not_scanned_in_window` counts indexes no query used during the capture.
+An index whose scans could not be read is not counted.
 The name is deliberate: over a short window that number says nothing about
 whether an index is dead, only that nothing reached for it while you were
 watching. A nightly report can be the sole user of an index and leave it at zero

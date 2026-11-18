@@ -143,6 +143,22 @@ class TestIndexUsage:
         )
         assert activity["indexes_not_scanned_in_window"] == 1
 
+    def test_a_counter_no_snapshot_read_is_null_not_zero(self):
+        """A consumer reads a zero as an unused index and a null as unknown."""
+        unread = index("public.orders", "unread_idx")
+        unread["counters"] = {name: None for name in unread["counters"]}
+        indexless = table("public.orders")
+        indexless["counters"]["idx_scan"] = None
+
+        activity = render_table_activity(
+            window([indexless], [indexless], [unread], [unread]), "id"
+        )
+
+        assert activity["tables"][0]["index_scans"] is None
+        assert activity["tables"][0]["rows_inserted"] == 0
+        assert activity["indexes"][0]["scans"] is None
+        assert activity["indexes_not_scanned_in_window"] == 0
+
 
 class TestItAlignsWithTheManifest:
     def _both(self):

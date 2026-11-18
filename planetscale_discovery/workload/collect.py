@@ -464,15 +464,20 @@ class WorkloadCollector(DatabaseAnalyzer):
             snapshot["tables"] = [self._table_row(dict(r)) for r in tables]
             snapshot["indexes"] = [self._index_row(dict(r)) for r in indexes]
 
-        # A NULL scan count means the role cannot read another backend's statistics.
-        blind = [t for t in snapshot["tables"] if t["counters"]["idx_scan"] is None]
+        # idx_scan sums a table's indexes, so it is NULL for a table with none.
+        indexed = {i["table"] for i in snapshot["indexes"]}
+        blind = [
+            t
+            for t in snapshot["tables"]
+            if t["counters"]["idx_scan"] is None and t["table"] in indexed
+        ]
         if blind:
             snapshot["warnings"].append(
                 {
                     "code": "statistics_not_readable",
                     "detail": (
-                        f"{len(blind)} table(s) returned no scan counts; the role "
-                        "likely lacks pg_monitor. Absent counts are not zero."
+                        f"{len(blind)} table(s) with an index returned no index "
+                        "scan count. Absent counts are not zero."
                     ),
                 }
             )

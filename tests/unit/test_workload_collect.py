@@ -199,11 +199,29 @@ class TestTableRows:
         assert row["counters"]["idx_scan"] == 7
 
     def test_a_null_counter_stays_none(self):
-        """A NULL scan count is a permission problem, not zero scans."""
+        """A NULL scan count is unknown, not zero scans."""
         row = self._collector()._table_row(
             {"schemaname": "public", "relname": "t", "reltuples": 1, "idx_scan": None}
         )
         assert row["counters"]["idx_scan"] is None
+
+    def test_only_a_table_with_an_index_warns_on_a_null_scan_count(self):
+        """idx_scan sums a table's indexes, so a table without one reads NULL."""
+        collector = self._collector()
+        tables = [
+            {"schemaname": "public", "relname": name, "reltuples": 1, "idx_scan": None}
+            for name in ("indexed", "log")
+        ]
+        indexes = [{"schemaname": "public", "relname": "indexed", "indexrelname": "pk"}]
+        snapshot = {"warnings": [], "notes": []}
+        collector._process_relations(
+            snapshot, {"tables": tables, "indexes": indexes, "clock": None}
+        )
+
+        assert [w["detail"] for w in snapshot["warnings"]] == [
+            "1 table(s) with an index returned no index scan count. "
+            "Absent counts are not zero."
+        ]
 
 
 class TestInheritedRowsAreFiltered:
