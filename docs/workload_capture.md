@@ -1161,7 +1161,7 @@ A cron wrapper must be able to tell a real fault from a finished capture.
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | usage or config error |
+| 1 | usage or config error. `collect` also returns it when the snapshot read nothing, for example when the connection closed during the first read ([W216](#w216-connection_lost)) |
 | 2 | no session at that path |
 | 3 | a volume cap was reached; run `finalize` |
 | 5 | the server cannot support collection; read the printed remediation |
@@ -1416,7 +1416,9 @@ names the read that was in progress.
 
 The snapshot is kept with everything read before the connection closed. The
 reads after it were skipped. A skipped read that has its own code, such as
-[W210](#w210-statement_read_failed), also reports that code.
+[W210](#w210-statement_read_failed), also reports that code. When the
+connection closed before anything was read, the snapshot is stored as failed,
+merging skips it, and `collect` exits 1.
 
 Check the PostgreSQL server log for the time of the snapshot. Look for a line
 that says why the server ended the session, such as a restart, a failover, or
