@@ -10,7 +10,7 @@ Heroku Postgres databases are managed as "add-ons" on the Heroku Platform API. T
 
 - Heroku account with access to the apps you want to analyze
 - Heroku API key (Platform API authorization token)
-- Python package: `pip install "ps-discovery[heroku]"`
+- Python package: `pip install ".[heroku]"`
 
 ## Authentication Setup
 
@@ -411,7 +411,7 @@ If databases are shared across multiple apps via add-on attachments:
 
 ```bash
 # 1. Install with Heroku support
-pip install "ps-discovery[heroku]"
+pip install ".[heroku]"
 
 # 2. Set your API key
 export HEROKU_API_KEY="your-heroku-api-key"

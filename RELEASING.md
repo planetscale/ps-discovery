@@ -30,6 +30,34 @@ python -m flake8 planetscale_discovery tests
 python -m mypy planetscale_discovery
 ```
 
+Refresh the installer's dependency lock. `./setup.sh` installs only the exact
+versions and hashes in `requirements/setup-lock.txt` (and pip from
+`requirements/setup-pip.txt`), and the release zip ships both, so the
+versions a customer gets are the ones you test here. Regenerate them with
+[uv](https://docs.astral.sh/uv/) when a release should pick up newer
+dependencies, and whenever a package is added to `setup.sh`, which must also be
+added to `requirements/setup.in`. The packages they share with
+`requirements-lock.txt` are capped by it, so refresh that lock first.
+
+```bash
+uv pip compile requirements/setup.in -o requirements/setup-lock.txt --universal --python-version 3.10 --generate-hashes --no-header --upgrade
+uv pip compile requirements/setup-pip.in -o requirements/setup-pip.txt --universal --python-version 3.10 --generate-hashes --no-header --upgrade
+uv run --no-project --with packaging==26.3 python requirements/check_setup_lock.py
+```
+
+The lock is universal: one file covers Python 3.10 to 3.14 on Linux and macOS,
+with environment markers where a platform needs a different version.
+`setup.sh` installs wheels only, so `check_setup_lock.py` checks that, on
+every supported platform and Python, the lock pins each package under a marker
+true for that target, and lists the hash of a wheel that target can install. It
+also checks every hash in the lock against PyPI. When a version has no wheel for
+a target, cap that package for that platform in `setup.in`, as the file
+already does for Intel Macs, and regenerate.
+
+CI runs `check_setup_lock.py`, installs every locked package on Linux for each
+supported Python, and runs `tests/unit/test_setup_lock.py`, which fails when
+`setup.sh` and the lock disagree on a package or a version bound.
+
 ### 2. Update CHANGELOG.md
 
 Update the CHANGELOG.md file with changes for this release:

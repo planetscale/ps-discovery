@@ -72,8 +72,8 @@ class PlanetScaleAnalyzer(CloudAnalyzer):
         """Authenticate with the PlanetScale API."""
         if not HAS_PLANETSCALE_LIBS:
             self.add_error(
-                "PlanetScale libraries not installed. Install with: "
-                "pip install 'planetscale-discovery-tools[planetscale]'"
+                "PlanetScale libraries not installed. "
+                "Run ./setup.sh again and select PlanetScale."
             )
             return False
 

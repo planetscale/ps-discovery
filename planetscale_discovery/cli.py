@@ -1170,7 +1170,7 @@ def _handle_database_error(e: Exception, logger: Any, engine: str = "postgres") 
     ):
         logger.error(
             f"PyMySQL is not installed.\n"
-            f"  Install with: pip install 'planetscale-discovery-tools[mysql]'\n"
+            f"  Run ./setup.sh again and select MySQL.\n"
             f"  Details: {e}"
         )
     else:

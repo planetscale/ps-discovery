@@ -8,7 +8,7 @@ The PlanetScale Discovery CLI can analyze Supabase-hosted PostgreSQL infrastruct
 
 - Supabase account with project access
 - Personal Access Token or Service Role Key
-- Python package: `pip install "ps-discovery[supabase]"`
+- Python package: `pip install ".[supabase]"`
 
 ## Authentication Setup
 

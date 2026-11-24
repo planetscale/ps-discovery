@@ -119,7 +119,7 @@ class AWSAnalyzer(CloudAnalyzer):
         """Authenticate with AWS."""
         if not HAS_AWS_LIBS:
             self.add_error(
-                "AWS libraries not installed. Install with: pip install 'planetscale-discovery-tools[aws]'"
+                "AWS libraries not installed. Run ./setup.sh again and select AWS."
             )
             return False
 

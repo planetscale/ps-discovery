@@ -6,7 +6,7 @@ The PlanetScale Discovery CLI inventories Snowflake Postgres instances and, when
 
 The product path is the same as AWS RDS/Aurora, GCP Cloud SQL/AlloyDB, and Neon:
 
-1. Install the extra: `pip install "ps-discovery[snowflake]"`
+1. Install the extra: `pip install ".[snowflake]"`
 2. Enable `providers.snowflake` and set account authentication
 3. Run `ps-discovery`
 
@@ -24,7 +24,7 @@ Snowflake discovery has two inputs you can use together or separately:
 - A Snowflake account with one or more Snowflake Postgres instances
 - A Snowflake user and a least-privilege role with the inventory permissions below
 - Network access from the machine running discovery to the Snowflake account endpoint
-- Python package: `pip install "ps-discovery[snowflake]"` (or `./setup.sh` and select Snowflake)
+- Python package: `pip install ".[snowflake]"` (or `./setup.sh` and select Snowflake)
 
 For catalog-level database discovery you also need a read-only Postgres user and network access to the instance hostname on port `5432` (SSL required). See [Database discovery](#database-discovery-optional).
 
@@ -320,7 +320,7 @@ The report does include hostnames, instance names, the account locator, Postgres
 ## Running Discovery
 
 ```bash
-pip install "ps-discovery[snowflake]"
+pip install ".[snowflake]"
 # or, from a checkout:
 # ./setup.sh   # select Snowflake Postgres
 
@@ -351,7 +351,7 @@ cloud_results.providers.snowflake.resources[<region>].instances[]
 
 ### "Snowflake libraries not installed"
 
-Install the extra: `pip install "ps-discovery[snowflake]"` or re-run `./setup.sh` and select Snowflake.
+Install the extra: `pip install ".[snowflake]"` or re-run `./setup.sh` and select Snowflake.
 
 ### "Authentication failed" (Snowflake account)
 

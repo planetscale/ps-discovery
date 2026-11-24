@@ -1,0 +1,11 @@
+# The pip that ./setup.sh upgrades the virtual environment to before it
+# installs anything else. Source file for uv pip compile. Output: setup-pip.txt
+#
+# A fresh virtual environment can carry a pip too old to read the hashes in a
+# constraints file, so pip itself is installed first, from an exact version and
+# hash that any pip can check.
+#
+# To regenerate:
+#   uv pip compile requirements/setup-pip.in -o requirements/setup-pip.txt --universal --python-version 3.10 --generate-hashes --no-header --upgrade
+#
+pip>=25.0

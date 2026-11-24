@@ -104,7 +104,7 @@ class CloudDiscoveryTool:
                 from .analyzers.aws_analyzer import AWSAnalyzer
             except ImportError:
                 self.logger.error(
-                    'AWS dependencies not installed. Install with: pip install "ps-discovery[aws]"'
+                    "AWS dependencies not installed. Run ./setup.sh again and select AWS."
                 )
                 self.results["errors"].append(
                     {
@@ -155,7 +155,7 @@ class CloudDiscoveryTool:
                 from .analyzers.gcp_analyzer import GCPAnalyzer
             except ImportError:
                 self.logger.error(
-                    'GCP dependencies not installed. Install with: pip install "ps-discovery[gcp]"'
+                    "GCP dependencies not installed. Run ./setup.sh again and select GCP."
                 )
                 self.results["errors"].append(
                     {
@@ -200,7 +200,7 @@ class CloudDiscoveryTool:
                 from .analyzers.azure_analyzer import AzureAnalyzer
             except ImportError:
                 self.logger.error(
-                    'Azure dependencies not installed. Install with: pip install "ps-discovery[azure]"'
+                    "Azure dependencies not installed. Run ./setup.sh again and select Azure."
                 )
                 self.results["errors"].append(
                     {
@@ -246,7 +246,7 @@ class CloudDiscoveryTool:
                 from .analyzers.supabase_analyzer import SupabaseAnalyzer
             except ImportError:
                 self.logger.error(
-                    'Supabase dependencies not installed. Install with: pip install "ps-discovery[supabase]"'
+                    "Supabase dependencies not installed. Run ./setup.sh again and select Supabase."
                 )
                 self.results["errors"].append(
                     {
@@ -291,7 +291,7 @@ class CloudDiscoveryTool:
                 from .analyzers.heroku_analyzer import HerokuAnalyzer
             except ImportError:
                 self.logger.error(
-                    'Heroku dependencies not installed. Install with: pip install "ps-discovery[heroku]"'
+                    "Heroku dependencies not installed. Run ./setup.sh again and select Heroku."
                 )
                 self.results["errors"].append(
                     {
@@ -336,7 +336,7 @@ class CloudDiscoveryTool:
                 from .analyzers.neon_analyzer import NeonAnalyzer
             except ImportError:
                 self.logger.error(
-                    'Neon dependencies not installed. Install with: pip install "ps-discovery[neon]"'
+                    "Neon dependencies not installed. Run ./setup.sh again and select Neon."
                 )
                 self.results["errors"].append(
                     {
@@ -381,7 +381,7 @@ class CloudDiscoveryTool:
                 from .analyzers.planetscale_analyzer import PlanetScaleAnalyzer
             except ImportError:
                 self.logger.error(
-                    'PlanetScale dependencies not installed. Install with: pip install "ps-discovery[planetscale]"'
+                    "PlanetScale dependencies not installed. Run ./setup.sh again and select PlanetScale."
                 )
                 self.results["errors"].append(
                     {
@@ -427,7 +427,7 @@ class CloudDiscoveryTool:
                 from .analyzers.snowflake_analyzer import SnowflakeAnalyzer
             except ImportError:
                 self.logger.error(
-                    'Snowflake dependencies not installed. Install with: pip install "ps-discovery[snowflake]"'
+                    "Snowflake dependencies not installed. Run ./setup.sh again and select Snowflake."
                 )
                 self.results["errors"].append(
                     {

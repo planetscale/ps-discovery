@@ -114,7 +114,7 @@ class HerokuAnalyzer(CloudAnalyzer):
         """Authenticate with Heroku Platform API."""
         if not HAS_HEROKU_LIBS:
             self.add_error(
-                "Heroku libraries not installed. Install with: pip install 'planetscale-discovery-tools[heroku]'"
+                "Heroku libraries not installed. Run ./setup.sh again and select Heroku."
             )
             return False
 

@@ -113,8 +113,7 @@ class NeonAnalyzer(CloudAnalyzer):
         """Authenticate with Neon API."""
         if not HAS_NEON_LIBS:
             self.add_error(
-                "Neon libraries not installed. Install with: "
-                "pip install 'planetscale-discovery-tools[neon]'"
+                "Neon libraries not installed. Run ./setup.sh again and select Neon."
             )
             return False
 

@@ -203,7 +203,7 @@ class MySQLDiscovery:
 
         except ImportError:
             self.logger.error(
-                "PyMySQL is not installed. Install with: pip install 'planetscale-discovery-tools[mysql]'"
+                "PyMySQL is not installed. Run ./setup.sh again and select MySQL."
             )
             return False
         except Exception as e:

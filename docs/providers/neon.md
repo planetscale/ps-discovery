@@ -10,7 +10,7 @@ Neon is a serverless Postgres provider that organizes databases into projects wi
 
 - Neon account with access to the projects you want to analyze
 - Neon API key (personal, organization, or project-scoped)
-- Python package: `pip install "ps-discovery[neon]"`
+- Python package: `pip install ".[neon]"`
 
 ## Authentication Setup
 
@@ -371,7 +371,7 @@ you add the `--local-summary` flag.
 
 ```bash
 # 1. Install with Neon support
-pip install "ps-discovery[neon]"
+pip install ".[neon]"
 
 # 2. Set your API key
 export NEON_API_KEY="your-neon-api-key"

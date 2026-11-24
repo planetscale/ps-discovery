@@ -52,7 +52,7 @@ setup(
         ],
         "azure": [
             "azure-identity>=1.25.3",
-            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<4",
+            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<2",
             "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
             "azure-mgmt-network>=32.0.0",
         ],
@@ -87,7 +87,7 @@ setup(
             "google-auth>=2.48.0",
             "google-api-python-client>=2.190.0",
             "azure-identity>=1.25.3",
-            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<4",
+            "azure-mgmt-postgresqlflexibleservers>=1.1.0,<2",
             "azure-mgmt-mysqlflexibleservers>=1.0.0,<2",
             "azure-mgmt-network>=32.0.0",
             "requests>=2.32.5",

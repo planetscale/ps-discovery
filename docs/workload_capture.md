@@ -128,11 +128,16 @@ setting. Only `status` runs, because it reads the session and never touches the
 server.
 
 `setup.sh` asks whether you will run a workload capture. Answer yes, and it
-installs the optional SQL parser `pglast`. If you answered no, or you set up the
-tool another way, install the parser now:
+installs the optional SQL parser `pglast`, at the version and hash in its lock.
+If you answered no, run `./setup.sh` again and answer yes, or set
+`PSDISCOVERY_WORKLOAD=yes`. If you set up the tool another way, install the
+parser from the same lock, from the release directory. The first command
+installs the pip that `setup.sh` uses, because an older pip cannot read the
+lock's hashes:
 
 ```bash
-pip install 'pglast>=7,<9'
+pip install --require-hashes --only-binary :all: -r requirements/setup-pip.txt
+pip install --require-hashes --only-binary :all: -c requirements/setup-lock.txt 'pglast>=7,<9'
 ```
 
 The parser only checks that the rendered `schema.sql` parses. Without it,

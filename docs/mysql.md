@@ -12,13 +12,13 @@ The PlanetScale Discovery CLI can analyze MySQL and MySQL-compatible databases i
 
 - MySQL-compatible database server (MySQL 5.7+, MySQL 8.0+, MariaDB 10.x, or compatible)
 - Database user with read-only access to `information_schema` and system tables
-- Python package: `pip install "ps-discovery[mysql]"` (or select MySQL during `./setup.sh`)
+- Python package: `pip install ".[mysql]"` (or select MySQL during `./setup.sh`)
 
 ## Quick Start
 
 ```bash
 # Install with MySQL support
-pip install "ps-discovery[mysql]"
+pip install ".[mysql]"
 
 # Run discovery against a MySQL server directly
 ps-discovery database --engine mysql --host db.example.com -u root -W
@@ -324,7 +324,7 @@ Available MySQL analyzers: `config`, `schema`, `performance`, `replication`, `se
 
 **Solution:**
 ```bash
-pip install "ps-discovery[mysql]"
+pip install ".[mysql]"
 # Or re-run setup.sh and select MySQL when prompted
 ```
 
