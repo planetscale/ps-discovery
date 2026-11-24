@@ -4,7 +4,7 @@ Base analyzer class for consistent interface across all discovery modules.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 
@@ -78,6 +78,25 @@ class CloudAnalyzer(BaseAnalyzer):
         super().__init__(config, logger)
         self.provider = provider
         self.client = None
+
+    def clean_credential(self, value: Any, label: str) -> Optional[str]:
+        """The credential trimmed of surrounding whitespace, or None when it is
+        empty or still holds whitespace or a control character.
+
+        A line break or leading space in a header value makes the HTTP library
+        raise an error that quotes the whole header, credential included. So
+        the value is checked before any header is built, and the error names
+        the setting, never its value.
+        """
+        cleaned = str(value).strip()
+        if not cleaned or any(c.isspace() or not c.isprintable() for c in cleaned):
+            self.add_error(
+                f"The {label} is empty or contains whitespace or control "
+                "characters. Check the value in your config file, command line "
+                "or environment."
+            )
+            return None
+        return cleaned
 
     @abstractmethod
     def authenticate(self) -> bool:

@@ -432,3 +432,17 @@ def test_current_database_failure_records_a_warning():
     messages = [entry["message"] for entry in analyzer.warnings]
     assert any("current_database() failed" in message for message in messages)
     assert any("defaultdb" in message and "postgres" in message for message in messages)
+
+
+def test_view_rows_carry_a_null_extension():
+    """Catches a CockroachDB view row without the extension field that a
+    PostgreSQL view row carries. CockroachDB has no extensions."""
+    analyzer, conn = _analyzer()
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    analyzer._get_view_analysis()
+
+    sql = " ".join(cursor.execute.call_args[0][0].split())
+    assert "NULL::text as extension FROM pg_class c" in sql

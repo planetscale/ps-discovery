@@ -40,6 +40,22 @@ def not_extension_member(catalog: str, oid_expr: str) -> str:
     )
 
 
+def owning_extension(catalog: str, oid_expr: str) -> str:
+    """SQL for the name of the extension that owns the object, or NULL.
+
+    An object can be a member of one extension only, so the subquery returns
+    one row at most.
+    """
+    return (
+        "( SELECT ext.extname FROM pg_depend ext_dep"
+        " JOIN pg_extension ext ON ext.oid = ext_dep.refobjid"
+        f" WHERE ext_dep.classid = '{catalog}'::regclass"
+        f" AND ext_dep.objid = {oid_expr}"
+        " AND ext_dep.refclassid = 'pg_extension'::regclass"
+        " AND ext_dep.deptype = 'e' )"
+    )
+
+
 def qualified_name(name_expr: str, schema_expr: str) -> str:
     """SQL for an object's name, schema-qualified outside pg_catalog.
 
@@ -1136,7 +1152,13 @@ class SchemaAnalyzer(DatabaseAnalyzer):
             return []
 
     def _get_view_analysis(self) -> List[Dict[str, Any]]:
-        """Get detailed information about views and materialized views."""
+        """Get detailed information about views and materialized views.
+
+        Each row names the extension that owns the view, or holds NULL. An
+        extension's view stays in the list, because CREATE EXTENSION creates
+        it on the target and a reader can only leave out a view it can see.
+        Citus's own views are the exception: relation_filter() leaves them out.
+        """
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(f"""
@@ -1154,7 +1176,8 @@ class SchemaAnalyzer(DatabaseAnalyzer):
                         CASE
                             WHEN c.relkind = 'm' THEN pg_size_pretty(pg_relation_size(c.oid))
                             ELSE NULL
-                        END as materialized_size_human
+                        END as materialized_size_human,
+                        {owning_extension("pg_class", "c.oid")} as extension
                     FROM pg_class c
                     JOIN pg_namespace n ON c.relnamespace = n.oid
                     JOIN pg_roles r ON c.relowner = r.oid

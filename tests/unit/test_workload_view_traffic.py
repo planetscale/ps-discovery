@@ -124,6 +124,52 @@ class TestKnownNamesIncludeViews:
             "views"
         ]
 
+    def test_a_view_that_an_extension_owns_is_not_the_application(self):
+        """Catches public.geometry_columns, which CREATE EXTENSION postgis
+        creates, counted as the application's or put into schema.sql. Its name
+        has no pg_ prefix, so only the extension field identifies it."""
+        schema = dict(
+            SCHEMA,
+            view_analysis=[dict(v, extension=None) for v in SCHEMA["view_analysis"]]
+            + [
+                {
+                    "schema_name": "public",
+                    "view_name": "geometry_columns",
+                    "view_type": "v",
+                    "view_definition": " SELECT current_database() AS f_table_catalog;",
+                    "extension": "postgis",
+                }
+            ],
+        )
+        known = known_table_names(schema)
+        assert "public.geometry_columns" not in known
+        assert "public.open_orders" in known
+        assert render_schema_sql(schema)["views"] == [
+            ("public", "open_orders"),
+            ("reporting", "open_orders_by_tenant"),
+        ]
+
+    def test_a_pg_prefixed_view_that_no_extension_owns_is_the_application(self):
+        """Catches the name prefix overruling the extension field. PostgreSQL
+        reserves the pg_ prefix for schema names, not for view names."""
+        schema = dict(
+            SCHEMA,
+            view_analysis=SCHEMA["view_analysis"]
+            + [
+                {
+                    "schema_name": "public",
+                    "view_name": "pg_orders",
+                    "view_type": "v",
+                    "view_definition": " SELECT orders.id\n   FROM public.orders;",
+                    "extension": None,
+                }
+            ],
+        )
+        known = known_table_names(schema)
+        assert "public.pg_orders" in known
+        assert _touches_a_known_table("SELECT $1 FROM pg_orders", known)
+        assert ("public", "pg_orders") in render_schema_sql(schema)["views"]
+
 
 class TestViewTrafficReachesTheLog:
     def _statements(self):

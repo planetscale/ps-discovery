@@ -17,6 +17,9 @@ _SYSTEM_SCHEMA_SQL = "(" + ", ".join(f"'{s}'" for s in SYSTEM_SCHEMAS) + ")"
 class CockroachFeatureAnalyzer(FeatureAnalyzer):
     """Feature analyzer that ignores CRDB system catalogs and flags CRDB-only features."""
 
+    # CockroachDB has no extensions: CREATE EXTENSION is a no-op.
+    type_extension_sql = "NULL::text"
+
     def analyze(self) -> Dict[str, Any]:
         results = {
             "extensions_analysis": self._get_extensions_analysis(),

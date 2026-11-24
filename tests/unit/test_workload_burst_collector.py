@@ -107,6 +107,103 @@ class TestPrepare:
         assert collector._setup_done is False
 
 
+class TestTheWorkSchemaIsNeverAdopted:
+    """A role that pre-creates ps_discovery_burst must not get its objects
+    resolved in the capture role's session."""
+
+    PREPARED = {"pg_foreign_server": None, "pg_extension": {"schema": "public"}}
+
+    def test_an_existing_schema_that_cannot_be_dropped_stops_the_burst(self):
+        """Catches CREATE SCHEMA IF NOT EXISTS adopting another role's schema."""
+        collector = make_collector()
+        collector._sql = FakeSql(
+            execute_ok=lambda sql: not sql.startswith(("DROP SCHEMA", "CREATE SCHEMA")),
+            one_map=self.PREPARED,
+        )
+
+        result = collector.collect()
+
+        assert result["status"] == STATUS_FAILED
+        assert collector._setup_done is False
+        calls = collector._sql.execute_calls
+        assert "CREATE SCHEMA ps_discovery_burst" in calls
+        assert any(
+            "could not create schema ps_discovery_burst" in warning
+            for warning in result["warnings"]
+        )
+
+    def test_a_leftover_is_dropped_before_the_schema_is_created(self):
+        """Catches the drop going missing, which makes every collect after a
+        killed run refuse the capture role's own leftover."""
+        collector = make_collector()
+        collector._sql = FakeSql(execute_ok=True, one_map=self.PREPARED)
+
+        assert collector._prepare() is True
+        calls = collector._sql.execute_calls
+        assert calls.index("DROP SCHEMA IF EXISTS ps_discovery_burst CASCADE") < (
+            calls.index("CREATE SCHEMA ps_discovery_burst")
+        )
+
+    def test_the_session_search_path_never_names_the_work_schema(self):
+        """Catches _prepare putting the work schema on the search path, where
+        an operator planted in it outranks pg_catalog's."""
+        collector = make_collector()
+        collector._sql = FakeSql(execute_ok=True, one_map=self.PREPARED)
+
+        assert collector._prepare() is True
+        calls = collector._sql.execute_calls
+        assert "SET search_path = pg_catalog" in calls
+        assert "SET search_path = ps_discovery_burst" not in calls
+
+    def _read(self, create_ok):
+        collector = make_collector()
+        collector._fdw_schema = "public"
+        sent = []
+
+        def execute(sql, params=None):
+            sent.append(sql)
+            return create_ok or "create_foreign_table" not in sql
+
+        collector._execute = execute
+        collector._column_count = lambda table: sent.append("column count") or 26
+        collector._stream = lambda table, width: iter([])
+        return collector, sent
+
+    def test_the_work_schema_is_on_the_path_only_for_the_table_mapping(self):
+        """Catches the work schema staying on the search path for the
+        column-count query and the reads."""
+        collector, sent = self._read(create_ok=True)
+
+        list(collector._read_file("some.csv"))
+
+        mapping = next(i for i, s in enumerate(sent) if "create_foreign" in s)
+        assert sent[mapping - 1] == "SET search_path = ps_discovery_burst"
+        assert sent[mapping + 1] == "SET search_path = pg_catalog"
+        assert sent.index("column count") > mapping + 1
+
+    def test_the_search_path_is_restored_when_the_mapping_fails(self):
+        """Catches a failed mapping leaving the work schema on the path."""
+        collector, sent = self._read(create_ok=False)
+
+        with pytest.raises(RuntimeError):
+            list(collector._read_file("some.csv"))
+
+        assert sent[-1] == "SET search_path = pg_catalog"
+
+    def test_a_failed_switch_to_the_work_schema_stops_before_mapping(self):
+        """Catches the mapping running against pg_catalog when the switch to
+        the work schema failed, which reports a misleading privilege error."""
+        collector, sent = self._read(create_ok=True)
+        collector._execute = lambda sql, params=None: (
+            sent.append(sql) or sql != "SET search_path = ps_discovery_burst"
+        )
+
+        with pytest.raises(RuntimeError, match="could not set the work schema"):
+            list(collector._read_file("some.csv"))
+
+        assert not any("create_foreign_table" in s for s in sent)
+
+
 class TestCollectDegradesOnPrepareException:
     """_prepare() calls self._sql.one(), which raises rather than returning.
 
@@ -237,6 +334,57 @@ class TestReadFile:
         assert results[0]["log_file"] == "some.csv"
         assert results[0]["sql"] == "select 2"
         assert collector._skipped_before_watermark == 1
+
+
+class TestLogFdwSchemaIsQuoted:
+    """The schema's owner can rename it, so a quote in its name must not end
+    the identifier and let the rest run as SQL in the capture session."""
+
+    SCHEMA = 'x"; DROP TABLE t; --'
+
+    def test_the_log_file_listing_doubles_a_quote_in_the_schema(self):
+        """Catches the schema name being pasted unescaped into the listing."""
+        collector = make_collector()
+        collector._fdw_schema = self.SCHEMA
+        sent = []
+        collector._sql.all = lambda sql, params=None: sent.append(sql) or []
+
+        collector._log_files()
+
+        assert sent == [
+            'SELECT * FROM "x""; DROP TABLE t; --".list_postgres_log_files()'
+            " ORDER BY 1"
+        ]
+
+    def test_the_foreign_table_mapping_doubles_a_quote_in_the_schema(self):
+        """Catches the schema name being pasted unescaped into the mapping."""
+        collector = make_collector()
+        collector._fdw_schema = self.SCHEMA
+        sent = []
+        collector._execute = lambda sql, params=None: sent.append(sql) or True
+        collector._column_count = lambda table: 26
+        collector._stream = lambda table, width: iter([])
+
+        list(collector._read_file("some.csv"))
+
+        assert (
+            'SELECT "x""; DROP TABLE t; --".create_foreign_table_for_log_file'
+            "(%s, %s, %s)"
+        ) in sent
+
+    def test_the_foreign_table_mapping_doubles_a_percent_in_the_schema(self):
+        """Catches a % in the schema being read by the driver as a placeholder,
+        so that a name holding %% calls the function in a different schema."""
+        collector = make_collector()
+        collector._fdw_schema = "x%%y"
+        sent = []
+        collector._execute = lambda sql, params=None: sent.append(sql) or True
+        collector._column_count = lambda table: 26
+        collector._stream = lambda table, width: iter([])
+
+        list(collector._read_file("some.csv"))
+
+        assert 'SELECT "x%%%%y".create_foreign_table_for_log_file(%s, %s, %s)' in sent
 
 
 def _audit_row(message):

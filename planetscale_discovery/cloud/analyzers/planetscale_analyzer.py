@@ -104,6 +104,15 @@ class PlanetScaleAnalyzer(CloudAnalyzer):
                 )
                 return False
 
+            self.service_token_id = self.clean_credential(
+                self.service_token_id, "PlanetScale service token ID"
+            )
+            self.service_token = self.clean_credential(
+                self.service_token, "PlanetScale service token"
+            )
+            if not self.service_token_id or not self.service_token:
+                return False
+
             self.session = requests.Session()
             # PlanetScale service tokens send "<id>:<token>" with no scheme.
             self.session.headers.update(
@@ -153,7 +162,8 @@ class PlanetScaleAnalyzer(CloudAnalyzer):
             return True
 
         except Exception as e:
-            self.add_error("PlanetScale authentication failed", e)
+            # The exception text can quote the Authorization header.
+            self.add_error(f"PlanetScale authentication failed ({type(e).__name__})")
             return False
 
     def analyze(self) -> Dict[str, Any]:

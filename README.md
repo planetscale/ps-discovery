@@ -237,7 +237,7 @@ database:
   ssl_key: /path/to/client.key        # libpq sslkey
 ```
 
-CLI flags: `--ssl-mode verify-full --ssl-root-cert --ssl-cert --ssl-key`. Env aliases: `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`.
+CLI flags: `--ssl-mode verify-full --ssl-root-cert --ssl-cert --ssl-key`. Env aliases: `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`. With a config file, the stronger of `ssl_mode` and `PGSSLMODE` applies; the certificate variables apply when the config key and flag are unset.
 
 Minimum grants for `discovery_ro`: CONNECT/USAGE/SELECT per database and schema, plus `VIEWACTIVITYREDACTED`, `VIEWCLUSTERSETTING`, `VIEWJOB`. Set `default_transaction_read_only=on`. A missing privilege is an analysis gap, never a silent zero (without `VIEWJOB`, `SHOW JOBS` returns 0 rows).
 

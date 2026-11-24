@@ -6,7 +6,10 @@ Analyzes advanced PostgreSQL features, extensions, and custom data types.
 from typing import Dict, Any, List
 
 from planetscale_discovery.common.base_analyzer import DatabaseAnalyzer
-from planetscale_discovery.database.analyzers.schema_analyzer import qualified_name
+from planetscale_discovery.database.analyzers.schema_analyzer import (
+    owning_extension,
+    qualified_name,
+)
 from planetscale_discovery.database.citus import (
     event_trigger_filter,
     type_filter,
@@ -16,6 +19,9 @@ from planetscale_discovery.database.citus import (
 
 class FeatureAnalyzer(DatabaseAnalyzer):
     """Analyzes advanced PostgreSQL features and extensions."""
+
+    # SQL for the name of the extension that owns a custom type t, or NULL.
+    type_extension_sql = owning_extension("pg_type", "t.oid")
 
     def __init__(self, connection, config=None, logger=None):
         super().__init__(connection, config, logger)
@@ -186,6 +192,10 @@ class FeatureAnalyzer(DatabaseAnalyzer):
         """Analyze custom data types."""
         try:
             types = type_filter(self.citus, "t.oid", "n.oid", "t.typrelid")
+            # Each row names the extension that owns the type, or holds NULL.
+            # An extension's type stays in the lists, because CREATE EXTENSION
+            # creates it on the target. type_filter() leaves out Citus's own.
+            extension = self.type_extension_sql
             # rngmultitypid arrived with multiranges in PostgreSQL 14
             multirange = (
                 "format_type(r.rngmultitypid, NULL)"
@@ -219,7 +229,8 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                             AND NOT a.attisdropped
                         ) as attributes,
                         obj_description(t.oid, 'pg_type') as description,
-                        r.rolname as owner
+                        r.rolname as owner,
+                        {extension} as extension
                     FROM pg_type t
                     JOIN pg_namespace n ON t.typnamespace = n.oid
                     JOIN pg_roles r ON t.typowner = r.oid
@@ -239,7 +250,8 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         t.typname as type_name,
                         array_agg(e.enumlabel ORDER BY e.enumsortorder) as enum_values,
                         obj_description(t.oid, 'pg_type') as description,
-                        r.rolname as owner
+                        r.rolname as owner,
+                        {extension} as extension
                     FROM pg_type t
                     JOIN pg_namespace n ON t.typnamespace = n.oid
                     JOIN pg_roles r ON t.typowner = r.oid
@@ -252,7 +264,10 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                 """)
                 enum_types = [dict(row) for row in cursor.fetchall()]
 
-                # Domain types
+                # Domain types. The constraints are read in a subquery, because
+                # a join lists a domain once for each constraint. On PostgreSQL
+                # 17 and later, a domain's NOT NULL is also a constraint
+                # (contype 'n'). not_null reports it.
                 cursor.execute(f"""
                     SELECT
                         n.nspname as schema_name,
@@ -261,13 +276,21 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         t.typnotnull as not_null,
                         CASE WHEN t.typdefault IS NOT NULL THEN true ELSE false END as has_default_value,
                         t.typdefault as default_value,
-                        pg_get_constraintdef(c.oid) as check_constraint,
+                        COALESCE((
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'name', c.conname,
+                                'definition', pg_get_constraintdef(c.oid)
+                            ) ORDER BY c.conname)
+                            FROM pg_constraint c
+                            WHERE c.contypid = t.oid
+                            AND c.contype = 'c'
+                        ), '[]'::jsonb) as check_constraints,
                         obj_description(t.oid, 'pg_type') as description,
-                        r.rolname as owner
+                        r.rolname as owner,
+                        {extension} as extension
                     FROM pg_type t
                     JOIN pg_namespace n ON t.typnamespace = n.oid
                     JOIN pg_roles r ON t.typowner = r.oid
-                    LEFT JOIN pg_constraint c ON c.contypid = t.oid
                     WHERE t.typtype = 'd'  -- domain types
                     AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
                     {types}
@@ -297,7 +320,8 @@ class FeatureAnalyzer(DatabaseAnalyzer):
                         NULLIF(r.rngsubdiff::oid, 0)::regproc::text as subtype_diff,
                         {multirange} as multirange_type,
                         obj_description(t.oid, 'pg_type') as description,
-                        ro.rolname as owner
+                        ro.rolname as owner,
+                        {extension} as extension
                     FROM pg_type t
                     JOIN pg_namespace n ON t.typnamespace = n.oid
                     JOIN pg_roles ro ON t.typowner = ro.oid

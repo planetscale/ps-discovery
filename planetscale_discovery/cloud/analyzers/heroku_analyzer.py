@@ -137,6 +137,10 @@ class HerokuAnalyzer(CloudAnalyzer):
                 )
                 return False
 
+            self.api_key = self.clean_credential(self.api_key, "Heroku API key")
+            if not self.api_key:
+                return False
+
             self.session = requests.Session()
             self.session.headers.update(
                 {
@@ -165,7 +169,8 @@ class HerokuAnalyzer(CloudAnalyzer):
             return True
 
         except Exception as e:
-            self.add_error("Heroku authentication failed", e)
+            # The exception text can quote the Authorization header.
+            self.add_error(f"Heroku authentication failed ({type(e).__name__})")
             return False
 
     def analyze(self) -> Dict[str, Any]:

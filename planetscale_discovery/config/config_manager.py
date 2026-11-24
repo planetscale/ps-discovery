@@ -134,6 +134,49 @@ class DatabaseConfig:
     schemas: Optional[List[str]] = None
 
 
+# libpq's sslmode values, weakest first. Only the last two check the server.
+SSL_MODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+VERIFYING_SSL_MODES = ("verify-ca", "verify-full")
+
+
+def effective_ssl_mode(database: Any) -> str:
+    """The sslmode to connect with: the stronger of ``ssl_mode`` and PGSSLMODE.
+
+    ``ssl_mode`` comes from the config file or ``--ssl-mode`` and defaults to
+    ``prefer``. It is passed to libpq explicitly, which makes libpq ignore
+    PGSSLMODE, so PGSSLMODE is merged here: a mode set in the environment is
+    never weakened by a config file that leaves ``ssl_mode`` unset.
+
+    The mode is logged, with a warning when a CA or client certificate is set
+    but the mode does not verify the server.
+    """
+    mode = getattr(database, "ssl_mode", None) or "prefer"
+    env_mode = os.environ.get("PGSSLMODE")
+    for name, value in (("ssl_mode", mode), ("PGSSLMODE", env_mode)):
+        if value and value not in SSL_MODES:
+            raise ValueError(
+                f"{name}={value!r} is not a valid sslmode. "
+                f"Use one of: {', '.join(SSL_MODES)}"
+            )
+    if env_mode and SSL_MODES.index(env_mode) > SSL_MODES.index(mode):
+        mode = env_mode
+
+    certificates = (
+        getattr(database, "ssl_root_cert", None) or os.environ.get("PGSSLROOTCERT"),
+        getattr(database, "ssl_cert", None) or os.environ.get("PGSSLCERT"),
+        getattr(database, "ssl_key", None) or os.environ.get("PGSSLKEY"),
+    )
+    if any(certificates) and mode not in VERIFYING_SSL_MODES:
+        logger.warning(
+            f"A CA or client certificate is set, but sslmode={mode} does not "
+            "check the server's host name and may not check its certificate, "
+            "so the connection can be intercepted. Set ssl_mode: verify-full "
+            "(or --ssl-mode verify-full)."
+        )
+    logger.info(f"Connecting to PostgreSQL with sslmode={mode}")
+    return mode
+
+
 @dataclass
 class MySQLConfig:
     """MySQL connection configuration."""
