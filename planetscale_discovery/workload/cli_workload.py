@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from planetscale_discovery import __version__
 from planetscale_discovery.config.config_manager import (
     WorkloadConfig,
+    effective_ssl_mode,
     workload_log_errors,
 )
 from planetscale_discovery.workload.bundle import (
@@ -304,11 +305,18 @@ def _connect(config, logger):
         dbname=config.database.database,
         user=config.database.username,
         password=config.database.password,
-        sslmode=config.database.ssl_mode,
+        sslmode=effective_ssl_mode(config.database),
         connect_timeout=getattr(config.database, "connection_timeout", 30),
         application_name=f"ps-discovery-workload/{__version__}",
         cursor_factory=RealDictCursor,
     )
+    for key, attr in (
+        ("sslrootcert", "ssl_root_cert"),
+        ("sslcert", "ssl_cert"),
+        ("sslkey", "ssl_key"),
+    ):
+        if getattr(config.database, attr, None):
+            params[key] = getattr(config.database, attr)
 
     # Startup parameters cover the very first query, so they are preferred.
     options = " ".join(f"-c {name}={value}" for name, value in settings)
@@ -353,7 +361,7 @@ def _collect_schema(connection, config, logger) -> Dict[str, Any]:
             "database": config.database.database,
             "user": config.database.username,
             "password": config.database.password,
-            "sslmode": config.database.ssl_mode,
+            "sslmode": effective_ssl_mode(config.database),
         },
         statement_timeout=getattr(config.database, "statement_timeout", "300s"),
     )

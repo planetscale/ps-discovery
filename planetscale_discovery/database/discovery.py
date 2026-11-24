@@ -21,6 +21,7 @@ from .analyzers.security_analyzer import SecurityAnalyzer
 from .analyzers.feature_analyzer import FeatureAnalyzer
 from .analyzers.data_size_analyzer import DataSizeAnalyzer
 from .analyzers.citus_analyzer import CitusAnalyzer
+from ..config.config_manager import effective_ssl_mode
 from .citus import CitusClusterError, detect_citus, preflight
 from .cockroach import (
     allow_unsafe_internals,
@@ -45,7 +46,7 @@ class DatabaseDiscoveryTool:
             "database": self.config.database.database,
             "user": self.config.database.username,
             "password": self.config.database.password,
-            "sslmode": self.config.database.ssl_mode,
+            "sslmode": effective_ssl_mode(self.config.database),
             "connect_timeout": self.config.database.connection_timeout,
         }
         if getattr(self.config.database, "ssl_root_cert", None):

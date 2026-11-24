@@ -95,7 +95,10 @@ class BurstCollector(DatabaseAnalyzer):
                 self.add_error("could not prepare the burst schema", exc)
                 prepared = False
             if not prepared:
-                result["warnings"] = list(self.errors_seen)
+                # The warnings carry what to do; the errors, the driver's text.
+                result["warnings"] = [w["message"] for w in self.warnings] + list(
+                    self.errors_seen
+                )
                 result["window_start"], result["window_end"] = _event_window(
                     [], started
                 )
@@ -194,24 +197,34 @@ class BurstCollector(DatabaseAnalyzer):
         return False
 
     def _prepare(self) -> bool:
+        # search_path stays pg_catalog, so no query resolves an operator or a
+        # function from the work schema. _read_file puts the work schema
+        # first for the one call that needs it.
         for sql in (
             "SET default_transaction_read_only = off",
-            f"SET search_path = {WORK_SCHEMA}",
+            "SET search_path = pg_catalog",
         ):
             if not self._execute(sql):
                 return False
         self._sql.commit()
         self._created_extension = self._log_fdw_schema() is None
-        # IF NOT EXISTS adopts a killed run's leftovers; drop them instead.
+        # A killed run's leftovers are dropped. A schema another role owns
+        # cannot be, so the CREATE below fails instead of adopting it.
         self._execute(f"DROP SCHEMA IF EXISTS {WORK_SCHEMA} CASCADE")
         self._execute(f"DROP SERVER IF EXISTS {LOG_SERVER} CASCADE")
         self._sql.commit()
-        for sql in (
-            "CREATE EXTENSION IF NOT EXISTS log_fdw WITH SCHEMA public",
-            f"CREATE SCHEMA IF NOT EXISTS {WORK_SCHEMA}",
+        if not self._execute(
+            "CREATE EXTENSION IF NOT EXISTS log_fdw WITH SCHEMA public"
         ):
-            if not self._execute(sql):
-                return False
+            return False
+        if not self._execute(f"CREATE SCHEMA {WORK_SCHEMA}"):
+            self.add_warning(
+                f"could not create schema {WORK_SCHEMA}, so the log was not "
+                "read. The log is read only through a schema this run "
+                "creates. If the schema already exists, another role may own "
+                "it: drop it as its owner, then collect again"
+            )
+            return False
 
         if not self._server_exists():
             if not self._execute(
@@ -248,8 +261,9 @@ class BurstCollector(DatabaseAnalyzer):
         return bool(row)
 
     def _log_files(self) -> List[tuple]:
+        schema = str(self._fdw_schema).replace('"', '""')
         rows = self._sql.all(
-            f'SELECT * FROM "{self._fdw_schema}".list_postgres_log_files() ORDER BY 1'
+            f'SELECT * FROM "{schema}".list_postgres_log_files() ORDER BY 1'
         )
         files = []
         for row in rows:
@@ -263,10 +277,21 @@ class BurstCollector(DatabaseAnalyzer):
         bare = _table_name(name)
         table = f"{WORK_SCHEMA}.{bare}"
         self._execute(f"DROP FOREIGN TABLE IF EXISTS {table}")
-        if not self._execute(
-            f'SELECT "{self._fdw_schema}".create_foreign_table_for_log_file(%s, %s, %s)',
-            (bare, LOG_SERVER, name),
-        ):
+        # log_fdw creates the table in the first schema on the search path.
+        # The work schema is one this run created, and it is there for this
+        # call only.
+        if not self._execute(f"SET search_path = {WORK_SCHEMA}"):
+            raise RuntimeError(f"could not set the work schema to map {name}")
+        # Bound parameters make the driver read % as a placeholder, so double it.
+        schema = str(self._fdw_schema).replace('"', '""').replace("%", "%%")
+        try:
+            created = self._execute(
+                f'SELECT "{schema}".create_foreign_table_for_log_file(%s, %s, %s)',
+                (bare, LOG_SERVER, name),
+            )
+        finally:
+            self._execute("SET search_path = pg_catalog")
+        if not created:
             raise RuntimeError(
                 f"could not map {name} to a foreign table; the role needs "
                 "rds_superuser, and a GRANT does not reach an already-open session"

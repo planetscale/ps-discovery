@@ -99,7 +99,11 @@ class TestSSLHandling:
 
     # A literal list, not the production constant: narrowing the constant must
     # fail this test, not shrink it.
-    @pytest.mark.parametrize("mode", ["required", "verify-ca", "verify-identity"])
+    # MySQL's spellings too, so the check must read the normalised mode.
+    @pytest.mark.parametrize(
+        "mode",
+        ["required", "verify-ca", "verify-identity", "REQUIRED", "VERIFY_IDENTITY"],
+    )
     def test_mode_that_requires_tls_refuses_a_plaintext_connection(
         self, base_params, mode
     ):
@@ -117,7 +121,7 @@ class TestSSLHandling:
         assert connected is True
         assert discovery.connection is conn
 
-    @pytest.mark.parametrize("mode", [None, "disabled", "garbage"])
+    @pytest.mark.parametrize("mode", [None, "disabled"])
     def test_a_mode_without_tls_accepts_a_plaintext_connection(self, base_params, mode):
         # Catches a socket check that reaches past the modes that require TLS.
         # The other tests of these modes always hand back a TLS socket.
@@ -196,10 +200,106 @@ class TestSSLHandling:
         assert ssl["cert"] == "/etc/ssl/client.pem"
         assert ssl["key"] == "/etc/ssl/client.key"
 
-    def test_unknown_ssl_mode_falls_back_to_disabled(self, base_params):
-        base_params["ssl_mode"] = "garbage"
+    @pytest.mark.parametrize(
+        "mode",
+        ["garbage", "require", "verify-full", "VERIFY_FULL", "required ", True, False],
+    )
+    def test_an_unknown_ssl_mode_is_refused_before_connecting(
+        self, base_params, mode, caplog
+    ):
+        """Catches an unrecognised mode, often a misspelt strict one, being
+        downgraded to a connection without TLS."""
+        base_params["ssl_mode"] = mode
+        base_params["ssl_ca"] = "/etc/ssl/ca.pem"
+        fake_pymysql = MagicMock()
+        with patch.dict("sys.modules", {"pymysql": fake_pymysql}):
+            assert MySQLDiscovery(base_params).connect() is False
+        fake_pymysql.connect.assert_not_called()
+        assert (
+            "Use one of: disabled, preferred, required, verify-ca, verify-identity"
+            in caplog.text
+        )
+
+    @pytest.mark.parametrize(
+        "mode, check_hostname",
+        [("VERIFY_IDENTITY", True), ("Verify-Identity", True), ("VERIFY_CA", False)],
+    )
+    def test_mysql_spellings_of_a_strict_mode_keep_it_strict(
+        self, base_params, mode, check_hostname
+    ):
+        """Catches MySQL's own spelling of a strict mode being refused or
+        weakened instead of read as the mode it names."""
+        base_params["ssl_mode"] = mode
+        base_params["ssl_ca"] = "/etc/ssl/ca.pem"
+        ssl = self._capture_connect_params(base_params).get("ssl")
+        assert ssl["ca"] == "/etc/ssl/ca.pem"
+        assert ssl["check_hostname"] is check_hostname
+
+    def test_mysql_spelling_of_required_requires_tls(self, base_params):
+        """Catches REQUIRED being read as anything weaker than required."""
+        base_params["ssl_mode"] = "REQUIRED"
         captured = self._capture_connect_params(base_params)
-        assert captured.get("ssl_disabled") is True
+        assert captured.get("ssl") == {"check_hostname": False, "verify_mode": False}
+        assert "ssl_disabled" not in captured
+
+
+class TestUnknownSslModeFromEachSource:
+    """A misspelt strict mode never reaches PyMySQL, wherever it was set."""
+
+    def _discover(self, config):
+        from planetscale_discovery.database.mysql_discovery import (
+            MySQLDiscoveryTool,
+        )
+
+        fake_pymysql = MagicMock()
+        with patch.dict("sys.modules", {"pymysql": fake_pymysql}):
+            with pytest.raises(ConnectionError):
+                MySQLDiscoveryTool(config).discover()
+        return fake_pymysql
+
+    def test_the_yaml_key(self, tmp_path, monkeypatch):
+        """Catches ssl_mode from the config file reaching the driver."""
+        from planetscale_discovery.config.config_manager import ConfigManager
+
+        monkeypatch.delenv("MYSQL_SSL_MODE", raising=False)
+        path = tmp_path / "config.yaml"
+        path.write_text("engine: mysql\nmysql:\n  host: db\n  ssl_mode: require\n")
+        config = ConfigManager(str(path)).load_config(validate=False)
+        assert config.mysql.ssl_mode == "require"
+        self._discover(config).connect.assert_not_called()
+
+    def test_mysql_ssl_mode(self, tmp_path, monkeypatch):
+        """Catches MYSQL_SSL_MODE reaching the driver."""
+        from planetscale_discovery.config.config_manager import ConfigManager
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("MYSQL_SSL_MODE", "verify-full")
+        config = ConfigManager(None).load_config(validate=False)
+        assert config.mysql.ssl_mode == "verify-full"
+        self._discover(config).connect.assert_not_called()
+
+    def test_the_ssl_mode_flag(self, tmp_path, monkeypatch):
+        """Catches --ssl-mode reaching the driver."""
+        from planetscale_discovery.cli import main
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MYSQL_SSL_MODE", raising=False)
+        fake_pymysql = MagicMock()
+        argv = [
+            "ps-discovery",
+            "database",
+            "--engine",
+            "mysql",
+            "--host",
+            "db",
+            "--ssl-mode",
+            "VERIFY-FULL",
+        ]
+        with patch.dict("sys.modules", {"pymysql": fake_pymysql}):
+            with patch("sys.argv", argv):
+                with pytest.raises(SystemExit):
+                    main()
+        fake_pymysql.connect.assert_not_called()
 
 
 class TestScanForErrors:

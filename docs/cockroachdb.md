@@ -54,6 +54,14 @@ Secure clusters need an SSL mode and the cluster CA. The CA by itself is not eno
 | `ssl_cert` / `sslcert`         | `--ssl-cert`      | `PGSSLCERT`     |
 | `ssl_key` / `sslkey`           | `--ssl-key`       | `PGSSLKEY`      |
 
+`PGSSLMODE` applies even when a config file is loaded. The connection uses the
+stronger of `ssl_mode` (or `--ssl-mode`) and `PGSSLMODE`, so an environment
+setting of `verify-full` is never weakened by a config file. `PGSSLROOTCERT`,
+`PGSSLCERT` and `PGSSLKEY` apply when the matching config key and flag are not
+set. The run logs the SSL mode it connects with, and warns when a CA or client
+certificate is set but the mode is not `verify-ca` or `verify-full`. Only
+`verify-full` checks both the server's certificate and its host name.
+
 Use `ssl_mode: verify-full` with the cluster certificate authority (CA) file.
 A client certificate and key are also required when the cluster uses
 certificate authentication.
