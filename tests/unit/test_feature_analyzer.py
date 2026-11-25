@@ -221,7 +221,7 @@ class TestFeatureAnalyzer:
                 "base_type": "character varying(255)",
                 "not_null": True,
                 "has_default_value": False,
-                "check_constraint": None,
+                "check_constraints": [],
                 "description": None,
                 "owner": "postgres",
             },
@@ -316,6 +316,88 @@ class TestFeatureAnalyzer:
         range_sql = self._custom_type_sql(analyzer, cursor_mock, version)[3]
 
         assert f"{multirange} as multirange_type," in range_sql
+
+    def test_domain_is_listed_once_whatever_its_constraint_count(
+        self, analyzer, mock_connection
+    ):
+        """A join to pg_constraint listed a domain once per constraint."""
+        _, cursor_mock = mock_connection
+
+        domain_sql = self._custom_type_sql(analyzer, cursor_mock, 170000)[2]
+
+        assert (
+            "FROM pg_type t"
+            " JOIN pg_namespace n ON t.typnamespace = n.oid"
+            " JOIN pg_roles r ON t.typowner = r.oid"
+            " WHERE t.typtype = 'd'"
+        ) in domain_sql
+
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            pytest.param(
+                "jsonb_agg(jsonb_build_object("
+                " 'name', c.conname,"
+                " 'definition', pg_get_constraintdef(c.oid)"
+                " )",
+                id="name_and_definition",
+            ),
+            pytest.param(
+                ") ORDER BY c.conname) FROM pg_constraint c",
+                id="ordered_by_name",
+            ),
+            pytest.param(
+                "FROM pg_constraint c WHERE c.contypid = t.oid",
+                id="the_domains_own_constraints",
+            ),
+            pytest.param(
+                "AND c.contype = 'c' )",
+                id="check_constraints_only_not_null_left_out",
+            ),
+            pytest.param(
+                "), '[]'::jsonb) as check_constraints,",
+                id="empty_list_without_constraints",
+            ),
+        ],
+    )
+    def test_domain_check_constraints_sql(self, analyzer, mock_connection, fragment):
+        """A domain's CHECK constraints are one list on its row. On
+        PostgreSQL 17 and later its NOT NULL is a constraint too, and
+        not_null already reports it."""
+        _, cursor_mock = mock_connection
+
+        domain_sql = self._custom_type_sql(analyzer, cursor_mock, 170000)[2]
+
+        assert fragment in domain_sql
+
+    @pytest.mark.parametrize(
+        "index,kind",
+        [
+            (0, "WHERE t.typtype = 'c'"),
+            (1, "WHERE t.typtype = 'e'"),
+            (2, "WHERE t.typtype = 'd'"),
+            (3, "JOIN pg_range r ON t.oid = r.rngtypid"),
+        ],
+    )
+    def test_custom_types_mark_the_owning_extension(
+        self, analyzer, mock_connection, index, kind
+    ):
+        """Catches an extension's type reported like the application's own.
+        CREATE EXTENSION creates it on the target. Only a live server can
+        apply the subquery, so its text is asserted."""
+        _, cursor_mock = mock_connection
+
+        sql = self._custom_type_sql(analyzer, cursor_mock, 170000)[index]
+
+        assert kind in sql
+        assert (
+            "( SELECT ext.extname FROM pg_depend ext_dep"
+            " JOIN pg_extension ext ON ext.oid = ext_dep.refobjid"
+            " WHERE ext_dep.classid = 'pg_type'::regclass"
+            " AND ext_dep.objid = t.oid"
+            " AND ext_dep.refclassid = 'pg_extension'::regclass"
+            " AND ext_dep.deptype = 'e' ) as extension"
+        ) in sql
 
     # -------------------------------------------------------------------------
     # _get_advanced_column_types

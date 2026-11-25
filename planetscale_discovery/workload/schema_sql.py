@@ -382,16 +382,25 @@ def application_views(
 
     An extension installs its views into an ordinary schema: ``CREATE EXTENSION
     pg_stat_statements`` puts ``public.pg_stat_statements`` next to the
-    application's own tables. Filtering on the schema alone therefore lets this
-    tool's own statistics reads back into the query log. PostgreSQL reserves the
-    ``pg_`` prefix for system use, so the name settles it.
+    application's own tables, and ``CREATE EXTENSION postgis`` puts
+    ``public.geometry_columns`` there. Filtering on the schema alone therefore
+    lets this tool's own statistics reads back into the query log, and puts a
+    view that ``CREATE EXTENSION`` creates into ``schema.sql``. A row's
+    ``extension`` field names the extension that owns the view. A capture made
+    before that field existed has no ``extension`` key, so for it a ``pg_``
+    name prefix is taken to mean an extension's view.
     """
     wanted = set(target_schemas) if target_schemas else None
     views = []
     for view in schema_analysis.get("view_analysis") or []:
         schema = view.get("schema_name")
         name = (view.get("view_name") or "").lower()
-        if schema in SYSTEM_SCHEMAS or not name or name.startswith("pg_"):
+        if schema in SYSTEM_SCHEMAS or not name:
+            continue
+        if "extension" in view:
+            if view["extension"]:
+                continue
+        elif name.startswith("pg_"):
             continue
         if wanted is not None and schema not in wanted:
             continue

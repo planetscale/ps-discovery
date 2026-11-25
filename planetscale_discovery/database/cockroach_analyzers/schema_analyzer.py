@@ -620,7 +620,8 @@ class CockroachSchemaAnalyzer(SchemaAnalyzer):
                         pg_get_viewdef(c.oid) as view_definition,
                         obj_description(c.oid, 'pg_class') as description,
                         NULL::bigint as materialized_size_bytes,
-                        NULL::text as materialized_size_human
+                        NULL::text as materialized_size_human,
+                        NULL::text as extension
                     FROM pg_class c
                     JOIN pg_namespace n ON c.relnamespace = n.oid
                     JOIN pg_roles r ON c.relowner = r.oid

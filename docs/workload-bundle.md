@@ -126,7 +126,10 @@ names only the view, so `schema.sql` carries the view definitions and the filter
 counts the view names. An extension's views do not count, however, even when the
 extension installed them into an ordinary schema: `public.pg_stat_statements`
 belongs to `pg_stat_statements`, not to the application, and counting it would
-return this tool's own reads to the query log.
+return this tool's own reads to the query log. The tool reads the extension that
+owns each view from the catalog, so a view such as PostGIS's
+`public.geometry_columns` is left out of `schema.sql` and of the count too.
+`CREATE EXTENSION` creates it on the target.
 
 `finalize` counts both kinds and names them in its summary. The tool ranks, caps
 and samples nothing. It emits every statement that ran during the window and

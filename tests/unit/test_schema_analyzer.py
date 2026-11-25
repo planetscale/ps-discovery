@@ -1587,6 +1587,27 @@ class TestSchemaAnalyzer:
         result = analyzer._get_view_analysis()
         assert result == []
 
+    def test_get_view_analysis_marks_the_owning_extension(
+        self, analyzer, mock_connection
+    ):
+        """Catches an extension's view reported like the application's own.
+        CREATE EXTENSION creates it on the target. Only a live server can
+        apply the subquery, so its text is asserted."""
+        _, cursor_mock = mock_connection
+        cursor_mock.fetchall.return_value = []
+
+        analyzer._get_view_analysis()
+
+        sql = " ".join(cursor_mock.execute.call_args[0][0].split())
+        assert (
+            "( SELECT ext.extname FROM pg_depend ext_dep"
+            " JOIN pg_extension ext ON ext.oid = ext_dep.refobjid"
+            " WHERE ext_dep.classid = 'pg_class'::regclass"
+            " AND ext_dep.objid = c.oid"
+            " AND ext_dep.refclassid = 'pg_extension'::regclass"
+            " AND ext_dep.deptype = 'e' ) as extension"
+        ) in sql
+
     # ---------------------------------------------------------------
     # _get_sequence_analysis()
     # ---------------------------------------------------------------
