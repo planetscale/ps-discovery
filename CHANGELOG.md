@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-25
+
+### Added
+
+- **CockroachDB support.** With `engine: postgres`, discovery detects CockroachDB and reads its catalogs. It reports the schema, sizes, jobs, zone configurations and CockroachDB-only features. See [CockroachDB Support](docs/cockroachdb.md).
+- **Citus support in database discovery.** Each table records its Citus table type. Its sizes and statistics are read from every shard. A new `citus` section reports the nodes, placements and storage. See [Citus Extension Support](docs/citus.md).
+- **More of the schema is captured.** PostgreSQL discovery adds operators, aggregates, casts, collations, operator classes, column defaults and generated expressions, and the extension that owns each view and type. MySQL discovery adds routine bodies and parameters.
+- **Sampled transaction logs.** Workload capture can read a log written with `log_transaction_sample_rate`. See [Workload Capture](docs/workload_capture.md#sample-whole-transactions-instead).
+- **Schema changes during a workload capture.** Each `collect` records when the schema changed. `finalize` renders `schema.sql` from the schema at the end of the capture.
+
+### Changed
+
+- `setup.sh` installs pinned, hash-verified dependencies.
+
 ## [2.3.0] - 2026-10-29
 
 ### Added
