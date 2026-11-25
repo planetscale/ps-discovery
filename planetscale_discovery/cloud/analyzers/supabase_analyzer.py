@@ -51,7 +51,7 @@ class SupabaseAnalyzer(CloudAnalyzer):
         """Authenticate with Supabase Management API."""
         if not HAS_SUPABASE_LIBS:
             self.add_error(
-                "Supabase libraries not installed. Install with: pip install 'planetscale-discovery-tools[supabase]'"
+                "Supabase libraries not installed. Run ./setup.sh again and select Supabase."
             )
             return False
 

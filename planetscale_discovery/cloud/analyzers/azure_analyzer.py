@@ -176,9 +176,7 @@ class AzureAnalyzer(CloudAnalyzer):
 
         if not HAS_AZURE_LIBS:
             self.add_error(
-                "Azure libraries not installed. Run: pip install azure-identity "
-                "azure-mgmt-postgresqlflexibleservers "
-                "azure-mgmt-mysqlflexibleservers azure-mgmt-network"
+                "Azure libraries not installed. Run ./setup.sh again and select Azure."
             )
 
         if not self.subscription_id:

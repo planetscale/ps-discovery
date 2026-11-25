@@ -8,7 +8,7 @@ The PlanetScale Discovery CLI can analyze Google Cloud SQL instances (PostgreSQL
 
 - GCP project with Cloud SQL or AlloyDB instances
 - Service account with appropriate permissions
-- Python package: `pip install "ps-discovery[gcp]"`
+- Python package: `pip install ".[gcp]"`
 
 ## Required GCP APIs
 

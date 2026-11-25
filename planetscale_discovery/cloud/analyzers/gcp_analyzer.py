@@ -41,7 +41,7 @@ class GCPAnalyzer(CloudAnalyzer):
 
         if not HAS_GCP_LIBS:
             self.add_error(
-                "GCP libraries not installed. Run: pip install google-cloud-compute google-cloud-alloydb google-auth google-api-python-client"
+                "GCP libraries not installed. Run ./setup.sh again and select GCP."
             )
 
         self.sqladmin_service = None

@@ -27,7 +27,7 @@ cd ps-discovery-2.3.0
 ```
 
 The setup script will:
-- Verify your Python version (3.10+ required)
+- Verify your Python version (3.10 to 3.14)
 - Create a virtual environment
 - Install required dependencies (PostgreSQL support included by default)
 - Prompt you to optionally install MySQL and cloud provider dependencies

@@ -3,8 +3,6 @@ read and never a table scan. Values stay raw until the bundle writer hashes them
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from psycopg2.extras import RealDictCursor
-
 from planetscale_discovery.workload.valuehash import refusal_reason
 
 # The consumer keys its contract arms off the source discriminator:
@@ -106,6 +104,10 @@ def unreadable_targets(
     connection, targets: Sequence[Dict[str, str]]
 ) -> List[Tuple[Dict[str, str], str]]:
     """The targets pg_stats hides from this role, each with the reason."""
+    # Imported here, not at module level: the CLI builds the workload parser
+    # on every run, and a MySQL-only install has no psycopg2.
+    from psycopg2.extras import RealDictCursor
+
     unreadable = []
     connection.rollback()
     with connection.cursor(cursor_factory=RealDictCursor) as cur:
@@ -172,6 +174,9 @@ def collect_distributions(
 ) -> Dict[str, Any]:
     """The declared columns' pg_stats readings: one catalog query, and
     every column not read is a named note."""
+    # Imported here, not at module level; see unreadable_targets.
+    from psycopg2.extras import RealDictCursor
+
     targets, notes = resolve_targets(
         schema_analysis, by_column, explicit, target_schemas
     )

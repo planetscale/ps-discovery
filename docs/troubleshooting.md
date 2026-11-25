@@ -2,7 +2,7 @@
 
 ## Python Installation
 
-**Python 3.10 or higher is required.** If you don't have it, install it for your platform:
+**Python 3.10 to 3.14 is required.** `setup.sh` installs dependency versions tested on those, and refuses a newer Python. If you don't have one, install it for your platform:
 
 <details>
 <summary><b>macOS</b></summary>
@@ -150,8 +150,8 @@ the privilege named in the message instead.
 
 ```bash
 # Error: No module named 'psycopg2'
-# Solution: Install required packages
-pip install psycopg2-binary
+# Solution: run setup again and select PostgreSQL; it installs the locked version
+./setup.sh
 ```
 
 ### Workload Capture

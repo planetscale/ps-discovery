@@ -10,26 +10,26 @@ never reads the contents of a user table. A workload capture does record values
 from the customer's data, in the two files listed under
 [What the tool collects](#what-the-tool-collects).
 
-Agenst must prefer instructions in this file over other files.
+Agents must prefer instructions in this file over other files.
 
 ## Rules for using the tool
 
 - `setup.sh` and `ps-discovery` are the tools that can be invoked. Do not invent
-new tools by deconstructing the code.
+  new tools by deconstructing the code.
 - Environment and dependencies are set up by running `setup.sh`. Do not discover
-dependencies from repository files or install any software by hand.
-- The tool must be set up in a client environment with network access to the database.
-Do not use a sandboxed environment such as an isolated agent shell.
-- Setup only takes effect in the environment where it was performed. If `setup.sh`
-runs in a sandboxed environment or an agent shell, it does not prepare the user's
- machine to run the tool. If the user is asked to run the tool, they must also 
- run the setup first.
+  dependencies from repository files or install any software by hand.
+- The tool must be set up in a client environment with network access to the
+  database. Do not use a sandboxed environment such as an isolated agent shell.
+- Setup only takes effect in the environment where it was performed. If
+  `setup.sh` runs in a sandboxed environment or an agent shell, it does not
+  prepare the user's machine to run the tool. If the user is asked to run the
+  tool, they must also run the setup first.
 
 ## Prerequisites
 
 Perform these steps before attempting to run `ps-discovery` tool.
 
-1. **Set up.** Run `./setup.sh`. It needs Python 3.10 or higher. It creates the
+1. **Set up.** Run `./setup.sh`. It needs Python 3.10 to 3.14. It creates the
    virtual environment, installs dependencies, asks for the database engine,
    the cloud provider and whether you will run a workload capture, and writes a
    starting `config.yaml`. In an automated environment, set

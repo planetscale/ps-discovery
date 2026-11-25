@@ -58,6 +58,10 @@ cp setup.py "${RELEASE_DIR}/"
 cp setup.sh "${RELEASE_DIR}/"
 cp ps-discovery "${RELEASE_DIR}/"
 cp requirements.txt "${RELEASE_DIR}/"
+# setup.sh installs only from these, so the release checksum covers every
+# package version and hash a customer installs.
+mkdir -p "${RELEASE_DIR}/requirements"
+cp requirements/setup-lock.txt requirements/setup-pip.txt "${RELEASE_DIR}/requirements/"
 cp pyproject.toml "${RELEASE_DIR}/"
 cp MANIFEST.in "${RELEASE_DIR}/"
 cp VERSION "${RELEASE_DIR}/"
@@ -79,7 +83,7 @@ PlanetScale Discovery Tools - Installation Instructions
 
 Quick Start:
 -----------
-1. Ensure Python 3.10 or higher is installed:
+1. Ensure Python 3.10 to 3.14 is installed:
    python3 --version
 
 2. Run the setup script:

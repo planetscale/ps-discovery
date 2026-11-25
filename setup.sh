@@ -62,23 +62,37 @@ echo "🔧 Validating environment..."
 # Check if python3 command exists
 if ! command -v python3 &> /dev/null; then
     echo "❌ Error: python3 command not found"
-    echo "Please install Python 3.10 or higher from https://www.python.org/downloads/"
+    echo "Please install Python 3.10 to 3.14 from https://www.python.org/downloads/"
     exit 1
 fi
 
-# Check Python version
-if ! python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>&1); then
-    echo "❌ Error: Failed to get Python version"
-    echo "Python error: $python_version"
+# Check Python version. Its error, if any, goes straight to the terminal.
+if ! python_output=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'); then
+    echo "❌ Error: Failed to get Python version (Python's error is above)"
     exit 1
 fi
 
-# Parse version (e.g., "3.13" -> major=3, minor=13)
+# Parse version (e.g., "3.13" -> major=3, minor=13). A python3 wrapper or
+# sitecustomize can print before the version, so read only the last line.
+python_version=${python_output##*$'\n'}
 IFS='.' read -r major minor <<< "$python_version"
+if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
+    echo "❌ Error: Could not read the Python version. python3 printed:"
+    echo "$python_output"
+    exit 1
+fi
 
 # Check if Python >= 3.10
 if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 10 ]; }; then
     echo "❌ Error: Python 3.10 or higher is required"
+    exit 1
+fi
+
+# The dependency lock is resolved and tested for Python 3.10 to 3.14 only.
+if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -gt 14 ]; }; then
+    echo "❌ Error: Python $python_version is newer than this release supports"
+    echo "Its dependencies are locked to versions tested on Python 3.10 to 3.14."
+    echo "Install one of those, make it the python3 on your PATH, and run setup again."
     exit 1
 fi
 
@@ -95,6 +109,23 @@ if [ ! -f "planetscale_discovery/cli.py" ]; then
     echo "The package structure appears to be incomplete"
     exit 1
 fi
+
+# Every package comes from an exact version and hash that PlanetScale resolved
+# and tested: pip itself from setup-pip.txt, everything else from
+# setup-lock.txt, used as constraints so only the selected packages and their
+# dependencies are installed. A package or hash not in the lock stops the
+# install. Wheels only, because building a source package would fetch its build
+# tools without a hash check. The locks are checked before any venv work, so a
+# missing one leaves nothing to clean up.
+PIP_LOCK="requirements/setup-pip.txt"
+DEPS_LOCK="requirements/setup-lock.txt"
+LOCKED_FLAGS="--require-hashes --only-binary :all: -c $DEPS_LOCK"
+for lock in "$PIP_LOCK" "$DEPS_LOCK"; do
+    if [ ! -f "$lock" ]; then
+        echo "❌ Error: $lock is missing. Run ./setup.sh from the extracted release directory."
+        exit 1
+    fi
+done
 
 # Check available disk space (need at least 500MB for venv and dependencies)
 available_space=$(df -k . | tail -1 | awk '{print $4}')
@@ -189,7 +220,7 @@ fi
 PIP_FLAGS="-qq --disable-pip-version-check --no-cache-dir"
 
 # Upgrade pip quietly as part of environment validation.
-if ! $PIP_CMD install $PIP_FLAGS --upgrade pip 2>&1; then
+if ! $PIP_CMD install $PIP_FLAGS --require-hashes --only-binary :all: -r "$PIP_LOCK" 2>&1; then
     echo "❌ Error: Failed to upgrade pip"
     echo "This may be due to:"
     echo "  - Network connectivity issues"
@@ -344,18 +375,21 @@ fi
 # Install the engine, provider, and core dependencies in a single pass.
 echo ""
 echo "📥 Installing dependencies (this can take a minute)..."
-if ! $PIP_CMD install $PIP_FLAGS "${DEPS[@]}" 2>&1; then
+if ! $PIP_CMD install $PIP_FLAGS $LOCKED_FLAGS "${DEPS[@]}" 2>&1; then
     echo "❌ Error: Failed to install dependencies"
     echo "This may be due to:"
     echo "  - Network connectivity issues"
-    echo "  - A package version not being available for your platform/Python"
+    echo "  - No wheel of a locked version for your platform/Python"
+    echo "  - A downloaded file that does not match its hash in $DEPS_LOCK"
     cleanup_on_error
 fi
 
 if [ "$workload_choice" = "yes" ]; then
     echo "📥 Installing the workload SQL parser..."
-    if ! $PIP_CMD install $PIP_FLAGS "pglast>=7,<9" 2>/dev/null; then
-        echo "⚠️  pglast did not install; no wheel for this platform or Python."
+    if ! $PIP_CMD install $PIP_FLAGS $LOCKED_FLAGS "pglast>=7,<9" 2>&1; then
+        echo "⚠️  pglast did not install (pip's error is above): either no wheel"
+        echo "   for this platform or Python, or a file that does not match its"
+        echo "   hash in $DEPS_LOCK."
         echo "   Everything else works. 'workload finalize' still writes the"
         echo "   bundle, but cannot verify that schema.sql parses."
     fi

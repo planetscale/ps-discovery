@@ -3,9 +3,10 @@ FROM python:${PYTHON_VERSION}-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies. zip: tests/unit/test_setup_lock.py builds a
+# release with build_release.sh.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends postgresql-client && \
+    apt-get install -y --no-install-recommends postgresql-client zip && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for layer caching

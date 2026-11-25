@@ -981,9 +981,9 @@ def _caveats(
     if parse.get("available") is False:
         caveats.append(
             "The schema file was not re-parsed before being written, because the "
-            "optional SQL parser (pglast) is not installed. Run "
-            "pip install 'pglast>=7,<9', then run finalize again to check "
-            "the file."
+            "optional SQL parser (pglast) is not installed. Run ./setup.sh "
+            "again and answer yes to workload capture, then run finalize "
+            "again to check the file."
         )
     elif parse.get("failures"):
         caveats.append(

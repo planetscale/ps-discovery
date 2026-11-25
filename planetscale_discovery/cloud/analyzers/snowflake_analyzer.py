@@ -385,8 +385,8 @@ class SnowflakeAnalyzer(CloudAnalyzer):
 
         if not HAS_SNOWFLAKE_LIBS:
             self.add_error(
-                "Snowflake libraries not installed. Install with: "
-                'pip install "ps-discovery[snowflake]"'
+                "Snowflake libraries not installed. "
+                "Run ./setup.sh again and select Snowflake."
             )
             return False
 

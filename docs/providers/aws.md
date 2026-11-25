@@ -8,7 +8,7 @@ The PlanetScale Discovery CLI can analyze AWS RDS instances, Aurora clusters (bo
 
 - AWS account with RDS/Aurora instances
 - AWS credentials configured (IAM user, role, or profile)
-- Python package: `pip install "ps-discovery[aws]"`
+- Python package: `pip install ".[aws]"`
 
 ## Required AWS Services Access
 
