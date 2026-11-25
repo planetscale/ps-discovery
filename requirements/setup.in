@@ -46,7 +46,7 @@ requests>=2.32.5
 
 # Snowflake
 snowflake-connector-python>=3.12.0
-cryptography>=42.0.0
+cryptography>=50.0.0
 
 # cryptography 50 fixes CVE-2026-69247, CVE-2026-69248 and CVE-2026-69249.
 # Intel Macs cannot have it: see the cap below.
