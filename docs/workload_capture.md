@@ -1025,6 +1025,11 @@ database. Each `collect` creates a work schema, a foreign server and, if it was
 not there already, the `log_fdw` extension, and drops all three before it
 returns. A `collect` that is killed can leave them behind.
 
+The work schema is `ps_discovery_burst`, and each `collect` creates it new. If
+a schema of that name exists that the capture role cannot drop, for example
+one another role created, the `collect` does not use it: the log is not read,
+and the warning names the schema. Drop it as its owner.
+
 To drop them at any point:
 
     ps-discovery workload init --cleanup

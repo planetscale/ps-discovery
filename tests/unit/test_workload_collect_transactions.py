@@ -267,6 +267,7 @@ class TestTheSchemaStepRunsInAutocommit:
         )
         discovery.return_value.run_analysis.side_effect = run_analysis
         config = mocker.Mock()
+        config.database.ssl_mode = "prefer"
         schema = cli_workload._collect_schema(connection, config, mocker.Mock())
         assert seen == [True]
         assert connection.autocommit is False
@@ -283,6 +284,6 @@ class TestTheSchemaStepRunsInAutocommit:
             "planetscale_discovery.database.discovery.PostgreSQLDiscovery"
         )
         discovery.return_value.run_analysis.side_effect = run_analysis
-        assert (
-            cli_workload._collect_schema(connection, mocker.Mock(), mocker.Mock()) == {}
-        )
+        config = mocker.Mock()
+        config.database.ssl_mode = "prefer"
+        assert cli_workload._collect_schema(connection, config, mocker.Mock()) == {}

@@ -112,7 +112,13 @@ class MySQLDiscovery:
             #   required         -> TLS required, no cert chain verification
             #   verify-ca        -> ssl_ca required, verify chain only
             #   verify-identity  -> ssl_ca required, verify chain + hostname
-            ssl_mode = (self.connection_params.get("ssl_mode", "") or "").lower()
+            # MySQL's own spelling (VERIFY_IDENTITY) names the same modes. Any
+            # other value is refused before connecting, never downgraded.
+            # Only an unset or empty value means disabled. A YAML true, false
+            # or number is refused below like any other unknown value.
+            raw_ssl_mode = self.connection_params.get("ssl_mode")
+            raw_ssl_mode = "" if raw_ssl_mode in (None, "") else str(raw_ssl_mode)
+            ssl_mode = raw_ssl_mode.lower().replace("_", "-")
             ssl_ca = self.connection_params.get("ssl_ca")
             ssl_cert = self.connection_params.get("ssl_cert")
             ssl_key = self.connection_params.get("ssl_key")
@@ -146,10 +152,11 @@ class MySQLDiscovery:
                     ssl_dict["key"] = ssl_key
                 params["ssl"] = ssl_dict
             else:
-                self.logger.warning(
-                    f"Unknown ssl_mode {ssl_mode!r}; treating as disabled"
+                self.logger.error(
+                    f"Unknown ssl_mode {raw_ssl_mode!r}. Use one of: disabled, "
+                    "preferred, required, verify-ca, verify-identity"
                 )
-                params["ssl_disabled"] = True
+                return False
 
             # The floor is 1.2.0, but an existing install can be older, and
             # nothing checks the version at install time. pymysql.__version__

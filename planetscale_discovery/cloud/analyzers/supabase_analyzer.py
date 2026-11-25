@@ -74,6 +74,12 @@ class SupabaseAnalyzer(CloudAnalyzer):
                 )
                 return False
 
+            self.access_token = self.clean_credential(
+                self.access_token, "Supabase access token"
+            )
+            if not self.access_token:
+                return False
+
             # Create session with auth header
             self.session = requests.Session()
             self.session.headers.update(
@@ -102,7 +108,8 @@ class SupabaseAnalyzer(CloudAnalyzer):
             return True
 
         except Exception as e:
-            self.add_error("Supabase authentication failed", e)
+            # The exception text can quote the Authorization header.
+            self.add_error(f"Supabase authentication failed ({type(e).__name__})")
             return False
 
     def analyze(self) -> Dict[str, Any]:

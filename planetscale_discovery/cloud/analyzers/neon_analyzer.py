@@ -137,6 +137,10 @@ class NeonAnalyzer(CloudAnalyzer):
                 )
                 return False
 
+            self.api_key = self.clean_credential(self.api_key, "Neon API key")
+            if not self.api_key:
+                return False
+
             # Create session with auth header
             self.session = requests.Session()
             self.session.headers.update(
@@ -168,7 +172,8 @@ class NeonAnalyzer(CloudAnalyzer):
             return True
 
         except Exception as e:
-            self.add_error("Neon authentication failed", e)
+            # The exception text can quote the Authorization header.
+            self.add_error(f"Neon authentication failed ({type(e).__name__})")
             return False
 
     def analyze(self) -> Dict[str, Any]:
