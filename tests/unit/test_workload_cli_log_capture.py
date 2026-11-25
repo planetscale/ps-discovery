@@ -62,6 +62,32 @@ def _no_snapshot_connection(mocker):
     mocker.patch.object(cli_workload, "_new_collector", return_value=collector)
 
 
+class TestASnapshotThatReadNothingExitsOne:
+    def _collect(self, session, mocker, status):
+        mocker.patch.object(cli_workload, "_connect", return_value=mocker.Mock())
+        collector = mocker.Mock()
+        collector.collect.return_value = dict(
+            SNAPSHOT,
+            status=status,
+            captured_at_server=None if status == "failed" else "2026-09-14",
+            warnings=[{"code": "connection_lost", "detail": "server identity"}],
+        )
+        mocker.patch.object(cli_workload, "_new_collector", return_value=collector)
+        return _collect(
+            _Args(session.directory), _Config(WorkloadConfig()), mocker.Mock()
+        )
+
+    def test_a_failed_snapshot_exits_one(self, session, mocker):
+        """Catches a collect that lost its connection before any read exiting
+        0, so a cron wrapper reads the fault as a successful tick."""
+        assert self._collect(session, mocker, "failed") == EXIT_USAGE
+        assert len(session.snapshot_paths()) == 1
+
+    def test_a_degraded_snapshot_still_exits_zero(self, session, mocker):
+        """Catches a snapshot that kept some reads being treated as a fault."""
+        assert self._collect(session, mocker, "degraded") == EXIT_OK
+
+
 class TestTheLogIsOffByDefault:
     def test_collect_takes_a_snapshot_and_does_not_wait(self, session, mocker):
         _no_snapshot_connection(mocker)

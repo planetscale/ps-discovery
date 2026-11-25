@@ -25,6 +25,7 @@ from planetscale_discovery.workload.bundle import (
 )
 from planetscale_discovery.workload.codes import label
 from planetscale_discovery.workload.collect import (
+    STATUS_FAILED,
     WorkloadCollector,
     end_transaction,
     logged_step,
@@ -589,15 +590,19 @@ def _collect(args, config, logger) -> int:
         return EXIT_OK
 
     from_file = workload.capture_log
-    _snapshot(store, config, logger, optional=from_file)
+    snapshot = _snapshot(store, config, logger, optional=from_file)
+    stopped = EXIT_OK
+    if snapshot is not None and snapshot.get("status") == STATUS_FAILED:
+        logger.error("the snapshot read nothing; its warnings above say why")
+        stopped = EXIT_USAGE
 
     # The snapshot is stored, so an unreadable log is never a non-zero exit.
     if from_file:
-        return _collect_exported_log(store, workload, logger)
-    return EXIT_OK
+        return _collect_exported_log(store, workload, logger) or stopped
+    return stopped
 
 
-def _snapshot(store, config, logger, optional: bool) -> None:
+def _snapshot(store, config, logger, optional: bool) -> Optional[Dict[str, Any]]:
     """Append one snapshot. When optional, a dead connection is a warning."""
     try:
         connection = _connect(config, logger)
@@ -608,7 +613,7 @@ def _snapshot(store, config, logger, optional: bool) -> None:
             f"no database connection, so this collect records the query log "
             f"only and takes no snapshot: {exc}"
         )
-        return
+        return None
     try:
         collector = _new_collector(connection, config, logger)
         with logged_step(logger, "taking a snapshot"):
@@ -616,6 +621,7 @@ def _snapshot(store, config, logger, optional: bool) -> None:
         _keep_schema(store, connection, collector, snapshot, config, logger)
         _report_snapshot(snapshot, store.append_snapshot(snapshot), logger)
         _collect_distributions(store, connection, config, logger)
+        return snapshot
     finally:
         connection.close()
 

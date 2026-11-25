@@ -19,6 +19,10 @@ _EXISTING_PLACEHOLDER = re.compile(r"\$(\d+)")
 
 _DOLLAR_QUOTE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 
+_IDENTIFIER_CHAR = re.compile(r"[A-Za-z0-9_$]")
+
+_ESCAPE_STRING = re.compile(r"(?<![A-Za-z0-9_$])[Ee]$")
+
 _PREFIXED_PLACEHOLDER = re.compile(r"(?<![A-Za-z0-9_$])(?:[EeBbXxNn]|[Uu]&)(\$\d+)")
 
 # Token types whose value is data. A credential is a string literal like any other.
@@ -46,15 +50,20 @@ def redact_sql(sql: Optional[str]) -> Optional[str]:
         next_number = _highest_placeholder(text) + 1
         pieces = []
         tokens = list(lexer.tokenize(text))
+        previous_number = False
         for index, (ttype, value) in enumerate(tokens):
             if ttype is T.Error and value == "'":
                 pieces.append(f"${next_number}")
                 break
             if value == "/" and _opens_comment(tokens, index):
                 break
+            number = _is_number(ttype, value)
+            if number and previous_number:
+                continue
+            previous_number = number
             if ttype in T.Comment:
                 pieces.append(" ")
-            elif ttype in LITERAL_TOKENS:
+            elif ttype in LITERAL_TOKENS or number:
                 pieces.append(f"${next_number}")
                 next_number += 1
             else:
@@ -67,6 +76,12 @@ def redact_sql(sql: Optional[str]) -> Optional[str]:
     return " ".join(redacted.split()) or FALLBACK_PLACEHOLDER
 
 
+def _is_number(ttype: Any, value: str) -> bool:
+    if ttype in (T.Number.Integer, T.Number.Float, T.Number.Hexadecimal):
+        return True
+    return ttype in T.Name and value[:1].isdigit()
+
+
 def _opens_comment(tokens: List[Tuple[Any, str]], index: int) -> bool:
     following = tokens[index + 1][1] if index + 1 < len(tokens) else ""
     return following.startswith("*")
@@ -76,19 +91,50 @@ def _empty_dollar_quotes(text: str) -> str:
     """Keep every dollar-quote delimiter, drop what is between them."""
     out = []
     position = 0
-    while True:
-        opening = _DOLLAR_QUOTE.search(text, position)
-        if not opening:
-            out.append(text[position:])
-            return "".join(out)
+    while position < len(text):
+        skipped = _skip_quoted_or_comment(text, position)
+        if skipped > position:
+            out.append(text[position:skipped])
+            position = skipped
+            continue
+        opening = _DOLLAR_QUOTE.match(text, position)
+        previous = text[position - 1] if position else ""
+        if not opening or _IDENTIFIER_CHAR.match(previous):
+            out.append(text[position])
+            position += 1
+            continue
         delimiter = opening.group(0)
-        body_starts = opening.end()
-        closing = text.find(delimiter, body_starts)
-        out.append(text[position:body_starts])
+        closing = text.find(delimiter, opening.end())
+        out.append(delimiter)
         if closing < 0:
             return "".join(out)
         out.append(delimiter)
         position = closing + len(delimiter)
+    return "".join(out)
+
+
+def _skip_quoted_or_comment(text: str, position: int) -> int:
+    if text.startswith("--", position):
+        end = text.find("\n", position)
+        return len(text) if end < 0 else end
+    if text.startswith("/*", position):
+        end = text.find("*/", position + 2)
+        return len(text) if end < 0 else end + 2
+    quote = text[position]
+    if quote not in ("'", '"'):
+        return position
+    backslash = quote == "'" and _ESCAPE_STRING.search(text[:position]) is not None
+    index = position + 1
+    while index < len(text):
+        if backslash and text[index] == "\\":
+            index += 2
+        elif text[index] == quote:
+            if not text.startswith(quote, index + 1):
+                return index + 1
+            index += 2
+        else:
+            index += 1
+    return len(text)
 
 
 def statement_kind(sql: Optional[str]) -> Optional[str]:

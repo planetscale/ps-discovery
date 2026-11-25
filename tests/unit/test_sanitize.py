@@ -129,6 +129,45 @@ class TestRedactSql:
         assert "secret" not in out
 
 
+class TestNumbersTheLexerReadsAsNames:
+    """sqlparse reads 1_000_000, 0b101 and 0o17 as names, so they passed
+    through verbatim."""
+
+    @pytest.mark.parametrize("number", ["1_000_000", "0b101", "0o17", "0x_1f"])
+    def test_a_postgresql_16_number_is_redacted(self, number):
+        assert redact_sql(f"UPDATE t SET b = {number} WHERE id = 5") == (
+            "UPDATE t SET b = $1 WHERE id = $2"
+        )
+
+    def test_a_number_split_into_several_tokens_is_one_placeholder(self):
+        assert redact_sql("SELECT 1_000.000_1, x1_0 FROM t1") == (
+            "SELECT $1, x1_0 FROM t1"
+        )
+
+
+class TestDollarQuotesInsideOtherText:
+    """A $$ inside a string or a comment paired with a later one, and the text
+    after the pair was read as code."""
+
+    @pytest.mark.parametrize(
+        "sql, redacted",
+        [
+            ("SELECT 'x $$ y' /* c $$ d */ , 'SECOND SECRET'", "SELECT $1 , $2"),
+            ("SELECT E'it\\'s $$' , 'SECOND SECRET' /* $$ */", "SELECT $1 , $2"),
+            ("SELECT \"$$col\", 'SECOND SECRET' /* $$ */", 'SELECT "$$col", $1'),
+            ("SELECT 1 -- $$\n, 'SECOND SECRET' -- $$", "SELECT $1 , $2"),
+        ],
+        ids=["string-and-comment", "escape-string", "identifier", "line-comment"],
+    )
+    def test_a_later_string_is_still_redacted(self, sql, redacted):
+        assert redact_sql(sql) == redacted
+
+    def test_a_dollar_sign_inside_an_identifier_opens_nothing(self):
+        assert redact_sql("SELECT a$$b, 'secret' FROM t$$") == (
+            "SELECT a$$b, $1 FROM t$$"
+        )
+
+
 class TestQuotedIdentifiersSurvive:
     """A double-quoted identifier is a name, not data."""
 
